@@ -1,0 +1,63 @@
+[project]
+name = "sanskrit-tok"
+version = "0.1.0"
+description = "Does Sanskrit's morphological density survive subword tokenization?"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "tokenizers>=0.20",
+    "transformers>=4.44",
+    "sentencepiece>=0.2",
+    "indic-transliteration>=2.3",
+    "datasets>=2.20",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyyaml>=6.0",
+    "matplotlib>=3.9",
+    "tiktoken>=0.7",
+    "huggingface-hub>=0.24",
+    "protobuf>=4.25",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML>=6.0",
+    "pandas-stubs>=2.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sanskrit_tok"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "experiments"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+# Third-party libraries that ship no type information.
+[[tool.mypy.overrides]]
+module = [
+    "datasets.*",
+    "indic_transliteration.*",
+    "matplotlib.*",
+    "sentencepiece.*",
+    "tiktoken.*",
+    "tokenizers.*",
+    "transformers.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
