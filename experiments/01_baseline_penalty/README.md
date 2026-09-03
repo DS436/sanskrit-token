@@ -19,20 +19,31 @@ tokenizer downloads).
 ## Summary
 
 **On identical FLORES-200 devtest content, Sanskrit costs 1.77–2.19× as many tokens as its
-English translation (`T0_gemma3` 1.77, `T0_o200k` 2.09, `T0_llama4` 2.19), confirming the
-parity half of the hypothesis against English — but only 1.32–1.35× as many as its Hindi
-translation, well under the predicted 1.5, so sandhi does *not* buy Sanskrit a large token
-penalty over another Devanagari language under these tokenizers.** The fertility half of
-the hypothesis is refuted outright: Sanskrit fertility is 3.11–3.88, not > 5, which is
-exactly why fertility is reported here and never led with (CLAUDE.md §2.1) — Sanskrit has
-fewer, longer words, so tokens-per-word flatters it while tokens-per-unit-of-meaning is
-what the parity column above actually measures.
+English translation (`T0_gemma3` 1.77, `T0_o200k` 2.09, `T0_llama4` 2.19) but only
+1.32–1.35× as many as its Hindi translation.** Against the hypothesis as written: Sa/En
+parity > 1.5 holds; **Sa/Hi parity > 1.5 is refuted** (1.32–1.35), so sandhi does not buy
+Sanskrit a large token penalty over another Devanagari language under these tokenizers;
+and **fertility > 5 on Sanskrit is refuted** (3.11–3.88).
+
+The gap between the two ratios is the point of the experiment. Over these 1012 sentences
+Sanskrit is written in 16,975 whitespace words against English's 21,901 and Hindi's 25,643,
+because sandhi and compounding fuse into one word what the other two languages write as
+several. Dividing by that smaller word count makes the **fertility ratio overstate the
+penalty**: Sa/En by fertility is 2.31–2.73 against a true parity of 1.77–2.19, and Sa/Hi by
+fertility is 1.66–1.74 against a true parity of 1.32–1.35 — high enough that reading the
+hypothesis off fertility would have *falsely confirmed* the Sa/Hi > 1.5 clause that parity
+refutes. Fertility counts tokens per word; parity counts tokens per unit of meaning, which
+is the quantity this project is about (CLAUDE.md §1, §2.1). Fewer words is not fewer
+tokens, in either direction.
 
 ## Fertility (tokens per whitespace word), original script
 
-Reported for comparability with the literature; **not** the headline metric. Lower is not
-better here — Sanskrit's words are longer than Hindi's and much longer than English's, so
-this column mixes "the tokenizer segments badly" with "the language packs more per word".
+Reported for comparability with the literature; **not** the headline metric, and not a
+penalty measure. Sanskrit's denominator is its word count, which sandhi and compounding
+make small (16,975 words here, against 21,901 English and 25,643 Hindi), so a high number
+in this column mixes "the tokenizer segments badly" with "the language packs more into a
+word" — and inflates any cross-language ratio taken from it. Compare it against the parity
+table below, never in place of it.
 
 | Arm | `san_Deva` | `hin_Deva` | `eng_Latn` | `san_Deva` (SLP1) | `hin_Deva` (SLP1) |
 |---|---|---|---|---|---|

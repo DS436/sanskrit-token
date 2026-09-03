@@ -55,8 +55,15 @@ DISTRIBUTION_KEYS: tuple[str, ...] = ("per_word", "per_text", "per_pair")
 ORIGINAL = "original"
 SLP1 = "slp1"
 
-#: Language whose sentences the SLP1 roundtrip assertion is run over.
+#: Language whose sentences the SLP1 roundtrip assertion is run over. Devanagari-specific:
+#: `roundtrip_ok(..., "devanagari")` is meaningless for `eng_Latn`.
 ROUNDTRIP_LANGUAGE = "san_Deva"
+
+#: Numerator of every parity ratio; the pivots in `config["pivots"]` are the denominators.
+#: Deliberately a separate constant from `ROUNDTRIP_LANGUAGE` even though the two currently
+#: hold the same value: one names the language this experiment measures the cost *of*, the
+#: other names a transliteration check on Devanagari input. Overridable per config.
+PARITY_SOURCE = "san_Deva"
 
 FIGURE_STEM = "fertility_by_language"
 FIGURE_YLABEL = "Fertility (tokens per whitespace word)"
@@ -307,6 +314,38 @@ def compute_metrics(
     return metrics
 
 
+def _parity_row(
+    tokenizer: Tokenizer,
+    variants: Mapping[str, Mapping[str, Sequence[str]]],
+    source_language: str,
+    source_variant: str,
+    pivot: str,
+) -> dict[str, Any]:
+    """One parity row: the summarised metric plus what was compared against what.
+
+    The pivot is always scored in its original script — `eng_Latn` has no SLP1 form — so
+    only the source side varies. Naming the three operands in the row itself means the
+    dict key never has to be parsed to interpret the number.
+    """
+    if pivot not in variants:
+        raise KeyError(f"no sentences for the parity pivot {pivot!r}")
+    row: dict[str, Any] = {
+        "pivot": pivot,
+        "source_language": source_language,
+        "source_variant": source_variant,
+        **summarise_metric(
+            parity(
+                tokenizer,
+                variants[source_language][source_variant],
+                variants[pivot][ORIGINAL],
+            )
+        ),
+    }
+    label = source_language if source_variant == ORIGINAL else f"{source_language}(SLP1)"
+    logger.info("%s: parity %s/%s = %.3f", tokenizer.name, label, pivot, row["value"])
+    return row
+
+
 def compute_parity(
     tokenizers: Sequence[Tokenizer],
     variants: Mapping[str, Mapping[str, Sequence[str]]],
@@ -327,50 +366,14 @@ def compute_parity(
         raise KeyError(f"no sentences for the parity source language {source_language!r}")
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for tokenizer in tokenizers:
-        rows: dict[str, dict[str, Any]] = {}
-        for pivot in pivots:
-            if pivot not in variants:
-                raise KeyError(f"no sentences for the parity pivot {pivot!r}")
-            rows[pivot] = {
-                "pivot": pivot,
-                "source_language": source_language,
-                "source_variant": ORIGINAL,
-                **summarise_metric(
-                    parity(
-                        tokenizer,
-                        variants[source_language][ORIGINAL],
-                        variants[pivot][ORIGINAL],
-                    )
-                ),
-            }
-            logger.info(
-                "%s: parity %s/%s = %.3f",
-                tokenizer.name,
-                source_language,
-                pivot,
-                rows[pivot]["value"],
-            )
+        rows: dict[str, dict[str, Any]] = {
+            pivot: _parity_row(tokenizer, variants, source_language, ORIGINAL, pivot)
+            for pivot in pivots
+        }
         if pivots and SLP1 in variants[source_language]:
             default_pivot = pivots[0]
-            key = f"{default_pivot}__{SLP1}"
-            rows[key] = {
-                "pivot": default_pivot,
-                "source_language": source_language,
-                "source_variant": SLP1,
-                **summarise_metric(
-                    parity(
-                        tokenizer,
-                        variants[source_language][SLP1],
-                        variants[default_pivot][ORIGINAL],
-                    )
-                ),
-            }
-            logger.info(
-                "%s: parity %s(SLP1)/%s = %.3f",
-                tokenizer.name,
-                source_language,
-                default_pivot,
-                rows[key]["value"],
+            rows[f"{default_pivot}__{SLP1}"] = _parity_row(
+                tokenizer, variants, source_language, SLP1, default_pivot
             )
         results[tokenizer.name] = rows
     return results
@@ -383,10 +386,10 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
     """Grouped bars of original-script fertility: one group per language, one bar per arm.
 
     Written as both `.pdf` and `.png` (CLAUDE.md §8) into `out_dir`, which is created if
-    needed; returns the two paths in that order. The caption and the legend say these arms
-    are existing practice with unmatched vocabularies, so the chart cannot be misread as a
-    controlled comparison, and neither the title nor the label calls fertility the headline
-    number (CLAUDE.md §2.1).
+    needed; returns the two paths in that order. The legend title says these arms are
+    existing practice with unmatched vocabularies, so the chart cannot be misread as a
+    controlled comparison, and neither the figure title nor the axis label calls fertility
+    the headline number (CLAUDE.md §2.1).
     """
     import matplotlib
 
@@ -469,6 +472,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError(f"{args.config}: 'languages' is empty; nothing to measure")
     pivots: list[str] = list(config["pivots"])
     split = str(config["split"])
+    parity_source = str(config.get("parity_source", PARITY_SOURCE))
     jsonl_path = resolve_path(str(config["flores_jsonl"]), root)
     out_dir = resolve_path(str(config["output_dir"]), root)
 
@@ -512,7 +516,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     tokenizers = [load_tokenizer(name) for name in config["tokenizers"]]
     metrics = compute_metrics(tokenizers, variants)
-    parity_rows = compute_parity(tokenizers, variants, pivots, ROUNDTRIP_LANGUAGE)
+    parity_rows = compute_parity(tokenizers, variants, pivots, parity_source)
 
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
