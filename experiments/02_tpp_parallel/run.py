@@ -22,12 +22,12 @@ without touching the network, a real corpus, or the Hugging Face cache.
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import math
 import random
 import shutil
-import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -47,6 +47,7 @@ from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.metrics.tpp import tpp
+from sanskrit_tok.provenance import git_commit, git_dirty
 from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable, load_tokenizer
 
 logger = logging.getLogger("exp02")
@@ -68,6 +69,15 @@ PROVISIONAL_FAMILIES = frozenset({"T1", "T2"})
 #: Tokenizer-arm families eligible for the Hindi pivot (CLAUDE.md §7 resolution 4:
 #: T0/T3 arms only, same tokenizer both sides).
 HINDI_PIVOT_FAMILIES = frozenset({"T0", "T3"})
+
+#: Tokenizer-arm families whose `source_id` is a local `tokenizer.json` path rather than a
+#: Hugging Face/tiktoken id, and whose file is therefore hashed into `tokenizer_sources`.
+#: `outputs/` is gitignored and `UnigramTrainer` is not bit-reproducible
+#: (docs/decisions.md), so the sha256 is the only thing tying a number in `results.json`
+#: to the exact artifact that produced it. Currently the same families as
+#: `PROVISIONAL_FAMILIES`, but for an unrelated reason: these are file-backed, those are
+#: trained on the interim corpus, and either could change without the other.
+FILE_BACKED_FAMILIES = frozenset({"T1", "T2"})
 
 FIGURE_STEM = "tpp_by_arm"
 #: The pivot and script variant the figure's main marker reads, so every arm — T0/T3
@@ -122,22 +132,6 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
     return config
-
-
-def git_commit(root: Path) -> str:
-    """`git rev-parse HEAD`, or `"unknown"` (logged at WARNING) if that fails."""
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        logger.warning("could not read the git commit (%s); recording 'unknown'", error)
-        return "unknown"
-    return completed.stdout.strip() or "unknown"
 
 
 def sanitize_json(value: Any) -> Any:
@@ -304,8 +298,63 @@ def load_arms(
 
 
 def variants_for_family(family: str, script_variants: Mapping[str, Sequence[str]]) -> list[str]:
-    """The script variants an arm's family is measured in, per `config["script_variants"]`."""
-    return list(script_variants[family])
+    """The script variants an arm's family is measured in, per `config["script_variants"]`.
+
+    Raises `ValueError` naming the family and the configured keys when the family is not
+    in `script_variants`. A bare `KeyError: 'T5'` from the middle of a two-minute run says
+    nothing about which config key is short a family; measuring the arm in no variants at
+    all — the other tempting fallback — would silently drop it from every table instead.
+    """
+    try:
+        variants = script_variants[family]
+    except KeyError:
+        raise ValueError(
+            f"unknown tokenizer family {family!r}: config['script_variants'] has "
+            f"{sorted(script_variants)}"
+        ) from None
+    return list(variants)
+
+
+def tokenizer_file_sha256(path: Path) -> str:
+    """sha256 of `path`, hex, read in chunks (a `tokenizer.json` is a few MB)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tokenizer_sources(arms: Mapping[str, LoadedTokenizer]) -> dict[str, dict[str, Any]]:
+    """`results.json`'s `tokenizer_sources`: what each loaded arm actually is.
+
+    `source_id`, `vocab_size`, `family` and `attempted` come straight off the
+    `LoadedTokenizer`. Arms in `FILE_BACKED_FAMILIES` additionally carry `sha256`, the
+    hash of the `tokenizer.json` their `source_id` names: those files live in gitignored
+    `outputs/` and a T2 (Unigram) file is not reproducible byte-for-byte from its recipe
+    (docs/decisions.md), so without the hash there is nothing to check a rerun against. A
+    file that cannot be read is logged at WARNING and leaves the key absent rather than
+    aborting a run whose numbers are already computed.
+    """
+    sources: dict[str, dict[str, Any]] = {}
+    for name, tokenizer in arms.items():
+        entry: dict[str, Any] = {
+            "source_id": tokenizer.source_id,
+            "vocab_size": tokenizer.vocab_size,
+            "family": tokenizer.family,
+            "attempted": list(tokenizer.attempted),
+        }
+        if tokenizer.family in FILE_BACKED_FAMILIES:
+            try:
+                entry["sha256"] = tokenizer_file_sha256(Path(tokenizer.source_id))
+            except OSError as error:
+                logger.warning(
+                    "%s: could not hash %s (%s); recording no sha256",
+                    name,
+                    tokenizer.source_id,
+                    error,
+                )
+        sources[name] = entry
+    return sources
 
 
 # ------------------------------------------------------------------------- TPP / metrics
@@ -343,9 +392,20 @@ def compute_tpp(
     """`corpus -> arm -> variant -> pivot -> summary`, per the brief's `results.json` shape.
 
     Arms absent from `arms` (unavailable this run) and pivots absent from `arms` are
-    silently skipped — `unavailable_arms` already records why, and this keeps the nested
-    dict free of `None` placeholders that every consumer would otherwise have to check.
+    skipped rather than stored as `None`, which keeps the nested dict free of placeholders
+    every consumer would have to check. An unavailable *pivot* is worth a WARNING even so —
+    `unavailable_arms` records why it could not be loaded, but a missing pivot silently
+    removes a whole column from every corpus and arm below, so it is logged once, here,
+    before the loops rather than once per corpus x arm x variant.
     """
+    for pivot_name in english_pivots:
+        if pivot_name not in arms:
+            logger.warning(
+                "English pivot %s is unavailable this run; every TPP column against it "
+                "is omitted from results.json",
+                pivot_name,
+            )
+
     results: dict[str, dict[str, dict[str, dict[str, dict[str, Any]]]]] = {}
     for corpus in corpora:
         corpus_result: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
@@ -791,20 +851,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpora, arms, sanskrit_arm_names, script_variants
     )
 
+    dirty = git_dirty(root)
+    if dirty:
+        logger.warning(
+            "the working tree has uncommitted changes; git_commit names the parent "
+            "commit, not the code that ran (recording git_dirty=true)"
+        )
+
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
         "git_commit": git_commit(root),
+        "git_dirty": dirty,
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "config": config,
-        "tokenizer_sources": {
-            name: {
-                "source_id": tokenizer.source_id,
-                "vocab_size": tokenizer.vocab_size,
-                "family": tokenizer.family,
-                "attempted": list(tokenizer.attempted),
-            }
-            for name, tokenizer in arms.items()
-        },
+        "tokenizer_sources": tokenizer_sources(arms),
         "unavailable_arms": unavailable_arms,
         "corpora": {
             corpus.name: {"split": corpus.split, "n_total": corpus.n_total, "n_used": corpus.n_used}

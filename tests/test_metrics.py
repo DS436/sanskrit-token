@@ -99,18 +99,42 @@ def test_fertility_counts_multibyte_characters_as_the_tokenizer_does() -> None:
 
 
 def test_fertility_of_empty_input() -> None:
+    """Nothing was measured at all, so `0.0` is not a lie about a ratio."""
     result = fertility(CHAR, [])
     assert result["value"] == 0.0
     assert result["n"] == 0
     assert result["unit"] == "tokens/word"
     assert result["per_word"] == []
+    assert result["n_undefined"] == 0
 
 
-def test_fertility_of_whitespace_only_text_has_no_words() -> None:
+def test_fertility_of_whitespace_only_text_has_no_words_and_is_undefined() -> None:
+    """Real texts holding no words have no tokens-per-word ratio: `nan`, never `0.0`."""
     result = fertility(CHAR, ["", "   "])
-    assert result["value"] == 0.0
+    assert math.isnan(result["value"])
     assert result["n"] == 0
     assert result["per_word"] == []
+    assert result["n_undefined"] == 0
+
+
+def test_fertility_counts_words_that_encode_to_zero_tokens() -> None:
+    """A vocabulary that deletes a word makes `value` optimistic; `n_undefined` shows it."""
+
+    class DropsOneWord:
+        name = "drops-one-word"
+
+        def encode(self, text: str) -> list[int]:
+            return [] if text == "drop" else [ord(character) for character in text]
+
+    result = fertility(DropsOneWord(), ["ab drop cde"])
+    assert result["per_word"] == [2, 0, 3]
+    assert result["n"] == 3
+    assert result["n_undefined"] == 1
+    assert result["value"] == pytest.approx(5 / 3)
+
+
+def test_fertility_n_undefined_is_zero_when_every_word_costs_tokens() -> None:
+    assert fertility(CHAR, ["ab cde", "f"])["n_undefined"] == 0
 
 
 def test_fertility_rejects_a_bare_str() -> None:

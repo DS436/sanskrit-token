@@ -428,10 +428,7 @@ def _load_tiktoken_style_hub_file(model_id: str) -> tuple[Any, str]:
     import tiktoken
     from tiktoken.load import load_tiktoken_bpe
 
-    try:
-        repo_files = huggingface_hub.list_repo_files(model_id)
-    except OSError:
-        raise
+    repo_files = huggingface_hub.list_repo_files(model_id)
     ranks_files = [path for path in repo_files if path.endswith(".tiktoken")]
     if not ranks_files:
         raise OSError(f"{model_id} has no *.tiktoken file")

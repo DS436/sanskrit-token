@@ -11,12 +11,15 @@ experiment, per the task brief).
 package), so it is loaded by path, exactly as `tests/test_exp01.py` does.
 """
 
+import hashlib
 import importlib.util
 import json
 import math
 import sys
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_PY = REPO_ROOT / "experiments" / "02_tpp_parallel" / "run.py"
@@ -60,6 +63,78 @@ def test_variants_for_family_t3_matches_t0() -> None:
 
 def test_variants_for_family_t2_is_slp1_only() -> None:
     assert run.variants_for_family("T2", SCRIPT_VARIANTS) == ["slp1"]
+
+
+def test_variants_for_family_unknown_family_names_itself_and_the_config_keys() -> None:
+    """A bare `KeyError: 'T5'` from mid-run says nothing about which config key is short."""
+    with pytest.raises(ValueError) as excinfo:
+        run.variants_for_family("T5", SCRIPT_VARIANTS)
+    message = str(excinfo.value)
+    assert "T5" in message
+    assert "script_variants" in message
+    for family in SCRIPT_VARIANTS:
+        assert family in message
+
+
+# --- tokenizer_sources: provenance of each loaded arm --------------------------------
+
+
+def _fake_arm(name: str, source_id: str, family: str) -> object:
+    """A `LoadedTokenizer` whose `encode` is never called; only its provenance is read."""
+    return run.LoadedTokenizer(
+        name=name,
+        source_id=source_id,
+        vocab_size=32000,
+        _encode=lambda text: [len(text)],
+        family=family,
+        attempted=(source_id,),
+    )
+
+
+def test_tokenizer_sources_hashes_file_backed_arms(tmp_path: Path) -> None:
+    """T1/T2 arms live in gitignored `outputs/` and Unigram training is not
+    bit-reproducible, so the sha256 of the exact `tokenizer.json` is the only tie between
+    a number in `results.json` and the artifact behind it."""
+    path = tmp_path / "tokenizer.json"
+    path.write_bytes(b'{"model": "fake"}')
+    expected = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    arms = {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(path), "T1")}
+    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
+    assert sources["T1_bpe_raw_32k"]["sha256"] == expected
+    assert sources["T1_bpe_raw_32k"]["source_id"] == str(path)
+    assert sources["T1_bpe_raw_32k"]["vocab_size"] == 32000
+    assert sources["T1_bpe_raw_32k"]["family"] == "T1"
+    assert sources["T1_bpe_raw_32k"]["attempted"] == [str(path)]
+
+
+def test_tokenizer_sources_hashes_t2_arms_too(tmp_path: Path) -> None:
+    path = tmp_path / "tokenizer.json"
+    path.write_bytes(b'{"model": "unigram"}')
+    arms = {"T2_unigram_raw_64k": _fake_arm("T2_unigram_raw_64k", str(path), "T2")}
+    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
+    assert sources["T2_unigram_raw_64k"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_tokenizer_sources_omits_sha256_for_hub_backed_arms() -> None:
+    """A T0/T3 `source_id` is a model id, not a path; there is no file here to hash."""
+    arms = {"T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0")}
+    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
+    assert "sha256" not in sources["T0_o200k"]
+
+
+def test_tokenizer_sources_survives_an_unreadable_file(tmp_path: Path) -> None:
+    """The numbers are already computed by then; a missing file must not abort the write."""
+    arms = {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(tmp_path / "gone.json"), "T1")}
+    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
+    assert "sha256" not in sources["T1_bpe_raw_32k"]
+    assert sources["T1_bpe_raw_32k"]["source_id"].endswith("gone.json")
+
+
+def test_tokenizer_file_sha256_matches_hashlib(tmp_path: Path) -> None:
+    path = tmp_path / "big.json"
+    path.write_bytes(b"x" * (3 * (1 << 20) + 7))  # spans several read chunks
+    assert run.tokenizer_file_sha256(path) == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # --- exclusion-check helper ---------------------------------------------------------
@@ -257,3 +332,68 @@ def test_enrich_summary_copies_bootstrap_keys_and_sets_ci() -> None:
     assert summary["unit"] == "tokens/proposition ratio"
     assert summary["distribution"] == "per_pair"
     assert "per_pair" not in summary
+
+
+# --- unavailable English pivot -------------------------------------------------------
+
+
+def _one_corpus() -> object:
+    """One two-sentence corpus with an SLP1 Sanskrit side and an English side."""
+    return run.CorpusData(
+        name="corpus_a",
+        split="test",
+        n_total=2,
+        n_used=2,
+        sanskrit={run.SLP1: ["rAmaH gacCati", "sItA vadati"]},
+        english=["Rama goes", "Sita speaks"],
+        hindi=None,
+    )
+
+
+def test_compute_tpp_warns_once_per_unavailable_pivot(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A missing pivot removes a whole column from every corpus and arm below, so it is
+    logged once, before the loops — not once per corpus x arm x variant, and not silently."""
+    arms = {
+        "T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0"),
+        "T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", "tokenizer.json", "T1"),
+    }
+    with caplog.at_level("WARNING", logger="exp02"):
+        results = run.compute_tpp(
+            [_one_corpus(), _one_corpus()],  # two corpora: the warning must not repeat
+            arms,
+            ["T1_bpe_raw_32k"],
+            ["T0_o200k", "T0_llama4"],
+            {"T1": ["slp1"]},
+            n_bootstrap=10,
+            seed=0,
+            ci=0.95,
+        )
+    warnings = [record for record in caplog.records if "T0_llama4" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "unavailable" in warnings[0].getMessage()
+    # the available pivot is still measured; the unavailable one leaves no placeholder
+    pivots = results["corpus_a"]["T1_bpe_raw_32k"]["slp1"]
+    assert set(pivots) == {"T0_o200k"}
+
+
+def test_compute_tpp_does_not_warn_when_every_pivot_is_available(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    arms = {
+        "T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0"),
+        "T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", "tokenizer.json", "T1"),
+    }
+    with caplog.at_level("WARNING", logger="exp02"):
+        run.compute_tpp(
+            [_one_corpus()],
+            arms,
+            ["T1_bpe_raw_32k"],
+            ["T0_o200k"],
+            {"T1": ["slp1"]},
+            n_bootstrap=10,
+            seed=0,
+            ci=0.95,
+        )
+    assert not [record for record in caplog.records if record.levelname == "WARNING"]

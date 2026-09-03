@@ -27,7 +27,6 @@ import hashlib
 import json
 import logging
 import shutil
-import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -41,6 +40,7 @@ from tokenizers import Tokenizer as RawTokenizer
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
+from sanskrit_tok.provenance import git_commit, git_dirty
 from sanskrit_tok.tokenizers.corpus import build_training_corpus
 from sanskrit_tok.tokenizers.registry import trained_tokenizer_path
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
@@ -83,22 +83,6 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
     return config
-
-
-def git_commit(root: Path) -> str:
-    """`git rev-parse HEAD`, or `"unknown"` (logged at WARNING) if that fails."""
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        logger.warning("could not read the git commit (%s); recording 'unknown'", error)
-        return "unknown"
-    return completed.stdout.strip() or "unknown"
 
 
 # --------------------------------------------------------------------------- corpus
@@ -213,8 +197,8 @@ def train_arm(arm: Mapping[str, Any], corpus_path: Path, seed: int) -> dict[str,
     produces and the file the registry loads afterwards can never drift apart.
 
     Returns the per-arm portion of `results.json`: the run-wide keys (`git_commit`,
-    `timestamp`, `config`, `manifest`) are filled in by the caller, since they are
-    identical across every arm in one run.
+    `git_dirty`, `timestamp`, `config`, `manifest`) are filled in by the caller, since
+    they are identical across every arm in one run.
     """
     name = str(arm["name"])
     algo = str(arm["algo"])
@@ -335,11 +319,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     commit = git_commit(root)
+    dirty = git_dirty(root)
+    if dirty:
+        logger.warning(
+            "the working tree has uncommitted changes; git_commit names the parent "
+            "commit, not the code that ran (recording git_dirty=true)"
+        )
     for arm in arms:
         name = str(arm["name"])
         logger.info("training %s ...", name)
         payload = train_arm(arm, corpus_path, seed)
         payload["git_commit"] = commit
+        payload["git_dirty"] = dirty
         payload["timestamp"] = datetime.now(UTC).isoformat(timespec="seconds")
         payload["config"] = config
         payload["manifest"] = manifest

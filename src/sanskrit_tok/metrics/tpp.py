@@ -108,8 +108,15 @@ def tpp(
     undefined.
 
     Raises `TypeError` if either side is a single `str` rather than a sequence of them,
-    and `ValueError` if the two sequences differ in length.
+    and `ValueError` if the two sequences differ in length or if `ci` is not strictly
+    between 0 and 1. `ci` is a confidence *level* (`0.95`), not a percentage (`95`) and
+    not a tail probability (`0.05`); every out-of-range value produces an interval that
+    looks plausible in `results.json` — `95` gives percentiles far outside `[0, 100]`,
+    which `numpy` clamps to the extremes, and `0.05` gives a needle-thin interval that
+    reads as a very precise measurement — so this is checked rather than trusted.
     """
+    if not 0 < ci < 1:
+        raise ValueError(f"ci must be a confidence level strictly between 0 and 1, got {ci!r}")
     parts = token_ratio(tokenizer, texts, pivot_texts, pivot_tokenizer)
     ci_low, ci_high = _bootstrap_ci(parts, n_bootstrap, seed, ci)
     return {

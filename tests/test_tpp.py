@@ -109,3 +109,10 @@ def test_tpp_rejects_a_bare_str_on_either_side() -> None:
         tpp(CharTokenizer(), "abc", ["abc"], n_bootstrap=0)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="single str"):
         tpp(CharTokenizer(), ["abc"], "abc", n_bootstrap=0)  # type: ignore[arg-type]
+
+
+def test_tpp_rejects_a_confidence_level_outside_the_unit_interval() -> None:
+    """`ci` is a level (`0.95`), not a percentage (`95`) or a tail probability."""
+    for bad in (0.0, 1.0, 95.0, -0.5, math.nan):
+        with pytest.raises(ValueError, match="confidence level"):
+            tpp(CharTokenizer(), ["abc"], ["ab"], n_bootstrap=10, ci=bad)

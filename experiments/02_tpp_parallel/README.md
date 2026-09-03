@@ -19,43 +19,58 @@ arms (already cached; `T3_indicsuper` has none, see below).
 
 ## Summary
 
-**On Sāmayik test — the primary prose corpus this hypothesis is pre-registered
-against — the sign flips exactly as H2 predicts, for one arm.** `T1_bpe_raw_64k`*, a
-64k-vocabulary BPE tokenizer trained from scratch on Sanskrit, costs **0.908 tokens
-per English token** [0.896, 0.921], a 95% CI entirely below 1.0; every English-centric
-T0 arm costs more tokens than English on the same sentences, with CIs entirely above 1.0
-(`T0_o200k` 1.835 [1.813, 1.858] up to `T3_sarvam` 2.416 [2.386, 2.447]). Two more
-Sanskrit-native arms sit within noise of parity (`T1_bpe_raw_32k`* 1.009 [0.995, 1.023],
-`T2_unigram_raw_64k`* 0.999 [0.985, 1.014]), and one (`T2_unigram_raw_32k`*, 1.070) stays
-above. The flip is real but narrow: it holds for the best-performing provisional arm, on
-the primary corpus, and nowhere near universally.
+**The TPP sign flips on two of the four corpora, and both are corpora the trained arms
+were fitted to.** On Sāmayik test — the primary prose corpus this hypothesis is
+pre-registered against — `T1_bpe_raw_64k`*, a 64k-vocabulary BPE tokenizer trained from
+scratch on Sanskrit, costs **0.908 tokens per English token** [0.896, 0.921], a 95% CI
+entirely below 1.0, while every T0 and T3 arm costs more tokens than English on the same
+sentences, with CIs entirely above 1.0 (`T0_o200k` 1.835 [1.813, 1.858] up to
+`T3_sarvam` 2.416 [2.386, 2.447]). Two more Sanskrit-native arms sit within noise of
+parity (`T1_bpe_raw_32k`* 1.009 [0.995, 1.023], `T2_unigram_raw_64k`* 0.999
+[0.985, 1.014]), and one (`T2_unigram_raw_32k`*, 1.070) stays above. **Itihāsa test shows
+the largest flip of all four corpora**: all four provisional T1/T2 arms cost roughly half
+an English token per Sanskrit token (0.47–0.55, all CIs entirely below 1.0) while every
+T0/T3 arm stays above 1.0 — but Itihāsa is verse, where meter, not tokenization, is the
+leading suspect for why Sanskrit looks unusually compact (CLAUDE.md §2.7), so it
+corroborates rather than proves anything.
 
-**The flip does not generalise past that one corpus.** On Sāmayik's out-of-domain split
-(`test_ood`, Mann Ki Baat transcripts) every arm, Sanskrit-native and English-centric
-alike, costs more tokens than English — the CIs of all eleven available arms sit
-entirely above 1.0, including the same `T1_bpe_raw_64k`* that flipped on `test` (1.066
-[1.053, 1.077] here). On FLORES devtest, likewise, every arm is above 1.0, T0 most
-severely (2.18–2.90 for the SLP1 variant). **Itihāsa (verse, secondary — meter is a
-confound, CLAUDE.md §2.7) shows the largest flip of all four corpora**: every one of the
-four provisional T1/T2 arms costs roughly half an English token per Sanskrit token
-(0.47–0.55, all CIs entirely below 1.0), while every T0/T3 arm stays above 1.0 — but this
-is the corpus where meter, not tokenization, is the leading suspect for why Sanskrit
-looks unusually compact, so it corroborates rather than proves the effect. One aside from
-that panel: the off-the-shelf `T0_gemma3` original-script number on Itihāsa comes in at
-0.996 [0.991, 1.000] — a T0 arm sitting essentially at parity, CI barely straddling 1.0 —
-which is a reminder that the SLP1-vs-original split (not just the T0-vs-T1/T2 split)
-moves these numbers, not evidence of a second sign flip for an off-the-shelf arm.
+**On the two corpora the trained arms never saw, nothing flips.** On Sāmayik's
+out-of-domain split (`test_ood`, Mann Ki Baat transcripts) every arm, Sanskrit-native and
+English-centric alike, costs more tokens than English: the CIs of all eleven available
+arms sit entirely above 1.0, including the same `T1_bpe_raw_64k`* that flipped on `test`
+(1.066 [1.053, 1.077] here). On FLORES devtest, likewise, every arm is above 1.0, T0 and
+T3 most severely (2.18–2.90 for the SLP1 variant). The split is exact: the flip appears on
+Sāmayik test and Itihāsa test, which are in-domain for the provisional T1/T2 tokenizers
+(trained on the training splits of those same two corpora), and on neither of the two
+out-of-domain sets. One aside from the Itihāsa panel: the off-the-shelf `T0_gemma3`
+original-script number comes in at 0.996 [0.991, 1.000] — a T0 arm essentially at parity,
+CI barely straddling 1.0 — which is a reminder that the SLP1-vs-original split (not just
+the T0-vs-T1/T2 split) moves these numbers, not evidence of a second sign flip for an
+off-the-shelf arm.
 
-**Verdict on H2:** confirmed, narrowly and conditionally. The sign flips on the primary
-prose corpus for the best provisional Sanskrit-native tokenizer, and flips more sharply
-on verse (where meter, not tokenizer quality, is the more likely explanation); it does
-not flip on the OOD prose split or on FLORES. Read together with Experiment 01, the
-picture is consistent: Sanskrit's word-level density is real (fewer, longer whitespace
-words throughout), and *some* of it survives into tokens once a tokenizer is trained on
-Sanskrit rather than adapted from an English-centric vocabulary — but "some," not "all,"
-and not yet for every register. The T1/T2 arms are provisional (trained on ~118k
-parallel-corpus sentences, not the monolingual corpus); a monolingual-trained arm at M1
-is the fairer test of the full claim.
+**Verdict on H2: consistent with H2, but not yet separable from domain fit.** Two
+explanations predict this exact pattern equally well, and this experiment cannot tell them
+apart. H2 says a Sanskrit-*native* tokenizer recovers density that an English-centric one
+destroys. Domain fit says a tokenizer trained on a corpus is cheap on that corpus's held-out
+split and no cheaper anywhere else — and the English pivot (o200k) is general-domain on all
+four corpora, so only the Sanskrit side of the ratio gets a home-field advantage. The
+observed flip lands exactly where domain fit predicts it (in-domain test splits) and is
+absent exactly where domain fit predicts it is absent (`test_ood`, FLORES); a genuine
+language-level effect should have survived the register change, and it did not. Nothing
+here is evidence *against* H2 — the in-domain drop from 1.8–2.4 to 0.9 is far larger than a
+vocabulary-size effect alone would explain — but "consistent with" is as far as it goes.
+
+Two planned runs separate the two explanations, and the verdict should not be firmed up
+before them (`docs/decisions.md`, "Experiment 02 verdict reframed…"). **E1, the matched
+English control:** train `E1_bpe_{32k,64k}` and `E1_unigram_{32k,64k}` on the English side
+of the same Sāmayik and Itihāsa training splits, same algorithm, same vocabulary size, same
+domain — then TPP against E1 holds domain and vocabulary constant on both sides, and
+whatever gap survives is the language effect H2 is about. **M1, the monolingual retrain:**
+retrain T1/T2 on the monolingual corpus (DCS, GRETIL, Wikipedia), which is not the domain of
+any evaluation split here, so a flip that persists on Sāmayik test cannot be home-field
+advantage. Read alongside Experiment 01, what is settled so far is narrower than H2:
+Sanskrit's word-level density is real, and it does not survive an English-centric
+tokenizer — how much of it survives a Sanskrit-native one is what E1 and M1 will say.
 
 ---
 

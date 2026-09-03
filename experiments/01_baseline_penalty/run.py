@@ -30,7 +30,6 @@ import logging
 import random
 import re
 import shutil
-import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -46,6 +45,7 @@ from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.parity import parity
 from sanskrit_tok.metrics.summary import MetricSummary, summarise_metric
+from sanskrit_tok.provenance import git_commit, git_dirty
 from sanskrit_tok.tokenizers.base import Tokenizer
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 
@@ -110,27 +110,6 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(config, dict):
         raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
     return config
-
-
-def git_commit(root: Path) -> str:
-    """`git rev-parse HEAD`, or `"unknown"` (logged at WARNING) if that fails.
-
-    Recorded in `results.json` so every number can be traced to the code that produced it
-    (CLAUDE.md §8). A missing commit is not fatal: it must not stop an experiment run in a
-    tarball or a worktree without git.
-    """
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as error:
-        logger.warning("could not read the git commit (%s); recording 'unknown'", error)
-        return "unknown"
-    return completed.stdout.strip() or "unknown"
 
 
 # ---------------------------------------------------------------------- corpus wrangling
@@ -585,9 +564,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     metrics = compute_metrics(tokenizers, variants)
     parity_rows = compute_parity(tokenizers, variants, pivots, parity_source)
 
+    dirty = git_dirty(root)
+    if dirty:
+        logger.warning(
+            "the working tree has uncommitted changes; git_commit names the parent "
+            "commit, not the code that ran (recording git_dirty=true)"
+        )
+
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
         "git_commit": git_commit(root),
+        "git_dirty": dirty,
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "config": config,
         "corpus": {
