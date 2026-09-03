@@ -7,6 +7,7 @@ the two Hugging Face arms, which pull real model repositories and so are skipped
 """
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,15 +16,42 @@ from sanskrit_tok.tokenizers.base import Tokenizer
 from sanskrit_tok.tokenizers.registry import (
     REGISTRY,
     T0_GEMMA3_CANDIDATES,
+    T0_GPT2_CANDIDATES,
     T0_LLAMA4_CANDIDATES,
+    T3_BRAHMIC131K_MODEL_ID,
+    T3_INDICSUPER_CANDIDATES,
+    T3_SARVAM_CANDIDATES,
+    T3_SUTRA_CANDIDATES,
     HFAdapter,
     LoadedTokenizer,
     TiktokenAdapter,
+    TokenizerUnavailable,
     list_tokenizers,
     load_tokenizer,
+    trained_tokenizer_path,
 )
 
 ARMS = ("T0_gemma3", "T0_llama4", "T0_o200k")
+
+#: Every arm the registry must carry after this task (CLAUDE.md §6, exp02 plan Task 2).
+ALL_ARMS = (
+    "T0_gemma3",
+    "T0_gpt2",
+    "T0_llama4",
+    "T0_o200k",
+    "T1_bpe_raw_32k",
+    "T1_bpe_raw_64k",
+    "T2_unigram_raw_32k",
+    "T2_unigram_raw_64k",
+    "T3_brahmic131k",
+    "T3_indicsuper",
+    "T3_sarvam",
+    "T3_sutra",
+)
+
+T3_ARMS = ("T3_brahmic131k", "T3_indicsuper", "T3_sarvam", "T3_sutra")
+
+TRAINED_ARMS = ("T1_bpe_raw_32k", "T1_bpe_raw_64k", "T2_unigram_raw_32k", "T2_unigram_raw_64k")
 
 NETWORK_TESTS = pytest.mark.skipif(
     not os.environ.get("SANSKRIT_TOK_NETWORK_TESTS"),
@@ -99,12 +127,16 @@ def test_hf_adapter_suppresses_special_tokens() -> None:
 # --------------------------------------------------------------------------- registry
 
 
-def test_list_tokenizers_returns_the_three_arm_names_sorted() -> None:
-    assert list_tokenizers() == sorted(ARMS)
+def test_list_tokenizers_returns_every_arm_name_sorted() -> None:
+    assert list_tokenizers() == sorted(ALL_ARMS)
+
+
+def test_list_tokenizers_filters_by_family() -> None:
+    assert list_tokenizers(family="T3") == sorted(T3_ARMS)
 
 
 def test_registry_keys_are_exactly_the_listed_arms() -> None:
-    assert sorted(REGISTRY) == sorted(ARMS)
+    assert sorted(REGISTRY) == sorted(ALL_ARMS)
 
 
 def test_load_tokenizer_rejects_an_unknown_name_and_says_what_is_known() -> None:
@@ -112,7 +144,7 @@ def test_load_tokenizer_rejects_an_unknown_name_and_says_what_is_known() -> None
         load_tokenizer("nope")
     message = str(excinfo.value)
     assert "nope" in message
-    for arm in ARMS:
+    for arm in ALL_ARMS:
         assert arm in message
 
 
@@ -148,6 +180,9 @@ def test_hf_arms_try_candidates_in_order_and_take_the_first_that_loads(
     assert tok.source_id == T0_LLAMA4_CANDIDATES[2]
     assert tok.vocab_size == 128256
     assert tok.encode("hello") == [4, 5]
+    # `attempted` records the failed ids then the winner, in the order they were tried.
+    assert tok.attempted == tuple(T0_LLAMA4_CANDIDATES[:3])
+    assert tok.family == "T0"
 
 
 def test_hf_arms_raise_with_every_error_when_no_candidate_loads(
@@ -232,3 +267,154 @@ def test_hf_arms_load_from_a_declared_candidate(arm: str, candidates: tuple[str,
     assert tok.encode(DEVANAGARI)
     assert tok.encode(ENGLISH)
     assert isinstance(tok, Tokenizer)
+
+
+# --------------------------------------------------------------------- T0_gpt2 (offline)
+
+
+def test_t0_gpt2_candidates_and_family() -> None:
+    assert T0_GPT2_CANDIDATES == ("openai-community/gpt2",)
+
+
+def test_t0_gpt2_has_family_t0(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sanskrit_tok.tokenizers.registry as registry
+
+    monkeypatch.setattr(registry, "_hf_from_pretrained", lambda model_id, token: _FakeHF())
+    monkeypatch.setattr(registry, "_hf_vocab_size", lambda _: 50257)
+
+    tok = load_tokenizer("T0_gpt2")
+
+    assert tok.family == "T0"
+    assert tok.source_id == "openai-community/gpt2"
+    assert tok.attempted == ("openai-community/gpt2",)
+
+
+# ------------------------------------------------------------------------ TokenizerUnavailable
+
+
+def test_trained_arm_raises_tokenizer_unavailable_when_file_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+
+    with pytest.raises(TokenizerUnavailable) as excinfo:
+        load_tokenizer("T1_bpe_raw_32k")
+
+    expected_path = trained_tokenizer_path("T1_bpe_raw_32k")
+    assert str(expected_path) in str(excinfo.value)
+
+
+def test_tokenizer_unavailable_is_a_runtime_error() -> None:
+    assert issubclass(TokenizerUnavailable, RuntimeError)
+
+
+def test_hf_arm_with_no_candidate_raises_tokenizer_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sanskrit_tok.tokenizers.registry as registry
+
+    def always_fails(model_id: str, token: str | None) -> Any:
+        raise OSError(f"{model_id} is gated")
+
+    monkeypatch.setattr(registry, "_hf_from_pretrained", always_fails)
+
+    with pytest.raises(TokenizerUnavailable):
+        load_tokenizer("T0_gemma3")
+
+
+# ------------------------------------------------------------------------- trained (T1/T2)
+
+
+def _write_tiny_bpe_tokenizer(path: Path, vocab_size: int = 50) -> None:
+    """A ten-line SLP1 toy corpus, trained to a `models.BPE` tokenizer.json at `path`."""
+    from tokenizers import Tokenizer as RawTokenizer
+    from tokenizers import models, pre_tokenizers, trainers
+
+    lines = [
+        "rAmaH gacCati vanam",
+        "kfzRa uvAca",
+        "devI vadati",
+        "nftyati bAlakaH",
+        "gajaH calati",
+        "sUryaH udayati",
+        "candraH BAti",
+        "nadI vahati",
+        "vfkzaH tizWati",
+        "pakzI uqqIyate",
+    ]
+    tokenizer = RawTokenizer(models.BPE(unk_token="<unk>"))
+    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace()
+    trainer = trainers.BpeTrainer(vocab_size=vocab_size, special_tokens=["<unk>"])
+    tokenizer.train_from_iterator(lines, trainer=trainer)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tokenizer.save(str(path))
+
+
+def test_trained_arm_loads_from_tokenizer_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    path = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
+    _write_tiny_bpe_tokenizer(path, vocab_size=50)
+
+    tok = load_tokenizer("T1_bpe_raw_32k")
+
+    assert tok.family == "T1"
+    assert tok.vocab_size == 50
+    assert tok.source_id == str(path)
+    assert tok.attempted == (str(path),)
+    ids = tok.encode("rAmaH")
+    assert ids
+    assert all(isinstance(i, int) for i in ids)
+
+
+def test_trained_tokenizer_path_resolves_under_the_tokenizer_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    assert trained_tokenizer_path("T2_unigram_raw_64k") == tmp_path / "T2_unigram_raw_64k" / (
+        "tokenizer.json"
+    )
+
+
+@pytest.mark.parametrize("arm", TRAINED_ARMS)
+def test_every_trained_arm_is_registered(arm: str) -> None:
+    assert arm in REGISTRY
+
+
+# --------------------------------------------------------------------------------- T3 arms
+
+
+def test_t3_candidate_constants() -> None:
+    assert T3_SARVAM_CANDIDATES == ("sarvamai/sarvam-1",)
+    assert T3_SUTRA_CANDIDATES == ("TWO/sutra-mlt256-v2",)
+    assert T3_BRAHMIC131K_MODEL_ID == "theschoolofai/BrahmicTokenizer-131K"
+    assert T3_INDICSUPER_CANDIDATES == (
+        "krutrim-ai-labs/IndicSuperTokenizer",
+        "ai4bharat/IndicSuperTokenizer",
+        "ai4bharat/indic-super-tokenizer",
+    )
+
+
+@NETWORK_TESTS
+@pytest.mark.parametrize("arm", ["T0_gpt2"])
+def test_t0_gpt2_loads_for_real(arm: str) -> None:
+    tok = load_tokenizer(arm)
+    assert tok.vocab_size == 50257
+    assert tok.family == "T0"
+    assert tok.encode(DEVANAGARI)
+    assert tok.encode(ENGLISH)
+
+
+@NETWORK_TESTS
+@pytest.mark.parametrize("arm", T3_ARMS)
+def test_each_t3_arm_loads_or_is_reported_unavailable(arm: str) -> None:
+    try:
+        tok = load_tokenizer(arm)
+    except TokenizerUnavailable as exc:
+        pytest.skip(f"{arm}: not available ({exc})")
+        return
+    assert tok.vocab_size > 30_000
+    assert tok.family == "T3"
+    assert tok.encode(DEVANAGARI)
+    assert tok.encode(ENGLISH)

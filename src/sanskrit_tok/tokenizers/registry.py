@@ -17,7 +17,11 @@ Two shims stand between the upstream libraries and `Tokenizer` (`base.py`):
 
 The T0 arms are "existing practice" (CLAUDE.md §2.5), never a controlled comparison: their
 vocabulary sizes differ, so their fertilities are read as evidence about deployed
-tokenizers, not as a matched experiment.
+tokenizers, not as a matched experiment. `T3_*` (off-the-shelf Indic tokenizers) are the
+same kind of arm, one family over. `T1_*`/`T2_*` are the opposite: trained from scratch by
+this project at matched vocabulary sizes (CLAUDE.md §5), so they are read from a
+`tokenizer.json` file on disk rather than downloaded, and are absent — `TokenizerUnavailable`
+— until `tokenizers/train_bpe.py` / `train_unigram.py` (Task 4) have written one.
 
 **Gated repositories.** `meta-llama/*` and `google/*` need an accepted licence and an
 `HF_TOKEN`. Each HF arm therefore declares a list of candidate ids, tried in order, first
@@ -25,6 +29,17 @@ success wins: the official gated id, a mirror of the same tokenizer, then the pr
 model generation and its mirror. `HF_TOKEN` is passed when the environment sets one. Any
 load below the first candidate is a substitution and is recorded in `docs/decisions.md`
 (CLAUDE.md §11), because the tokenizer measured is then not the one the arm is named for.
+
+**`family`.** Every `LoadedTokenizer` carries the arm-name prefix before its first
+underscore (`"T0_gpt2"` -> `"T0"`), so an experiment or a metric summary can group or
+filter arms without parsing the name itself; `list_tokenizers(family=...)` filters the
+registry the same way.
+
+**`TokenizerUnavailable`.** A registered arm can still fail to produce a tokenizer this
+run — every HF candidate is gated or unpublished, or a trained arm's `tokenizer.json` has
+not been written yet. That is different from `KeyError` (the arm is not registered at
+all): experiments catch `TokenizerUnavailable` specifically, log a WARNING, and record the
+arm under `unavailable_arms` rather than aborting the whole run over one missing model.
 """
 
 import functools
@@ -32,18 +47,27 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 __all__ = [
     "REGISTRY",
     "T0_GEMMA3_CANDIDATES",
+    "T0_GPT2_CANDIDATES",
     "T0_LLAMA4_CANDIDATES",
     "T0_O200K_ENCODING",
+    "T3_BRAHMIC131K_MODEL_ID",
+    "T3_INDICSUPER_CANDIDATES",
+    "T3_SARVAM_CANDIDATES",
+    "T3_SUTRA_CANDIDATES",
     "HFAdapter",
     "LoadedTokenizer",
     "TiktokenAdapter",
+    "TokenizerUnavailable",
+    "TokenizersAdapter",
     "list_tokenizers",
     "load_tokenizer",
+    "trained_tokenizer_path",
 ]
 
 logger = logging.getLogger(__name__)
@@ -69,25 +93,81 @@ T0_GEMMA3_CANDIDATES: tuple[str, ...] = (
     "unsloth/gemma-2-2b",
 )
 
+#: GPT-2 (2019, 50,257-token BPE), ungated: an older-generation English-centric arm, added
+#: because the three arms above all have >=200k vocabularies (2026-09-03 decision log entry
+#: "Add T0_gpt2 as an older-generation English-centric arm").
+T0_GPT2_CANDIDATES: tuple[str, ...] = ("openai-community/gpt2",)
+
+#: Off-the-shelf Indic tokenizers (CLAUDE.md §6, T3). Single published id each; `T3_sarvam`
+#: and `T3_sutra` load through the same candidate-walking `_load_hf_arm` as every T0 arm.
+T3_SARVAM_CANDIDATES: tuple[str, ...] = ("sarvamai/sarvam-1",)
+T3_SUTRA_CANDIDATES: tuple[str, ...] = ("TWO/sutra-mlt256-v2",)
+
+#: `T3_brahmic131k` ships a `tokenizer.json` but no guarantee of a `transformers`-style
+#: config, so it is loaded by `_load_brahmic131k_arm`, which tries three adapter kinds in
+#: order rather than three repository ids.
+T3_BRAHMIC131K_MODEL_ID = "theschoolofai/BrahmicTokenizer-131K"
+
+#: `T3_indicsuper` is not known to be publicly released as of 2026-09-03: none of these
+#: three plausible ids resolves (`huggingface_hub.list_repo_files` returns
+#: `RepositoryNotFoundError` for all three; see docs/decisions.md). Kept as candidates so
+#: the arm starts loading the moment any of them is published, with no code change.
+T3_INDICSUPER_CANDIDATES: tuple[str, ...] = (
+    "krutrim-ai-labs/IndicSuperTokenizer",
+    "ai4bharat/IndicSuperTokenizer",
+    "ai4bharat/indic-super-tokenizer",
+)
+
 
 @dataclass
 class LoadedTokenizer:
     """A tokenizer arm, ready to encode, carrying its own provenance.
 
     Satisfies the `Tokenizer` protocol (`base.py`), so it can be handed straight to any
-    metric. `name` is the arm key (`"T0_llama4"`); `source_id` is the model id or tiktoken
-    encoding name *actually* loaded, which may be a substitute for the arm's first choice;
-    `vocab_size` is the full id space including added special tokens.
+    metric. `name` is the arm key (`"T0_llama4"`); `source_id` is the model id, tiktoken
+    encoding name, or trained-tokenizer file path *actually* loaded, which may be a
+    substitute for the arm's first choice; `vocab_size` is the full id space including
+    added special tokens.
+
+    `family` is the arm-name prefix before its first underscore (`"T0"`, `"T3"`, ...),
+    computed once at load time so callers never re-derive it from `name`. `attempted` is
+    every candidate id (or, for a file-backed arm, the one file path) tried before the
+    winner, winner last — a one-element tuple whenever an arm has only ever had one
+    candidate. Both default to empty so hand-built fakes in tests need not set them.
     """
 
     name: str
     source_id: str
     vocab_size: int
     _encode: Callable[[str], list[int]] = field(repr=False)
+    family: str = ""
+    attempted: tuple[str, ...] = ()
 
     def encode(self, text: str) -> list[int]:
         """Token ids for `text`, with no special tokens added."""
         return self._encode(text)
+
+
+class TokenizerUnavailable(RuntimeError):
+    """A registered arm exists but could not be loaded this run.
+
+    Two causes: every candidate in an HF arm's candidate list failed (`_load_hf_arm`,
+    `_load_brahmic131k_arm`), or a file-backed arm's `tokenizer.json` (T1/T2, written by
+    `tokenizers/train_*.py`) does not exist yet at `trained_tokenizer_path(name)`.
+    Distinct from `KeyError`, which means the arm is not registered at all.
+
+    Subclasses `RuntimeError` on purpose: the two loaders raised a bare `RuntimeError` for
+    "no candidate loaded" before this class existed, and the tests pinning that behaviour
+    (`pytest.raises(RuntimeError)`) still pass unchanged, since every `TokenizerUnavailable`
+    *is* a `RuntimeError`. Callers that want to catch "unavailable this run" specifically —
+    an experiment recording `unavailable_arms` rather than aborting — should catch this
+    class rather than `RuntimeError`.
+    """
+
+
+def _family(name: str) -> str:
+    """The arm-name prefix before its first underscore: `"T0_gpt2"` -> `"T0"`."""
+    return name.split("_", 1)[0]
 
 
 class TiktokenAdapter:
@@ -117,6 +197,25 @@ class HFAdapter:
 
     def __call__(self, text: str) -> list[int]:
         ids: list[int] = list(self._tokenizer.encode(text, add_special_tokens=False))
+        return ids
+
+
+class TokenizersAdapter:
+    """Wraps a raw `tokenizers.Tokenizer` (the Rust library, not `transformers`) as a
+    plain `str -> list[int]` callable.
+
+    Used for repos that ship a `tokenizer.json` but nothing `AutoTokenizer` can resolve
+    (`_load_brahmic131k_arm`'s second tier) and for the file-backed T1/T2 arms, which are
+    always this exact type since they are loaded with `Tokenizer.from_file`.
+    `add_special_tokens=False` for the same reason as `HFAdapter`: metrics encode
+    individual words, so per-call special tokens would be counted once per word.
+    """
+
+    def __init__(self, tokenizer: Any) -> None:
+        self._tokenizer = tokenizer
+
+    def __call__(self, text: str) -> list[int]:
+        ids: list[int] = list(self._tokenizer.encode(text, add_special_tokens=False).ids)
         return ids
 
 
@@ -165,6 +264,8 @@ def _load_tiktoken_arm(name: str, encoding_name: str) -> LoadedTokenizer:
         source_id=encoding_name,
         vocab_size=int(encoding.n_vocab),
         _encode=TiktokenAdapter(encoding),
+        family=_family(name),
+        attempted=(encoding_name,),
     )
 
 
@@ -187,12 +288,15 @@ def _load_hf_arm(name: str, candidates: tuple[str, ...]) -> LoadedTokenizer:
     the arm will raise rather than fall through to its next candidate — which is the safe
     direction to fail, since a mirror missing its tokenizer files is not a licence gate.
 
-    Raises `RuntimeError` naming every candidate and its error when none loads, since an
-    arm that silently disappears would leave a hole in the experiment's results table.
+    Raises `TokenizerUnavailable` (a `RuntimeError`) naming every candidate and its error
+    when none loads, since an arm that silently disappears would leave a hole in the
+    experiment's results table.
     """
     token = os.environ.get("HF_TOKEN")
     failures: list[str] = []
+    attempted: list[str] = []
     for model_id in candidates:
+        attempted.append(model_id)
         try:
             tokenizer = _hf_from_pretrained(model_id, token)
         except OSError as exc:
@@ -212,9 +316,187 @@ def _load_hf_arm(name: str, candidates: tuple[str, ...]) -> LoadedTokenizer:
             source_id=model_id,
             vocab_size=_hf_vocab_size(tokenizer),
             _encode=HFAdapter(tokenizer),
+            family=_family(name),
+            attempted=tuple(attempted),
         )
-    raise RuntimeError(
+    raise TokenizerUnavailable(
         f"{name}: no candidate tokenizer could be loaded. Tried:\n  " + "\n  ".join(failures)
+    )
+
+
+def _load_brahmic131k_arm(name: str) -> LoadedTokenizer:
+    """`T3_brahmic131k`: try three adapter kinds against one repository id, in order.
+
+    Unlike every other HF arm, this one has no alternate repository to fall back to; what
+    varies is *how* the repo's tokenizer files are read. `AutoTokenizer` (the same path
+    every T0/T3 HF arm uses) wins in practice — the repo carries a plain `tokenizer.json` —
+    but the two more permissive fallbacks stay in place per the exp02 plan, for a future
+    repo revision that drops the `transformers`-compatible config:
+
+    1. `AutoTokenizer.from_pretrained` (`HFAdapter`) — the normal path.
+    2. `tokenizers.Tokenizer.from_pretrained` (`TokenizersAdapter`) — reads the same
+       `tokenizer.json` directly, for repos `AutoTokenizer` cannot resolve (e.g. no
+       `tokenizer_config.json`).
+    3. Any `*.tiktoken` mergeable-ranks file in the repo, wrapped as a `tiktoken.Encoding`
+       (`TiktokenAdapter`). Last resort: the pre-tokenizer regex is not published by a
+       ranks-only file, so a generic GPT-2-style split pattern is assumed, which can
+       under- or over-segment relative to the model's own tokenizer. Only exercised if
+       tiers 1 and 2 both fail.
+
+    `attempted` records the repository id once per tier tried, so it can hold repeats;
+    that mirrors "one candidate, several adapters" rather than "several candidates".
+    Raises `TokenizerUnavailable` naming every tier's error when all three fail.
+    """
+    model_id = T3_BRAHMIC131K_MODEL_ID
+    token = os.environ.get("HF_TOKEN")
+    attempted: list[str] = []
+    failures: list[str] = []
+
+    attempted.append(model_id)
+    try:
+        tokenizer = _hf_from_pretrained(model_id, token)
+    except OSError as exc:
+        logger.warning("%s: AutoTokenizer could not load %s: %s", name, model_id, exc)
+        failures.append(f"AutoTokenizer({model_id}): {_first_line(str(exc))}")
+    else:
+        logger.info("%s: loaded %s via AutoTokenizer", name, model_id)
+        return LoadedTokenizer(
+            name=name,
+            source_id=model_id,
+            vocab_size=_hf_vocab_size(tokenizer),
+            _encode=HFAdapter(tokenizer),
+            family=_family(name),
+            attempted=tuple(attempted),
+        )
+
+    attempted.append(model_id)
+    try:
+        from tokenizers import Tokenizer as _RawTokenizer
+
+        fast_tokenizer = _RawTokenizer.from_pretrained(model_id)
+    except OSError as exc:
+        logger.warning("%s: tokenizers.Tokenizer could not load %s: %s", name, model_id, exc)
+        failures.append(f"tokenizers.Tokenizer({model_id}): {_first_line(str(exc))}")
+    else:
+        logger.info("%s: loaded %s via tokenizers.Tokenizer", name, model_id)
+        return LoadedTokenizer(
+            name=name,
+            source_id=model_id,
+            vocab_size=int(fast_tokenizer.get_vocab_size()),
+            _encode=TokenizersAdapter(fast_tokenizer),
+            family=_family(name),
+            attempted=tuple(attempted),
+        )
+
+    attempted.append(model_id)
+    try:
+        encoding, ranks_file = _load_tiktoken_style_hub_file(model_id)
+    except OSError as exc:
+        logger.warning("%s: no usable .tiktoken file in %s: %s", name, model_id, exc)
+        failures.append(f".tiktoken({model_id}): {_first_line(str(exc))}")
+    else:
+        logger.info("%s: loaded %s/%s via tiktoken.Encoding", name, model_id, ranks_file)
+        return LoadedTokenizer(
+            name=name,
+            source_id=model_id,
+            vocab_size=int(encoding.n_vocab),
+            _encode=TiktokenAdapter(encoding),
+            family=_family(name),
+            attempted=tuple(attempted),
+        )
+
+    raise TokenizerUnavailable(
+        f"{name}: no adapter could load {model_id}. Tried:\n  " + "\n  ".join(failures)
+    )
+
+
+def _load_tiktoken_style_hub_file(model_id: str) -> tuple[Any, str]:
+    """Last-resort tier for `_load_brahmic131k_arm`: a bare `.tiktoken` ranks file.
+
+    Lists the repo's files, downloads the first one ending `.tiktoken`, and builds a
+    `tiktoken.Encoding` from its mergeable ranks. Raises `OSError` (folded into the
+    caller's failure message) if the repo has no such file or the hub call itself fails;
+    `huggingface_hub`'s listing/download errors are `OSError` subclasses, matching every
+    other candidate-walk in this module.
+
+    The pre-tokenizer split pattern is not recoverable from a ranks-only file, so this
+    assumes GPT-2's regex (`tiktoken.get_encoding("gpt2")._pat_str`) — a reasonable
+    default for a BPE tokenizer, but not guaranteed to match the original model's own
+    segmentation. Returns the encoding and the repo-relative filename used, for logging.
+    """
+    import huggingface_hub
+    import tiktoken
+    from tiktoken.load import load_tiktoken_bpe
+
+    try:
+        repo_files = huggingface_hub.list_repo_files(model_id)
+    except OSError:
+        raise
+    ranks_files = [path for path in repo_files if path.endswith(".tiktoken")]
+    if not ranks_files:
+        raise OSError(f"{model_id} has no *.tiktoken file")
+    ranks_file = ranks_files[0]
+    local_path = huggingface_hub.hf_hub_download(model_id, ranks_file)
+    mergeable_ranks = load_tiktoken_bpe(local_path)
+    pat_str = tiktoken.get_encoding("gpt2")._pat_str  # noqa: SLF001 - no public accessor
+    encoding = tiktoken.Encoding(
+        name=f"{model_id}/{ranks_file}",
+        pat_str=pat_str,
+        mergeable_ranks=mergeable_ranks,
+        special_tokens={},
+    )
+    return encoding, ranks_file
+
+
+def _repo_root() -> Path:
+    """The repository root, i.e. the parent of `src/` (three levels above this file)."""
+    return Path(__file__).resolve().parents[3]
+
+
+def _tokenizer_dir(root: Path) -> Path:
+    """Where trained (T1/T2) tokenizers live: `$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to
+    `outputs/tokenizers`, resolved against `root` when relative."""
+    value = os.environ.get("SANSKRIT_TOK_TOKENIZER_DIR", "outputs/tokenizers")
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
+def trained_tokenizer_path(name: str) -> Path:
+    """Where a file-backed arm's `tokenizer.json` lives (or should be written to).
+
+    `<tokenizer_dir>/<name>/tokenizer.json`, `tokenizer_dir` from `_tokenizer_dir`
+    (`$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to `outputs/tokenizers` under the repo
+    root). `tokenizers/train_bpe.py` and `train_unigram.py` (Task 4) import this so the
+    file they write and the file `_load_trained_arm` reads can never drift apart.
+    """
+    return _tokenizer_dir(_repo_root()) / name / "tokenizer.json"
+
+
+def _load_trained_arm(name: str) -> LoadedTokenizer:
+    """Load a file-backed T1/T2 arm from its trained `tokenizer.json`.
+
+    Raises `TokenizerUnavailable` naming the expected path if the file does not exist —
+    the arm is registered (it is a known name) but has not been trained yet, which is
+    exactly the condition this exception exists to distinguish from `KeyError`.
+    """
+    path = trained_tokenizer_path(name)
+    if not path.exists():
+        raise TokenizerUnavailable(
+            f"{name}: trained tokenizer file not found at {path}; train it with "
+            "sanskrit_tok.tokenizers.train_bpe / train_unigram, or set "
+            "SANSKRIT_TOK_TOKENIZER_DIR to where it already lives"
+        )
+    from tokenizers import Tokenizer as _RawTokenizer
+
+    tokenizer = _RawTokenizer.from_file(str(path))
+    logger.info("%s: loaded trained tokenizer from %s", name, path)
+    return LoadedTokenizer(
+        name=name,
+        source_id=str(path),
+        vocab_size=int(tokenizer.get_vocab_size()),
+        _encode=TokenizersAdapter(tokenizer),
+        family=_family(name),
+        attempted=(str(path),),
     )
 
 
@@ -224,12 +506,22 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "T0_o200k": functools.partial(_load_tiktoken_arm, "T0_o200k", T0_O200K_ENCODING),
     "T0_llama4": functools.partial(_load_hf_arm, "T0_llama4", T0_LLAMA4_CANDIDATES),
     "T0_gemma3": functools.partial(_load_hf_arm, "T0_gemma3", T0_GEMMA3_CANDIDATES),
+    "T0_gpt2": functools.partial(_load_hf_arm, "T0_gpt2", T0_GPT2_CANDIDATES),
+    "T3_sarvam": functools.partial(_load_hf_arm, "T3_sarvam", T3_SARVAM_CANDIDATES),
+    "T3_sutra": functools.partial(_load_hf_arm, "T3_sutra", T3_SUTRA_CANDIDATES),
+    "T3_brahmic131k": functools.partial(_load_brahmic131k_arm, "T3_brahmic131k"),
+    "T3_indicsuper": functools.partial(_load_hf_arm, "T3_indicsuper", T3_INDICSUPER_CANDIDATES),
+    "T1_bpe_raw_32k": functools.partial(_load_trained_arm, "T1_bpe_raw_32k"),
+    "T1_bpe_raw_64k": functools.partial(_load_trained_arm, "T1_bpe_raw_64k"),
+    "T2_unigram_raw_32k": functools.partial(_load_trained_arm, "T2_unigram_raw_32k"),
+    "T2_unigram_raw_64k": functools.partial(_load_trained_arm, "T2_unigram_raw_64k"),
 }
 
 
-def list_tokenizers() -> list[str]:
-    """Every registered arm key, sorted."""
-    return sorted(REGISTRY)
+def list_tokenizers(family: str | None = None) -> list[str]:
+    """Every registered arm key, sorted; `family` (e.g. `"T3"`) narrows to that prefix."""
+    names = REGISTRY if family is None else (n for n in REGISTRY if _family(n) == family)
+    return sorted(names)
 
 
 def load_tokenizer(name: str) -> LoadedTokenizer:

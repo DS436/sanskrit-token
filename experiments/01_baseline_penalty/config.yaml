@@ -11,6 +11,7 @@ tokenizers:
   - T0_o200k
   - T0_llama4
   - T0_gemma3
+  - T0_gpt2
 
 # FLORES-200 is aligned by index across languages, which is what makes parity meaningful.
 languages:
