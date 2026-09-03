@@ -4,8 +4,11 @@ Every expected number here is hand-computed from the fake tokenizers below, so t
 tests pin the metric definitions rather than the implementation.
 """
 
+import math
+
 import pytest
 
+from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.parity import parity
@@ -166,11 +169,29 @@ def test_compression_of_empty_input() -> None:
     assert result["per_text"] == []
 
 
-def test_compression_of_text_yielding_no_tokens_is_zero_not_an_error() -> None:
+def test_compression_of_text_yielding_no_tokens_is_nan_not_zero() -> None:
+    """`0.0` is a plausible bytes/token value, so an undefined ratio must not read as one."""
     result = compression(CHAR, [""])
+    assert math.isnan(result["value"])
+    assert result["n"] == 0
+    assert math.isnan(result["per_text"][0])
+    assert result["n_undefined"] == 1
+
+
+def test_compression_marks_only_the_undefined_texts_as_nan() -> None:
+    result = compression(CHAR, ["ab cde", ""])
+    assert result["value"] == pytest.approx(1.0)
+    assert result["per_text"][0] == pytest.approx(1.0)
+    assert math.isnan(result["per_text"][1])
+    assert result["n_undefined"] == 1
+
+
+def test_compression_of_empty_input_is_zero_not_nan() -> None:
+    """Nothing was measured, so there is no undefined ratio to report either."""
+    result = compression(CHAR, [])
     assert result["value"] == 0.0
     assert result["n"] == 0
-    assert result["per_text"] == [0.0]
+    assert result["n_undefined"] == 0
 
 
 def test_compression_rejects_a_bare_str() -> None:
@@ -225,17 +246,31 @@ def test_parity_length_mismatch_raises() -> None:
 
 def test_parity_of_empty_input() -> None:
     result = parity(CHAR, [], [])
-    assert result["value"] == 0.0
+    assert math.isnan(result["value"])
     assert result["n"] == 0
     assert result["unit"] == "token ratio"
     assert result["per_pair"] == []
+    assert result["n_undefined"] == 0
 
 
-def test_parity_with_no_pivot_tokens_is_zero_not_an_error() -> None:
+def test_parity_with_no_pivot_tokens_is_nan_not_zero() -> None:
+    """The whole pivot side is empty here, so the pooled ratio is undefined too."""
     result = parity(CHAR, ["abc"], [""])
-    assert result["value"] == 0.0
+    assert math.isnan(result["value"])
     assert result["n"] == 1
-    assert result["per_pair"] == [0.0]
+    assert math.isnan(result["per_pair"][0])
+    assert result["n_undefined"] == 1
+
+
+def test_parity_keeps_the_pooled_value_when_only_some_pivots_are_empty() -> None:
+    """(3 + 2) over (0 + 4): one pair is undefined, the corpus-level ratio is not."""
+    result = parity(CHAR, ["abc", "de"], ["", "fghi"])
+    assert result["value"] == pytest.approx(5 / 4)
+    assert math.isnan(result["per_pair"][0])
+    assert result["per_pair"][1] == pytest.approx(0.5)
+    assert result["n_undefined"] == 1
+    assert result["source_tokens"] == 5
+    assert result["pivot_tokens"] == 4
 
 
 def test_parity_rejects_a_bare_str_on_either_side() -> None:
@@ -244,6 +279,31 @@ def test_parity_rejects_a_bare_str_on_either_side() -> None:
         parity(CHAR, "abc", ["abc"])  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="single str"):
         parity(CHAR, ["abc"], "abc")  # type: ignore[arg-type]
+
+
+# --- the shared ratio core -------------------------------------------------------
+
+
+def test_ratio_parts_hand_computed() -> None:
+    parts = RatioParts(source_counts=(3, 1), pivot_counts=(2, 4))
+    assert parts.source_total == 4 and parts.pivot_total == 6
+    assert parts.value == 4 / 6
+    assert parts.per_pair == [1.5, 0.25]
+    assert parts.n_undefined == 0
+
+
+def test_ratio_parts_marks_undefined_pairs_as_nan() -> None:
+    parts = RatioParts(source_counts=(3, 2), pivot_counts=(0, 4))
+    assert math.isnan(parts.per_pair[0]) and parts.per_pair[1] == 0.5
+    assert parts.n_undefined == 1
+    assert parts.value == 5 / 4  # pooled ratio still defined
+
+
+def test_token_ratio_uses_pivot_tokenizer_and_checks_lengths() -> None:
+    parts = token_ratio(CharTokenizer(), ["abc"], ["ab"], pivot_tokenizer=WordTokenizer())
+    assert parts.source_counts == (3,) and parts.pivot_counts == (1,)
+    with pytest.raises(ValueError):
+        token_ratio(CharTokenizer(), ["a", "b"], ["a"])
 
 
 # --- purity ----------------------------------------------------------------------

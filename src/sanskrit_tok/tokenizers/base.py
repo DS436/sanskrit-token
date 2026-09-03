@@ -46,15 +46,29 @@ class MetricResult(TypedDict):
 
 
 class DetailedMetricResult(MetricResult, total=False):
-    """`MetricResult` plus the per-item distribution a metric may attach.
+    """`MetricResult` plus the per-item distribution and diagnostics a metric may attach.
 
     Every extra key is optional: a caller that only needs the headline number can consume
-    this as a plain `MetricResult`. Each metric documents which key it populates.
+    this as a plain `MetricResult`. Each metric documents which keys it populates.
+
+    Three groups. The `per_*` lists are the distributions, one entry per word, text or
+    aligned pair. `n_undefined` counts how many of those entries are `nan` because the
+    ratio does not exist (a zero denominator); it is reported rather than papered over,
+    because an undefined item is a property of the corpus, not a measurement of zero.
+    `ci_low`/`ci_high`/`n_bootstrap`/`seed` and `source_tokens`/`pivot_tokens` are the
+    bootstrap interval and the two token totals behind a ratio metric such as `tpp`.
     """
 
     per_word: list[int]
     per_text: list[float]
     per_pair: list[float]
+    n_undefined: int
+    ci_low: float
+    ci_high: float
+    n_bootstrap: int
+    seed: int
+    source_tokens: int
+    pivot_tokens: int
 
 
 def require_texts(texts: object) -> None:

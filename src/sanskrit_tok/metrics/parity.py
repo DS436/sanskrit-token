@@ -13,7 +13,8 @@ a density measure. It is the FLORES-anchored diagnostic for RQ1; tokens-per-prop
 
 from collections.abc import Sequence
 
-from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer, require_texts
+from sanskrit_tok.metrics._ratio import token_ratio
+from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
 
 __all__ = ["parity"]
 
@@ -33,36 +34,27 @@ def parity(
     tokenizers on parallel text.
 
     Returns `value` = total tokens over `texts` / total tokens over `pivot_texts`, `n` =
-    the number of aligned pairs, `unit` = `"token ratio"`, and `per_pair` = the ratio for
-    each pair in order.
+    the number of aligned pairs, `unit` = `"token ratio"`, `per_pair` = the ratio for each
+    pair in order, `n_undefined` = how many of those are `nan`, and `source_tokens` /
+    `pivot_tokens` = the two totals behind `value`.
 
     Pooled, not averaged per pair, so `value` is generally not the mean of `per_pair`.
-    A pair whose pivot side yields no tokens contributes `0.0` to `per_pair`; when the
-    whole pivot side yields no tokens, `value` is `0.0`.
+    A pair whose pivot side yields no tokens has no ratio and contributes `nan`, never
+    `0.0`, which would be indistinguishable from a measured ratio; the pooled `value`
+    stays defined as long as some pivot sentence yields a token, and is `nan` when none
+    does. This is arithmetically `tpp` without the bootstrap: both are the shared ratio
+    core of `_ratio.py`, differing in corpus and unit (CLAUDE.md §7).
 
     Raises `TypeError` if either side is a single `str` rather than a sequence of them,
     and `ValueError` if the two sequences differ in length.
     """
-    require_texts(texts)
-    require_texts(pivot_texts)
-    if len(texts) != len(pivot_texts):
-        raise ValueError(
-            "texts and pivot_texts must be aligned pairs of equal length: "
-            f"got {len(texts)} and {len(pivot_texts)}"
-        )
-    pivot = tokenizer if pivot_tokenizer is None else pivot_tokenizer
-    per_pair: list[float] = []
-    total_tokens = 0
-    total_pivot_tokens = 0
-    for text, pivot_text in zip(texts, pivot_texts, strict=True):
-        text_tokens = len(tokenizer.encode(text))
-        pivot_text_tokens = len(pivot.encode(pivot_text))
-        per_pair.append(text_tokens / pivot_text_tokens if pivot_text_tokens else 0.0)
-        total_tokens += text_tokens
-        total_pivot_tokens += pivot_text_tokens
+    parts = token_ratio(tokenizer, texts, pivot_texts, pivot_tokenizer)
     return {
-        "value": total_tokens / total_pivot_tokens if total_pivot_tokens else 0.0,
-        "n": len(per_pair),
+        "value": parts.value,
+        "n": len(parts.source_counts),
         "unit": "token ratio",
-        "per_pair": per_pair,
+        "per_pair": parts.per_pair,
+        "n_undefined": parts.n_undefined,
+        "source_tokens": parts.source_total,
+        "pivot_tokens": parts.pivot_total,
     }

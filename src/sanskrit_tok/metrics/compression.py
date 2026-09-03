@@ -11,6 +11,7 @@ This function does not transliterate. The caller passes whichever form it wants 
 and records which one it was; `sanskrit_tok.encoding` does the conversion.
 """
 
+import math
 from collections.abc import Sequence
 
 from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer, require_texts
@@ -28,8 +29,12 @@ def compression(tokenizer: Tokenizer, texts: Sequence[str]) -> DetailedMetricRes
     `"bytes/token"`, and `per_text` = the bytes-per-token ratio of each text in order.
 
     Pooled, not averaged per text, so `value` is generally not the mean of `per_text`.
-    A text that yields no tokens contributes `0.0` to `per_text`; when no text yields any
-    token, `value` is `0.0` and `n` is `0`.
+
+    A text that yields no tokens has no bytes-per-token ratio, so it contributes `nan` to
+    `per_text` and is counted in `n_undefined`; `0.0` would be indistinguishable from a
+    measured ratio and would drag down any mean taken over the list. If no text yields a
+    token at all, `value` is `nan` too — except for genuinely empty input, where nothing
+    was measured and `value` is `0.0`, `n` is `0` and `n_undefined` is `0`.
 
     Raises `TypeError` if `texts` is a single `str` rather than a sequence of them.
     """
@@ -40,12 +45,17 @@ def compression(tokenizer: Tokenizer, texts: Sequence[str]) -> DetailedMetricRes
     for text in texts:
         text_bytes = len(text.encode("utf-8"))
         text_tokens = len(tokenizer.encode(text))
-        per_text.append(text_bytes / text_tokens if text_tokens else 0.0)
+        per_text.append(text_bytes / text_tokens if text_tokens else math.nan)
         total_bytes += text_bytes
         total_tokens += text_tokens
+    if total_tokens:
+        value = total_bytes / total_tokens
+    else:
+        value = math.nan if per_text else 0.0
     return {
-        "value": total_bytes / total_tokens if total_tokens else 0.0,
+        "value": value,
         "n": total_tokens,
         "unit": "bytes/token",
         "per_text": per_text,
+        "n_undefined": sum(1 for ratio in per_text if math.isnan(ratio)),
     }

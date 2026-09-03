@@ -30,13 +30,12 @@ import logging
 import random
 import re
 import shutil
-import statistics
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any
 
 import numpy as np
 import yaml
@@ -46,15 +45,11 @@ from sanskrit_tok.encoding import roundtrip_ok, to_slp1
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.parity import parity
-from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
+from sanskrit_tok.metrics.summary import MetricSummary, summarise_metric
+from sanskrit_tok.tokenizers.base import Tokenizer
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 
 logger = logging.getLogger("exp01")
-
-#: The distribution keys a metric may attach on top of the `MetricResult` contract
-#: (CLAUDE.md §7). They are summarised into `mean`/`std` and dropped: 1012 sentences ×
-#: three arms × two scripts would otherwise put roughly a million floats in `results.json`.
-DISTRIBUTION_KEYS: tuple[str, ...] = ("per_word", "per_text", "per_pair")
 
 #: The script variant every language has. Devanagari languages get `"slp1"` as well.
 ORIGINAL = "original"
@@ -325,64 +320,6 @@ def script_variants(sentences: Sequence[str], language: str) -> dict[str, list[s
 
 
 # ------------------------------------------------------------------------- aggregation
-
-
-class MetricSummary(TypedDict):
-    """What `results.json` carries in place of a metric's full per-item distribution.
-
-    `value`, `n` and `unit` are the CLAUDE.md §7 contract, passed through unchanged.
-    `distribution` names the per-item key that was summarised, or is `None` when the
-    metric attached none. `mean` and `std` summarise that key's values, and are `None`
-    — not `0.0` — whenever there were no values to summarise, because a mean over zero
-    items does not exist and writing `0.0` for it puts a number into `results.json` that
-    reads as a measurement.
-    """
-
-    value: float
-    n: int
-    unit: str
-    distribution: str | None
-    mean: float | None
-    std: float | None
-
-
-def summarise_metric(result: DetailedMetricResult | Mapping[str, Any]) -> MetricSummary:
-    """A metric result with its per-item distribution replaced by that list's mean and std.
-
-    Returns `value`, `n` and `unit` unchanged (the CLAUDE.md §7 contract), plus
-    `distribution` naming the key that was summarised (or `None` when the metric attached
-    none), `mean` and `std`. `std` is the population standard deviation, matching
-    `numpy.std`'s default, and is `0.0` for a single item.
-
-    `mean` and `std` are `None` when there is nothing to average — the metric attached no
-    distribution, or attached an empty one. `0.0` would be a lie in both cases, and a
-    silent one: it is a plausible value for a ratio, so an empty corpus would show up in
-    `results.json` as a measured zero rather than as a missing measurement. `None`
-    survives the JSON round trip as `null`.
-
-    `mean` is not redundant with `value`: the metrics pool their numerator and denominator
-    over the whole corpus, so for compression and parity the mean of the per-item ratios
-    is a different — and, for a per-sentence sense of spread, more useful — number.
-    """
-    summary: MetricSummary = {
-        "value": float(result["value"]),
-        "n": int(result["n"]),
-        "unit": str(result["unit"]),
-        "distribution": None,
-        "mean": None,
-        "std": None,
-    }
-    for key in DISTRIBUTION_KEYS:
-        raw: Any = result.get(key)
-        if raw is None:
-            continue
-        values: list[float] = [float(item) for item in raw]
-        summary["distribution"] = key
-        if values:
-            summary["mean"] = statistics.fmean(values)
-            summary["std"] = statistics.pstdev(values) if len(values) > 1 else 0.0
-        break
-    return summary
 
 
 def compute_metrics(
