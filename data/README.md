@@ -14,7 +14,7 @@ applied at the moment a source is first fetched.
 | Itihāsa | https://github.com/rahular/itihasa | not yet downloaded | | Apache-2.0 | |
 | Sāmayik | arXiv 2305.14004 release | not yet downloaded | | | |
 | SAHAAYAK 2023 | arXiv 2307.00021 release | not yet downloaded | | | |
-| FLORES-200 | HF `facebook/flores` | not yet downloaded | | CC BY-SA 4.0 | |
+| FLORES-200 | https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz (official NLLB tarball; the HF ids `openlanguagedata/flores_plus`, `facebook/flores` and `Muennighoff/flores200` all failed, see `docs/decisions.md`) | 2026-09-03 | `flores200_dataset.tar.gz`, sha256 `b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6` | CC BY-SA 4.0 | `devtest` split only; `san_Deva`, `hin_Deva`, `eng_Latn` extracted verbatim (source script, no normalisation) to `data/raw/flores/devtest.jsonl`; 1012 aligned sentences |
 | IN22-Gen | AI4Bharat | not yet downloaded | | | |
 | ByT5-Sanskrit | HF `chronbmm/byt5-sanskrit` (verify exact id) | not yet downloaded | | | |
 | DharmaBench | per-paper release | not yet downloaded | | | |
