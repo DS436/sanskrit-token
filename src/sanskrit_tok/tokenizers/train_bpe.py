@@ -6,14 +6,13 @@ morpheme-constrained arms (T5/T6) are compared against, not the proposed tokeniz
 itself — CLAUDE.md §6 lists these arms as `T1_bpe_raw_{32k,64k}` on purpose.
 """
 
-import logging
 from pathlib import Path
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
-__all__ = ["train_bpe"]
+from sanskrit_tok.tokenizers._train_common import save_trained_tokenizer
 
-logger = logging.getLogger(__name__)
+__all__ = ["train_bpe"]
 
 
 def train_bpe(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: int = 0) -> Path:
@@ -27,8 +26,8 @@ def train_bpe(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: int = 
     the corpus and these settings; `seed` is accepted only so the caller can record it
     against the reproducibility protocol (CLAUDE.md §8) and is not otherwise used.
 
-    Writes `out_dir/tokenizer.json` (parent directories created as needed) and returns
-    its path.
+    Writes `out_dir/tokenizer.json` (parent directories created as needed, via
+    `_train_common.save_trained_tokenizer`) and returns its path.
     """
     del seed  # deterministic trainer; accepted for the protocol only, see docstring
     tokenizer = Tokenizer(models.BPE(unk_token="[UNK]"))
@@ -43,14 +42,4 @@ def train_bpe(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: int = 
 
     tokenizer.train([str(corpus_path)], trainer=trainer)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "tokenizer.json"
-    tokenizer.save(str(out_path))
-    logger.info(
-        "train_bpe: %s -> %s (requested vocab_size=%d, actual=%d)",
-        corpus_path,
-        out_path,
-        vocab_size,
-        tokenizer.get_vocab_size(),
-    )
-    return out_path
+    return save_trained_tokenizer(tokenizer, out_dir, corpus_path, vocab_size, "train_bpe")

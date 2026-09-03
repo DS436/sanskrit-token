@@ -4,14 +4,13 @@ Same contract as `train_bpe.train_bpe`, with the Unigram model instead of BPE; s
 module's docstring for the `Metaspace` boundary rationale, which applies unchanged here.
 """
 
-import logging
 from pathlib import Path
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
-__all__ = ["train_unigram"]
+from sanskrit_tok.tokenizers._train_common import save_trained_tokenizer
 
-logger = logging.getLogger(__name__)
+__all__ = ["train_unigram"]
 
 
 def train_unigram(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: int = 0) -> Path:
@@ -27,11 +26,23 @@ def train_unigram(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: in
     `docs/decisions.md`, CLAUDE.md §11), never the requested `vocab_size` itself.
 
     `seed` is accepted only so the caller can record it against the reproducibility
-    protocol (CLAUDE.md §8); HF `tokenizers`' `UnigramTrainer` exposes no random seed of
-    its own, so this has no effect on the result.
+    protocol (CLAUDE.md §8); HF `tokenizers`' `UnigramTrainer` exposes no random seed
+    parameter to set, so `seed` itself has no effect on the result.
 
-    Writes `out_dir/tokenizer.json` (parent directories created as needed) and returns
-    its path.
+    That is *not* the same as this function being bit-for-bit deterministic, unlike
+    `train_bpe.train_bpe`. Verified empirically (2026-09-03 decision log,
+    "`UnigramTrainer` is not bit-for-bit deterministic"): training twice in the same
+    process on byte-identical input produces two `tokenizer.json` files that differ —
+    the vocabulary *set* and the requested vs. actual size are stable across runs, but
+    per-piece EM scores land a few floating-point ULPs apart (almost certainly
+    multi-threaded summation order inside the Rust implementation), which changes
+    tie-breaking in token-id assignment for near-equal-score pieces. Treat the written
+    file as reproducible in *content* (what it tokenizes into, up to those ties), not in
+    bytes; re-running this on the same corpus is not guaranteed to reproduce a
+    previously-written `tokenizer.json` exactly.
+
+    Writes `out_dir/tokenizer.json` (parent directories created as needed, via
+    `_train_common.save_trained_tokenizer`) and returns its path.
     """
     del seed  # UnigramTrainer has no exposed seed; accepted for the protocol only
     tokenizer = Tokenizer(models.Unigram())
@@ -49,14 +60,4 @@ def train_unigram(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: in
 
     tokenizer.train([str(corpus_path)], trainer=trainer)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "tokenizer.json"
-    tokenizer.save(str(out_path))
-    logger.info(
-        "train_unigram: %s -> %s (requested vocab_size=%d, actual=%d)",
-        corpus_path,
-        out_path,
-        vocab_size,
-        tokenizer.get_vocab_size(),
-    )
-    return out_path
+    return save_trained_tokenizer(tokenizer, out_dir, corpus_path, vocab_size, "train_unigram")

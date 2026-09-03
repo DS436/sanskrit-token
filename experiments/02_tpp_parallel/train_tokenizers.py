@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from tokenizers import Tokenizer as RawTokenizer
 
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash
 from sanskrit_tok.data.itihasa import load_itihasa
@@ -113,7 +114,7 @@ def collect_sources(names: Sequence[str]) -> dict[str, list[str]]:
 
 def filter_leaked_sentences(
     sources: Mapping[str, Sequence[str]], exclusion: frozenset[str]
-) -> dict[str, list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, int]]:
     """Drop sentences that collide with the evaluation exclusion list before training.
 
     Real corpora are not perfectly split: a handful of Sāmayik train sentences are
@@ -121,18 +122,24 @@ def filter_leaked_sentences(
     that recur verbatim in its own dev/test/test_ood splits, and a handful of Itihāsa
     train sentences are famous, oft-quoted ślokas that recur verbatim in its dev/test
     splits — not a split-alignment bug, just how these corpora were assembled upstream
-    (verified by inspection: 2026-09-03 decision log entry "Sāmayik/Itihāsa train splits
-    contain a small number of sentences that recur in their own eval splits").
+    (verified by inspection: 2026-09-03 decision log entry "T1/T2 training run: filtered
+    218 leaked sentences before the corpus build; no vocab shortfall").
 
     `build_training_corpus`'s own `assert_not_excluded` call (CLAUDE.md §2.4) is a hard
     stop for exactly this condition — a safety net, not the removal mechanism — so this
     runs first and drops the colliding sentences, logging a WARNING with the count per
     source. After this filter, that assertion is expected to pass trivially.
+
+    Returns `(filtered_sources, dropped_counts)`: `dropped_counts` names *every* source
+    passed in, including the ones with nothing dropped (value `0`), so a caller building a
+    manifest never has to special-case a source that had no leakage.
     """
     filtered: dict[str, list[str]] = {}
+    dropped_counts: dict[str, int] = {}
     for name, texts in sources.items():
         kept = [text for text in texts if sentence_hash(text) not in exclusion]
         dropped = len(texts) - len(kept)
+        dropped_counts[name] = dropped
         if dropped:
             logger.warning(
                 "%s: dropped %d/%d sentence(s) that collide with the evaluation "
@@ -143,7 +150,7 @@ def filter_leaked_sentences(
                 len(texts),
             )
         filtered[name] = kept
-    return filtered
+    return filtered, dropped_counts
 
 
 def ensure_training_corpus(
@@ -158,6 +165,14 @@ def ensure_training_corpus(
     has touched the corpus file since that manifest was written. Any mismatch (missing
     manifest, hand-edited corpus, stale sha256) triggers a full rebuild rather than
     trusting a corpus that might not be what the manifest describes.
+
+    On a rebuild, `sources` (the *raw*, unfiltered sentences from `collect_sources`) is
+    first run through `filter_leaked_sentences`, and the manifest `build_training_corpus`
+    returns is extended with two keys before being written and returned: `n_in_raw` (the
+    per-source count of `sources` as given, before any filtering) and `n_leaked_dropped`
+    (the per-source count `filter_leaked_sentences` dropped). `n_in` — already in the
+    manifest `build_training_corpus` returns — stays the *post*-filter count, i.e. what was
+    actually fed to `build_training_corpus`.
     """
     manifest_path = corpus_path.parent / "manifest.json"
     if corpus_path.exists() and manifest_path.exists():
@@ -172,7 +187,13 @@ def ensure_training_corpus(
             return dict(recorded)
         logger.info("%s exists but does not match %s; rebuilding", corpus_path, manifest_path)
 
-    manifest = build_training_corpus(sources, corpus_path, exclusion)
+    n_in_raw = {name: len(texts) for name, texts in sources.items()}
+    filtered, dropped_counts = filter_leaked_sentences(sources, exclusion)
+
+    manifest = build_training_corpus(filtered, corpus_path, exclusion)
+    manifest["n_in_raw"] = n_in_raw
+    manifest["n_leaked_dropped"] = dropped_counts
+
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
         encoding="utf-8",
@@ -207,8 +228,6 @@ def train_arm(arm: Mapping[str, Any], corpus_path: Path, seed: int) -> dict[str,
     start = time.monotonic()
     tokenizer_path = trainer(corpus_path, vocab_size, out_dir, seed=seed)
     train_seconds = time.monotonic() - start
-
-    from tokenizers import Tokenizer as RawTokenizer
 
     actual_vocab_size = int(RawTokenizer.from_file(str(tokenizer_path)).get_vocab_size())
     if actual_vocab_size != vocab_size:
@@ -302,13 +321,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     for source_name, texts in sources.items():
         logger.info("source %s: %d sentence(s) loaded", source_name, len(texts))
 
-    sources = filter_leaked_sentences(sources, exclusion)
-    for source_name, texts in sources.items():
-        logger.info("source %s: %d sentence(s) after leakage filtering", source_name, len(texts))
-
+    # `ensure_training_corpus` owns the leakage filter (`filter_leaked_sentences`) itself
+    # on a rebuild, and records both the raw and post-filter per-source counts in the
+    # manifest it returns/writes — see that function's docstring.
     manifest = ensure_training_corpus(sources, corpus_path, exclusion)
     logger.info(
-        "training corpus: n_in=%s n_out=%d n_dedup_removed=%d",
+        "training corpus: n_in_raw=%s n_leaked_dropped=%s n_in=%s n_out=%d n_dedup_removed=%d",
+        manifest.get("n_in_raw"),
+        manifest.get("n_leaked_dropped"),
         manifest["n_in"],
         manifest["n_out"],
         manifest["n_dedup_removed"],

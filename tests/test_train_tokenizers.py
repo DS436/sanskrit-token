@@ -10,6 +10,7 @@ see `test_slp1_corpus_mini_fixture_is_not_in_the_exclusion_list`).
 
 import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -23,7 +24,7 @@ from sanskrit_tok.data.exclusion import (
     load_exclusion_hashes,
     sentence_hash,
 )
-from sanskrit_tok.encoding import from_slp1
+from sanskrit_tok.encoding import from_slp1, to_slp1
 from sanskrit_tok.tokenizers.corpus import build_training_corpus
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
@@ -78,6 +79,9 @@ def test_build_training_corpus_dedups_across_sources_and_writes_manifest(
 
 
 def test_build_training_corpus_preserves_first_occurrence_order(tmp_path: Path) -> None:
+    # "सीता वदति" is source "a"'s second sentence and source "b"'s first; the written
+    # corpus must keep the *first* occurrence (source "a", position 1) and drop "b"'s
+    # repeat, not the other way around.
     sources = {
         "a": ["रामः गच्छति", "सीता वदति"],
         "b": ["सीता वदति", "बालकः पठति"],
@@ -87,8 +91,13 @@ def test_build_training_corpus_preserves_first_occurrence_order(tmp_path: Path) 
     build_training_corpus(sources, out_path, frozenset())
 
     lines = out_path.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == lines[0]  # first source's first sentence stays first
-    assert len(lines) == 3
+    assert lines[0] == to_slp1("रामः गच्छति", "devanagari")
+    assert lines.count(to_slp1("सीता वदति", "devanagari")) == 1
+    assert lines == [
+        to_slp1("रामः गच्छति", "devanagari"),
+        to_slp1("सीता वदति", "devanagari"),
+        to_slp1("बालकः पठति", "devanagari"),
+    ]
 
 
 def test_build_training_corpus_drops_empty_lines_without_counting_them_as_dedup(
@@ -140,17 +149,46 @@ def test_filter_leaked_sentences_drops_only_colliding_texts() -> None:
         "b": ["बालकः पठति"],
     }
 
-    filtered = train_tokenizers.filter_leaked_sentences(sources, excluded)
+    filtered, dropped_counts = train_tokenizers.filter_leaked_sentences(sources, excluded)
 
     assert filtered == {"a": ["सीता वदति"], "b": ["बालकः पठति"]}
+    assert dropped_counts == {"a": 1, "b": 0}
 
 
 def test_filter_leaked_sentences_is_a_no_op_for_a_clean_exclusion_set() -> None:
     sources = {"a": ["रामः गच्छति", "सीता वदति"]}
 
-    filtered = train_tokenizers.filter_leaked_sentences(sources, frozenset())
+    filtered, dropped_counts = train_tokenizers.filter_leaked_sentences(sources, frozenset())
 
     assert filtered == sources
+    assert dropped_counts == {"a": 0}
+
+
+# ---------------------------------------------------------------- ensure_training_corpus
+
+
+def test_ensure_training_corpus_records_raw_and_leaked_counts_in_the_manifest(
+    tmp_path: Path,
+) -> None:
+    excluded = frozenset({sentence_hash("रामः गच्छति")})
+    sources = {
+        "a": ["रामः गच्छति", "सीता वदति"],  # first sentence is leaked, dropped before build
+        "b": ["बालकः पठति"],
+    }
+    corpus_path = tmp_path / "corpus.txt"
+
+    manifest = train_tokenizers.ensure_training_corpus(sources, corpus_path, excluded)
+
+    # post-filter counts, as fed to build_training_corpus (unchanged key from Task 4)
+    assert manifest["n_in"] == {"a": 1, "b": 1}
+    # new keys: pre-filter counts and the per-source leaked-and-dropped counts
+    assert manifest["n_in_raw"] == {"a": 2, "b": 1}
+    assert manifest["n_leaked_dropped"] == {"a": 1, "b": 0}
+
+    # and both new keys are actually persisted to manifest.json, not just returned
+    written = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
+    assert written["n_in_raw"] == {"a": 2, "b": 1}
+    assert written["n_leaked_dropped"] == {"a": 1, "b": 0}
 
 
 # ------------------------------------------------------------------------------ train_bpe
@@ -189,20 +227,28 @@ def test_trained_tokenizer_has_no_token_string_with_a_literal_space(
 def test_trained_tokenizer_metaspace_boundary_only_at_word_start(
     tmp_path: Path, trainer: object
 ) -> None:
-    """Encoding a single word (no internal whitespace) should place the Metaspace `▁`
-    boundary marker on the first token only — CLAUDE.md's Sanskrit glossary spells
-    "saMskftam" in SLP1, so it doubles as this project's canonical single-word probe."""
+    """The Metaspace `▁` boundary marker must open every word and never appear inside
+    one — CLAUDE.md's Sanskrit glossary spells "saMskftam" in SLP1, so it doubles as
+    this project's canonical single-word probe. A tokenizer trained without a Metaspace
+    pre-tokenizer would fail both halves of this: a single word would start with an
+    ordinary character-or-merge token instead of `▁`, and a two-word input would produce
+    at most one `▁`-prefixed token (or none) instead of one per word."""
     from tokenizers import Tokenizer as RawTokenizer
 
     path = trainer(FIXTURE, vocab_size=300, out_dir=tmp_path / "arm", seed=0)  # type: ignore[operator]
     raw = RawTokenizer.from_file(str(path))
 
-    encoded = raw.encode("saMskftam", add_special_tokens=False)
-    tokens = encoded.tokens
+    single = raw.encode("saMskftam", add_special_tokens=False)
+    assert single.tokens
+    assert all(isinstance(i, int) for i in single.ids)
+    assert single.tokens[0].startswith("▁")
+    assert not any(token.startswith("▁") for token in single.tokens[1:])
 
-    assert tokens
-    assert all(isinstance(i, int) for i in encoded.ids)
-    assert not any(token.startswith("▁") for token in tokens[1:])
+    two_words = raw.encode("saMskftam gacCati", add_special_tokens=False)
+    assert two_words.tokens
+    assert two_words.tokens[0].startswith("▁")
+    boundary_tokens = [token for token in two_words.tokens if token.startswith("▁")]
+    assert len(boundary_tokens) >= 2  # one boundary marker per word, at minimum
 
 
 @pytest.mark.parametrize("trainer", [train_bpe, train_unigram])
