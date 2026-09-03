@@ -16,7 +16,8 @@ The dataset is served from several places and none of them is reliable on its ow
 4. The official tarball `flores200_dataset.tar.gz` from `dl.fbaipublicfiles.com`, which
    needs no Hub account and no extra dependency: one plain-text file per language under
    `flores200_dataset/<split>/<lang>.<split>`, one sentence per line, aligned by line
-   number across languages.
+   number across languages. The download is time-limited, lands atomically, and is
+   checked against `FLORES200_TARBALL_SHA256` before anything reads it.
 
 Sentences are kept in their **source script** (`san_Deva` and `hin_Deva` in Devanagari,
 `eng_Latn` in Latin). Per CLAUDE.md §2.3 the original script is what is stored; callers
@@ -29,8 +30,11 @@ experiments and tests never depend on the network.
 """
 
 import contextlib
+import hashlib
 import json
 import logging
+import os
+import shutil
 import tarfile
 import tempfile
 import urllib.request
@@ -42,6 +46,8 @@ from typing import Any
 __all__ = [
     "CORPUS_NAME",
     "DEFAULT_SPLIT",
+    "FLORES200_TARBALL_SHA256",
+    "FLORES_DOWNLOAD_TIMEOUT_S",
     "FLORES_TARBALL_URL",
     "ParallelCorpus",
     "load_flores",
@@ -53,6 +59,16 @@ logger = logging.getLogger(__name__)
 
 #: Official FLORES-200 release, mirrored by the NLLB project. ~25 MB gzipped.
 FLORES_TARBALL_URL = "https://dl.fbaipublicfiles.com/nllb/flores200_dataset.tar.gz"
+
+#: sha256 of the archive this project was built against (downloaded 2026-09-03, also
+#: recorded in `data/README.md`). The download is verified against it before use, so a
+#: truncated transfer, a captive-portal HTML page or a re-rolled upstream archive fails
+#: loudly instead of silently changing the corpus every experiment is measured on.
+FLORES200_TARBALL_SHA256 = "b8b0b76783024b85797e5cc75064eb83fc5288b41e9654dabc7be6ae944011f6"
+
+#: Seconds to wait on the archive download before giving up and letting `load_flores`
+#: report the source as unavailable. Without it a stalled socket hangs forever.
+FLORES_DOWNLOAD_TIMEOUT_S = 120
 
 #: Default corpus name, also assumed by `load_jsonl` (the jsonl stores sentences only).
 CORPUS_NAME = "flores200"
@@ -247,6 +263,54 @@ def _load_muennighoff_flores200(
     return sentences
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _download_verified(url: str, destination: Path, expected_sha256: str) -> None:
+    """Download `url` to `destination`, atomically and only if the bytes check out.
+
+    The download lands in a sibling `.part` file, is hashed there, and is moved onto
+    `destination` with `os.replace` only after the hash matches. So `destination` either
+    does not exist or holds the complete, verified archive - an interrupted or corrupted
+    download can never be mistaken for a cached one on the next run.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    part = destination.with_name(destination.name + ".part")
+    try:
+        with (
+            urllib.request.urlopen(url, timeout=FLORES_DOWNLOAD_TIMEOUT_S) as response,
+            part.open("wb") as handle,
+        ):
+            shutil.copyfileobj(response, handle)
+        actual = _sha256(part)
+        if actual != expected_sha256:
+            raise ValueError(
+                f"{url} downloaded with sha256 {actual}, expected {expected_sha256}; "
+                "refusing to use it"
+            )
+        os.replace(part, destination)
+    finally:
+        part.unlink(missing_ok=True)
+
+
+def _tarball_lines(payload: bytes) -> list[str]:
+    r"""Split one FLORES text file into sentences on `\n`, and on nothing else.
+
+    `str.splitlines` would also break on `\x0b`, `\x1c`, `\x85`, `U+2028` and friends,
+    any of which inside a sentence would silently desynchronise the alignment between
+    languages. Only the newline the format actually uses is a line break here.
+    """
+    lines = payload.decode("utf-8").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the file's trailing newline, not an empty final sentence
+    return lines
+
+
 def _load_flores_tarball(
     languages: Sequence[str], split: str, cache_dir: Path | None
 ) -> dict[str, list[str]]:
@@ -255,7 +319,10 @@ def _load_flores_tarball(
     Only the requested `<split>/<lang>.<split>` members are read, and they are read
     through `extractfile` rather than extracted, so no archive path ever touches the
     filesystem (no path-traversal surface). The archive itself is cached in `cache_dir`
-    when one is given, and thrown away with a temporary directory when it is not.
+    when one is given, and thrown away with a temporary directory when it is not; either
+    way it is downloaded atomically and its sha256 is checked against
+    `FLORES200_TARBALL_SHA256` before it is read, on a fresh download and on a cached one
+    alike.
     """
     wanted = set(languages)
     sentences: dict[str, list[str]] = {}
@@ -267,10 +334,21 @@ def _load_flores_tarball(
             work_dir.mkdir(parents=True, exist_ok=True)
         archive = work_dir / "flores200_dataset.tar.gz"
         if archive.exists():
-            logger.info("reusing cached FLORES-200 archive at %s", archive)
-        else:
+            cached = _sha256(archive)
+            if cached == FLORES200_TARBALL_SHA256:
+                logger.info("reusing verified FLORES-200 archive at %s", archive)
+            else:
+                logger.warning(
+                    "cached FLORES-200 archive at %s has sha256 %s, expected %s; "
+                    "discarding it and downloading again",
+                    archive,
+                    cached,
+                    FLORES200_TARBALL_SHA256,
+                )
+                archive.unlink()
+        if not archive.exists():
             logger.info("downloading %s to %s", FLORES_TARBALL_URL, archive)
-            urllib.request.urlretrieve(FLORES_TARBALL_URL, archive)
+            _download_verified(FLORES_TARBALL_URL, archive, FLORES200_TARBALL_SHA256)
         with tarfile.open(archive, "r:gz") as tar:
             for member in tar:
                 if not member.isfile():
@@ -284,7 +362,7 @@ def _load_flores_tarball(
                 handle = tar.extractfile(member)
                 if handle is None:
                     continue
-                sentences[language] = handle.read().decode("utf-8").splitlines()
+                sentences[language] = _tarball_lines(handle.read())
     absent = sorted(wanted - set(sentences))
     if absent:
         raise KeyError(f"{FLORES_TARBALL_URL} has no {split} file for {absent}")
@@ -331,7 +409,7 @@ def load_flores(
                 sentences=loader(requested, split, cache_dir),
             )
         except Exception as error:  # each source fails in its own way; try the next
-            logger.info(
+            logger.warning(
                 "FLORES source %s unavailable: %s: %s",
                 source_name,
                 type(error).__name__,

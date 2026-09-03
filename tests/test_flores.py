@@ -5,9 +5,13 @@ test that exercises the real download; that is skipped unless `SANSKRIT_TOK_NETW
 is set in the environment (plan Global Constraints: no network in tests).
 """
 
+import hashlib
+import io
 import json
 import os
-from collections.abc import Sequence
+import tarfile
+import urllib.request
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -196,6 +200,40 @@ def test_load_flores_uses_the_first_source_that_succeeds(
     assert "second" in caplog.text
 
 
+def test_load_flores_falls_through_a_source_that_returns_only_some_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial source is a failed source: it must not abort the whole load."""
+    from sanskrit_tok.data import flores
+
+    monkeypatch.setattr(
+        flores,
+        "_SOURCES",
+        (
+            ("partial", _stub_source({"a": ["one"]})),  # "b" is missing
+            ("complete", _stub_source({"a": ["one"], "b": ["eins"]})),
+        ),
+    )
+    corpus = load_flores(["a", "b"])
+    assert corpus.sentences == {"a": ["one"], "b": ["eins"]}
+
+
+def test_load_flores_falls_through_a_source_that_returns_ragged_languages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sanskrit_tok.data import flores
+
+    monkeypatch.setattr(
+        flores,
+        "_SOURCES",
+        (
+            ("ragged", _stub_source({"a": ["one", "two"], "b": ["eins"]})),
+            ("complete", _stub_source({"a": ["one"], "b": ["eins"]})),
+        ),
+    )
+    assert load_flores(["a", "b"]).sentences == {"a": ["one"], "b": ["eins"]}
+
+
 def test_load_flores_raises_listing_every_attempted_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -228,6 +266,149 @@ def test_load_flores_declares_four_sources_in_the_documented_order() -> None:
 def test_load_flores_rejects_an_empty_language_list() -> None:
     with pytest.raises(ValueError, match="at least one language"):
         load_flores([])
+
+
+# --------------------------------------------------------------- tarball download path
+
+TARBALL_LANGUAGES = ("xxa_Test", "xxb_Test")
+
+
+def _tiny_tarball(sentences: dict[str, list[str]], split: str = "devtest") -> bytes:
+    """A stand-in for flores200_dataset.tar.gz: `<split>/<lang>.<split>` text members."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for language, lines in sentences.items():
+            payload = ("\n".join(lines) + "\n").encode("utf-8")
+            info = tarfile.TarInfo(f"flores200_dataset/{split}/{language}.{split}")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _serve(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[float | None]:
+    """Make `urlopen` return `payload`; returns the list of timeouts it was called with."""
+    timeouts: list[float | None] = []
+
+    def fake_urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
+        timeouts.append(timeout)
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return timeouts
+
+
+def _refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make any download attempt fail loudly, to prove a cached archive was reused."""
+
+    def fake_urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
+        raise AssertionError("the network must not be touched here")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+
+@pytest.fixture
+def tarball(monkeypatch: pytest.MonkeyPatch) -> Iterator[bytes]:
+    """A tiny tarball, with the module's expected hash pointed at it."""
+    from sanskrit_tok.data import flores
+
+    payload = _tiny_tarball(
+        {
+            "xxa_Test": ["first a", "second a"],
+            "xxb_Test": ["first b", "second b"],
+        }
+    )
+    monkeypatch.setattr(
+        flores, "FLORES200_TARBALL_SHA256", hashlib.sha256(payload).hexdigest()
+    )
+    yield payload
+
+
+def test_tarball_download_is_verified_and_installed_atomically(
+    tarball: bytes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sanskrit_tok.data import flores
+
+    timeouts = _serve(monkeypatch, tarball)
+    sentences = flores._load_flores_tarball(TARBALL_LANGUAGES, "devtest", tmp_path)
+
+    assert sentences == {
+        "xxa_Test": ["first a", "second a"],
+        "xxb_Test": ["first b", "second b"],
+    }
+    archive = tmp_path / "flores200_dataset.tar.gz"
+    assert archive.read_bytes() == tarball
+    assert list(tmp_path.glob("*.part")) == [], "the .part file must not survive"
+    assert timeouts == [flores.FLORES_DOWNLOAD_TIMEOUT_S]
+
+
+def test_a_verified_cached_archive_is_reused_without_downloading(
+    tarball: bytes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sanskrit_tok.data import flores
+
+    (tmp_path / "flores200_dataset.tar.gz").write_bytes(tarball)
+    _refuse(monkeypatch)
+    sentences = flores._load_flores_tarball(("xxa_Test",), "devtest", tmp_path)
+    assert sentences["xxa_Test"] == ["first a", "second a"]
+
+
+def test_a_corrupt_cached_archive_is_discarded_and_downloaded_again(
+    tarball: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from sanskrit_tok.data import flores
+
+    archive = tmp_path / "flores200_dataset.tar.gz"
+    archive.write_bytes(b"a truncated download, or a captive-portal login page")
+    _serve(monkeypatch, tarball)
+
+    with caplog.at_level("WARNING", logger=flores.__name__):
+        sentences = flores._load_flores_tarball(("xxa_Test",), "devtest", tmp_path)
+
+    assert sentences["xxa_Test"] == ["first a", "second a"]
+    assert archive.read_bytes() == tarball
+    assert "expected" in caplog.text
+    assert any(record.levelname == "WARNING" for record in caplog.records)
+
+
+def test_a_download_whose_hash_mismatches_raises_and_installs_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sanskrit_tok.data import flores
+
+    _serve(monkeypatch, _tiny_tarball({"xxa_Test": ["first a"]}))
+    # FLORES200_TARBALL_SHA256 is left at the real archive's hash, so this cannot match.
+    with pytest.raises(ValueError, match="sha256"):
+        flores._load_flores_tarball(("xxa_Test",), "devtest", tmp_path)
+
+    assert not (tmp_path / "flores200_dataset.tar.gz").exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_tarball_lines_split_on_newline_only() -> None:
+    from sanskrit_tok.data import flores
+
+    # U+2028 LINE SEPARATOR: `str.splitlines` breaks on it, the FLORES format does not.
+    payload = f"one{chr(0x2028)}still one\ntwo\n".encode()
+    assert flores._tarball_lines(payload) == [f"one{chr(0x2028)}still one", "two"]
+
+
+def test_tarball_lines_keep_an_intentional_blank_line() -> None:
+    from sanskrit_tok.data import flores
+
+    assert flores._tarball_lines(b"one\n\nthree\n") == ["one", "", "three"]
+
+
+def test_tarball_reports_a_language_the_archive_does_not_have(
+    tarball: bytes, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from sanskrit_tok.data import flores
+
+    _serve(monkeypatch, tarball)
+    with pytest.raises(KeyError, match="zzz_Test"):
+        flores._load_flores_tarball(("xxa_Test", "zzz_Test"), "devtest", tmp_path)
 
 
 # ---------------------------------------------------------------------------- network
