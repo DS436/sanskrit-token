@@ -71,3 +71,38 @@ Reversible: yes, one function and its TypedDict in `experiments/01_baseline_pena
 Why: three places treated a defect as an expected condition. (1) `registry._load_hf_arm` caught bare `Exception` per candidate, so a `TypeError` from a `transformers` signature change or a bug in `_hf_vocab_size` would be logged as "could not load", retried against three more model ids, and finally reported as "no candidate tokenizer could be loaded" — pointing every future debugging session at Hugging Face rather than at this repository. It now catches `OSError`, which is exactly the "repository not available to you" family: `huggingface_hub`'s `GatedRepoError` and `RepositoryNotFoundError` derive from `HfHubHTTPError` → `requests.HTTPError` → `OSError`, as do network failures, and `transformers` re-raises an unresolvable repo as `OSError("Can't load tokenizer for ...")`. Verified against the existing tests, which raise `OSError`, and against the live gated-repo path in the Experiment 01 re-run. Known gap, documented in the docstring: `huggingface_hub.errors.EntryNotFoundError` is *not* an `OSError` in `huggingface_hub` 1.x; `transformers` currently converts that case, and if it stops doing so the arm raises instead of falling through — the safe direction, since a mirror missing its tokenizer files is not a licence gate. (2) `tests/test_registry.py::_skip_if_tiktoken_is_offline` caught bare `Exception`, so any bug in `_load_tiktoken_arm` would turn into a green skip; narrowed to `OSError` likewise. (3) `str` is itself a `Sequence[str]`, so `fertility(tok, "rAmaH gacCati")` type-checked, ran, and returned a number computed one *character* at a time — a plausible-looking wrong answer rather than an error. `tokenizers/base.require_texts` now rejects a bare `str` with `TypeError`, and `fertility`, `compression` and `parity` (both sides) call it.
 Alternatives: catching `Exception` but re-raising anything that is not a hub error (same effect, more code); leaving the metrics unguarded and relying on review (rejected — the wrong number is publishable-looking, which is the worst kind); accepting a bare `str` as a one-text corpus (rejected — it silently guesses at intent, and `[text]` is one character longer to write).
 Reversible: yes, all three are single-line changes with tests pinning them.
+
+## 2026-09-03 — Undefined per-item ratios are NaN, never 0.0
+Why: compression `per_text` and parity/TPP `per_pair` can be undefined (zero tokens on one side). A 0.0 sentinel is indistinguishable from a measured zero and silently drags any mean or bootstrap CI down. NaN is visible, `numpy` handles it with nan-aware reductions, and JSON round-trips it. Every metric also records `n_undefined`.
+Alternatives: 0.0 sentinel (rejected: silent contamination); dropping the item (rejected: hides that it existed).
+Reversible: yes; only `metrics/` and `metrics/summary.py` change.
+
+## 2026-09-03 — TPP is parity plus a paired bootstrap over a shared ratio core
+Why: CLAUDE.md §7 defines both parity and TPP as sum(tokens_a)/sum(tokens_b) over aligned pairs; the only differences are the corpus (FLORES vs. translation corpora), the unit, and the bootstrap CI TPP requires. One core (`metrics/_ratio.py`) prevents two copies drifting. The bootstrap resamples pair indices with replacement and recomputes the ratio of sums (not the mean of per-pair ratios), 1000 draws, seed from config, 95% percentile CI.
+Alternatives: independent implementations (rejected: drift); mean of per-pair ratios (rejected: dominated by short sentences).
+Reversible: yes.
+
+## 2026-09-03 — Token spans for MorphScore deferred to Experiment 04; fast tokenizers required there
+Why: the `Tokenizer` Protocol only exposes `encode -> list[int]`, which is enough for every count-based metric in Experiments 01–03. MorphScore needs character spans per token. When Experiment 04 starts, add a `TokenizerWithSpans` Protocol (`spans(text) -> list[tuple[int, int]]`) satisfied by HF fast tokenizers via `return_offsets_mapping` and by trained `tokenizers` models natively; T0_gemma3 currently loads as a slow SentencePiece tokenizer and must be reloaded with `use_fast=True` (or spans reconstructed from pieces) at that point.
+Alternatives: add spans now (rejected: YAGNI for Exp02).
+Reversible: yes.
+
+## 2026-09-03 — MorphScore reports F1 as `value`, precision and recall as extras
+Why: `MetricResult` has one `value`. For Experiment 04, `value` = F1 of token boundaries vs. gold morpheme boundaries, with `precision` and `recall` as additional keys so over- vs. under-segmentation stays visible, per Arnett & Bergen.
+Alternatives: two separate results (rejected: doubles every table).
+Reversible: yes.
+
+## 2026-09-03 — Add `T0_gpt2` as an older-generation English-centric arm
+Why: all three current T0 arms have ≥200k vocabularies, which is the likely reason fertility on Sanskrit came in at 3–4 rather than the pre-registered >5 (calibrated on 32k–50k-vocab tokenizers). GPT-2 (50,257, ungated, `openai-community/gpt2`) lets "existing practice" span tokenizer generations. It is reported alongside the others as existing practice, never as a controlled comparison.
+Alternatives: Llama-2 32k (gated, no token); none (rejected: leaves the negative result under-explained).
+Reversible: yes; drop the arm from configs.
+
+## 2026-09-03 — Provisional T1/T2 tokenizers trained on the Sanskrit sides of Sāmayik and Itihāsa training splits
+Why: RQ2's sign-flip test needs a Sanskrit-native tokenizer, and the monolingual corpus (DCS, GRETIL, Wikipedia; milestone M1) is not assembled yet. The Sanskrit sides of the two parallel training splits (~120k sentences) are available now, cleanly separated from every evaluation split, and enough for a 32k/64k subword vocabulary. Training text is SLP1 (internal encoding); pre-tokenization is `Metaspace` so no token crosses whitespace; the exclusion-hash assertion runs before training. These arms are labelled provisional in every table and will be retrained on the monolingual corpus when M1 completes.
+Alternatives: wait for M1 (rejected: blocks the headline result); train on Devanagari (deferred to ablation A1).
+Reversible: yes; retraining is one command.
+
+## 2026-09-03 — Experiment 02 corpora and pivots
+Why: TPP is computed on Sāmayik test and the Mann Ki Baat out-of-domain test (prose, primary), Itihāsa test (verse, secondary), and FLORES devtest (Wikipedia, tertiary), in that order in every table and figure. English is tokenized with o200k (primary pivot) and Llama-4 (secondary). The Hindi pivot uses FLORES only; SAHAAYAK (1.5M Sa–Hi) is deferred until the Hindi side is needed at scale. The exclusion list is built from every evaluation split named here plus FLORES devtest and committed to git (sha256 of the SLP1 form, derived from public data).
+Alternatives: Itihāsa first (rejected: meter confound, CLAUDE.md §2.7); SAHAAYAK now (rejected: size, not needed for RQ2).
+Reversible: yes.
