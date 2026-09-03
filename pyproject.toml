@@ -4,28 +4,30 @@ version = "0.1.0"
 description = "Does Sanskrit's morphological density survive subword tokenization?"
 readme = "README.md"
 requires-python = ">=3.11"
+# Upper bounds cap each dependency below the next major after the version
+# `uv.lock` currently resolves, so the declared range matches the lock.
 dependencies = [
-    "tokenizers>=0.20",
-    "transformers>=4.44",
-    "sentencepiece>=0.2",
-    "indic-transliteration>=2.3",
-    "datasets>=2.20",
-    "numpy>=1.26",
-    "pandas>=2.2",
-    "pyyaml>=6.0",
-    "matplotlib>=3.9",
-    "tiktoken>=0.7",
-    "huggingface-hub>=0.24",
-    "protobuf>=4.25",
+    "tokenizers>=0.20,<1",
+    "transformers>=4.44,<6",
+    "sentencepiece>=0.2,<1",
+    "indic-transliteration>=2.3,<3",
+    "datasets>=2.20,<6",
+    "numpy>=1.26,<3",
+    "pandas>=2.2,<4",
+    "pyyaml>=6.0,<7",
+    "matplotlib>=3.9,<4",
+    "tiktoken>=0.7,<1",
+    "huggingface-hub>=0.24,<2",
+    "protobuf>=4.25,<8",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3",
-    "ruff>=0.6",
-    "mypy>=1.11",
-    "types-PyYAML>=6.0",
-    "pandas-stubs>=2.2",
+    "pytest>=8.3,<10",
+    "ruff>=0.6,<1",
+    "mypy>=1.11,<3",
+    "types-PyYAML>=6.0,<7",
+    "pandas-stubs>=2.2,<4",
 ]
 
 [build-system]
