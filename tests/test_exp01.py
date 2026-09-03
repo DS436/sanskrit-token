@@ -88,16 +88,30 @@ def test_summarise_metric_handles_per_text_and_per_pair() -> None:
     assert from_pair["std"] == pytest.approx(1.0)
 
 
-def test_summarise_metric_on_an_empty_or_absent_distribution() -> None:
+def test_summarise_metric_on_an_empty_or_absent_distribution_reports_none_not_zero() -> None:
+    """`0.0` is a plausible ratio, so it would read as a measurement rather than as none."""
     empty = run.summarise_metric({"value": 0.0, "n": 0, "unit": "tokens/word", "per_word": []})
-    assert empty["mean"] == 0.0
-    assert empty["std"] == 0.0
+    assert empty["mean"] is None
+    assert empty["std"] is None
     assert empty["distribution"] == "per_word"
 
     bare = run.summarise_metric({"value": 1.0, "n": 1, "unit": "tokens/word"})
     assert bare["distribution"] is None
-    assert bare["mean"] == 0.0
-    assert bare["std"] == 0.0
+    assert bare["mean"] is None
+    assert bare["std"] is None
+
+
+def test_summarise_metric_none_survives_the_json_round_trip_as_null() -> None:
+    bare = run.summarise_metric({"value": 1.0, "n": 1, "unit": "tokens/word"})
+    assert json.loads(json.dumps(bare)) == bare
+    assert '"mean": null' in json.dumps(bare)
+
+
+def test_summarise_metric_of_a_single_item_has_zero_std_but_a_real_mean() -> None:
+    """Zero std is a genuine measurement here, unlike the empty case above."""
+    single = run.summarise_metric({"value": 2.0, "n": 1, "unit": "tokens/word", "per_word": [2]})
+    assert single["mean"] == pytest.approx(2.0)
+    assert single["std"] == 0.0
 
 
 def test_summarise_metric_output_is_json_serialisable() -> None:
@@ -168,6 +182,72 @@ def test_roundtrip_report_on_clean_devanagari_reports_no_failures() -> None:
     assert report["failures_no_ascii_alnum"] == 0
     assert report["examples_pure_devanagari"] == []
     assert report["examples_no_ascii_alnum"] == []
+
+
+# --- SLP1 coverage ---------------------------------------------------------------
+
+
+def test_slp1_coverage_counts_nukta_and_leaked_devanagari_separately() -> None:
+    """The two counts overlap only partly: neither bucket contains the other.
+
+    `"क़"` carries a nukta and transliterates to ASCII (`"k0a"`), so it is counted as a
+    nukta sentence but not as a non-ASCII one. `"डॉक्टर"` has no nukta, but candra-o is
+    outside SLP1 and passes through unconverted, so it is counted the other way round.
+    """
+    original = [
+        "नमस्ते",  # clean: inside SLP1's inventory
+        "क़ानून",  # nukta -> literal ASCII '0'
+        "डॉक्टर",  # candra-o leaks through as raw Devanagari
+    ]
+    slp1 = [run.to_slp1(text, "devanagari") for text in original]
+    # Pin the two failure modes, so the test fails if `sanscript` changes behaviour.
+    assert slp1[1].startswith("k0")
+    assert "ॉ" in slp1[2]
+
+    report = run.slp1_coverage(original, slp1)
+    assert report["n"] == 3
+    assert report["n_with_nukta"] == 1
+    assert report["n_non_ascii_after_slp1"] == 1
+    assert report["examples_non_ascii"] == [{"index": 2, "slp1": slp1[2]}]
+
+
+def test_slp1_coverage_counts_precomposed_nukta_letters_too() -> None:
+    """`ढ़` exists both as U+095D and as ढ + U+093C; both must count."""
+    precomposed = "\u095d"
+    decomposed = "\u0922\u093c"
+    report = run.slp1_coverage(
+        [precomposed, decomposed, "क"],
+        ["ignored", "ignored", "ka"],
+    )
+    assert report["n_with_nukta"] == 2
+
+
+def test_slp1_coverage_on_clean_sanskrit_reports_nothing() -> None:
+    original = ["नमस्ते", "रामः गच्छति"]
+    slp1 = [run.to_slp1(text, "devanagari") for text in original]
+    report = run.slp1_coverage(original, slp1)
+    assert report == {
+        "n": 2,
+        "n_with_nukta": 0,
+        "n_non_ascii_after_slp1": 0,
+        "examples_non_ascii": [],
+    }
+
+
+def test_slp1_coverage_caps_the_examples_it_lists() -> None:
+    report = run.slp1_coverage(["x"] * 20, ["ॉ"] * 20, max_examples=5)
+    assert report["n_non_ascii_after_slp1"] == 20
+    assert len(report["examples_non_ascii"]) == 5
+
+
+def test_slp1_coverage_rejects_misaligned_inputs() -> None:
+    with pytest.raises(ValueError, match="same corpus"):
+        run.slp1_coverage(["a", "b"], ["a"])
+
+
+def test_slp1_coverage_output_is_json_serialisable() -> None:
+    report = run.slp1_coverage(["क़"], ["ॉ"])
+    assert json.loads(json.dumps(report)) == report
 
 
 # --- script variants -------------------------------------------------------------

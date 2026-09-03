@@ -194,9 +194,16 @@ def test_hf_loader_passes_hf_token_only_when_the_environment_sets_one(
 
 
 def _skip_if_tiktoken_is_offline() -> LoadedTokenizer:
+    """Skip only on a download/cache failure; any other error is a real bug.
+
+    `OSError` covers the whole "the BPE file is not here and cannot be fetched" family
+    (`requests`' `HTTPError`/`ConnectionError` derive from it, as do plain filesystem
+    failures). Catching bare `Exception` would turn any defect in `_load_tiktoken_arm`
+    into a green skip.
+    """
     try:
         return load_tokenizer("T0_o200k")
-    except Exception as exc:  # pragma: no cover - depends on cache/network state
+    except OSError as exc:  # pragma: no cover - depends on cache/network state
         pytest.skip(f"tiktoken could not fetch its BPE file: {exc}")
 
 

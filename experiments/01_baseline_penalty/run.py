@@ -11,6 +11,11 @@ The three arms have different vocabulary sizes, so `results.json` records each o
 (CLAUDE.md §2.5). Parity is the number to read first; fertility is reported because it is
 the standard number in the literature, not because it is the headline (CLAUDE.md §2.1).
 
+SLP1 encodes the Sanskrit phoneme inventory, so the SLP1 variant of `hin_Deva` is an
+approximation, not a transliteration: `slp1_coverage` measures how far each Devanagari
+language falls outside it and writes the counts to `results.json`. Read the `hin_Deva`
+SLP1 columns with that in mind; the original-script columns carry no such caveat.
+
 Run it with `uv run python experiments/01_baseline_penalty/run.py`. Relative paths in the
 config are resolved against the repository root, so the working directory does not matter.
 
@@ -31,7 +36,7 @@ import sys
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import numpy as np
 import yaml
@@ -74,6 +79,14 @@ FIGURE_TITLE = (
 
 _LATIN = re.compile(r"[A-Za-z]")
 _ASCII_ALNUM = re.compile(r"[A-Za-z0-9]")
+
+#: The Devanagari nukta, in both of its Unicode spellings: the combining sign U+093C and
+#: the eight precomposed letters U+0958..U+095F (क़ ख़ ग़ ज़ ड़ ढ़ फ़ य़). These write the
+#: Perso-Arabic and Dravidian consonants of modern Indic languages, which classical
+#: Sanskrit does not have and SLP1 therefore does not encode.
+NUKTA_CHARACTERS: frozenset[str] = frozenset({"़"}) | frozenset(
+    chr(codepoint) for codepoint in range(0x0958, 0x0960)
+)
 
 
 # ------------------------------------------------------------------- paths and config
@@ -232,6 +245,71 @@ def roundtrip_report(sentences: Sequence[str], max_examples: int = 5) -> dict[st
     }
 
 
+def slp1_coverage(
+    texts_original: Sequence[str],
+    texts_slp1: Sequence[str],
+    max_examples: int = 5,
+) -> dict[str, Any]:
+    """How far a Devanagari language falls outside SLP1's phoneme inventory.
+
+    SLP1 encodes the *Sanskrit* phoneme inventory, so `to_slp1(text, "devanagari")` is
+    only lossless for text written in it. Applied to Hindi — which this experiment does,
+    to keep the `hin_Deva` control on the same footing as `san_Deva` — two things happen:
+
+    - **Nukta.** `क़ ज़ ड़ ढ़ फ़` and friends have no SLP1 phoneme, and `sanscript` emits the
+      combining sign as a literal ASCII `"0"` (`"क़"` -> `"k0a"`). That digit then lands in
+      the tokenizer's input as an ordinary character.
+    - **Leaked Devanagari.** Signs outside the scheme are passed through unconverted, so
+      candra-o and candra-e (`ॉ`, `ऑ`, `ॅ`) survive as raw three-byte Devanagari inside a
+      string that is supposed to be ASCII (`"डॉक्टर"` -> `"qaॉkwara"`).
+
+    Both inflate the SLP1 byte count and change how a tokenizer segments the string, which
+    is why the SLP1 variant of any non-Sanskrit language is reported as *approximate* and
+    never as a controlled comparison. Sanskrit is not immune — FLORES `san_Deva` carries
+    proper nouns spelled with nukta — so this runs for every Devanagari language.
+
+    Takes the two aligned forms of the same corpus and returns `n` (sentences), the count
+    `n_with_nukta` of original-script sentences containing a nukta in either Unicode
+    spelling (`NUKTA_CHARACTERS`), the count `n_non_ascii_after_slp1` of SLP1 strings
+    still holding any character above U+007F, and up to `max_examples` of the latter as
+    `{"index", "slp1"}` pairs.
+
+    Note the two counts overlap only partly and neither contains the other: a nukta
+    consonant transliterates to ASCII (`"0"`) and so is *not* counted as non-ASCII, while
+    curly quotes and `ॉ` are non-ASCII without involving a nukta.
+
+    Reporting, not asserting, for the same reason as `roundtrip_report`: every metric is
+    computed on the original script as well, and the original script is what is stored
+    (CLAUDE.md §2.3).
+
+    Raises `ValueError` if the two sequences differ in length, since they are meant to be
+    the same corpus in two encodings.
+    """
+    if len(texts_original) != len(texts_slp1):
+        raise ValueError(
+            "texts_original and texts_slp1 must be the same corpus in two encodings: "
+            f"got {len(texts_original)} and {len(texts_slp1)}"
+        )
+    with_nukta = [
+        index
+        for index, text in enumerate(texts_original)
+        if any(character in NUKTA_CHARACTERS for character in text)
+    ]
+    non_ascii = [
+        (index, text)
+        for index, text in enumerate(texts_slp1)
+        if any(ord(character) > 127 for character in text)
+    ]
+    return {
+        "n": len(texts_original),
+        "n_with_nukta": len(with_nukta),
+        "n_non_ascii_after_slp1": len(non_ascii),
+        "examples_non_ascii": [
+            {"index": index, "slp1": text} for index, text in non_ascii[:max_examples]
+        ],
+    }
+
+
 def script_variants(sentences: Sequence[str], language: str) -> dict[str, list[str]]:
     """`{"original": ...}` for every language, plus `{"slp1": ...}` for Devanagari ones.
 
@@ -249,25 +327,50 @@ def script_variants(sentences: Sequence[str], language: str) -> dict[str, list[s
 # ------------------------------------------------------------------------- aggregation
 
 
-def summarise_metric(result: DetailedMetricResult | Mapping[str, Any]) -> dict[str, Any]:
+class MetricSummary(TypedDict):
+    """What `results.json` carries in place of a metric's full per-item distribution.
+
+    `value`, `n` and `unit` are the CLAUDE.md §7 contract, passed through unchanged.
+    `distribution` names the per-item key that was summarised, or is `None` when the
+    metric attached none. `mean` and `std` summarise that key's values, and are `None`
+    — not `0.0` — whenever there were no values to summarise, because a mean over zero
+    items does not exist and writing `0.0` for it puts a number into `results.json` that
+    reads as a measurement.
+    """
+
+    value: float
+    n: int
+    unit: str
+    distribution: str | None
+    mean: float | None
+    std: float | None
+
+
+def summarise_metric(result: DetailedMetricResult | Mapping[str, Any]) -> MetricSummary:
     """A metric result with its per-item distribution replaced by that list's mean and std.
 
     Returns `value`, `n` and `unit` unchanged (the CLAUDE.md §7 contract), plus
     `distribution` naming the key that was summarised (or `None` when the metric attached
     none), `mean` and `std`. `std` is the population standard deviation, matching
-    `numpy.std`'s default; both are `0.0` for an empty or absent distribution.
+    `numpy.std`'s default, and is `0.0` for a single item.
+
+    `mean` and `std` are `None` when there is nothing to average — the metric attached no
+    distribution, or attached an empty one. `0.0` would be a lie in both cases, and a
+    silent one: it is a plausible value for a ratio, so an empty corpus would show up in
+    `results.json` as a measured zero rather than as a missing measurement. `None`
+    survives the JSON round trip as `null`.
 
     `mean` is not redundant with `value`: the metrics pool their numerator and denominator
     over the whole corpus, so for compression and parity the mean of the per-item ratios
     is a different — and, for a per-sentence sense of spread, more useful — number.
     """
-    summary: dict[str, Any] = {
+    summary: MetricSummary = {
         "value": float(result["value"]),
         "n": int(result["n"]),
         "unit": str(result["unit"]),
         "distribution": None,
-        "mean": 0.0,
-        "std": 0.0,
+        "mean": None,
+        "std": None,
     }
     for key in DISTRIBUTION_KEYS:
         raw: Any = result.get(key)
@@ -285,17 +388,17 @@ def summarise_metric(result: DetailedMetricResult | Mapping[str, Any]) -> dict[s
 def compute_metrics(
     tokenizers: Sequence[Tokenizer],
     variants: Mapping[str, Mapping[str, Sequence[str]]],
-) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+) -> dict[str, dict[str, dict[str, dict[str, MetricSummary]]]]:
     """Fertility and compression for every tokenizer × language × script variant.
 
     Nested `tokenizer -> language -> variant -> metric`, which is the shape
     `results.json` carries and the figure reads.
     """
-    metrics: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+    metrics: dict[str, dict[str, dict[str, dict[str, MetricSummary]]]] = {}
     for tokenizer in tokenizers:
-        per_language: dict[str, dict[str, dict[str, Any]]] = {}
+        per_language: dict[str, dict[str, dict[str, MetricSummary]]] = {}
         for language, language_variants in variants.items():
-            per_variant: dict[str, dict[str, Any]] = {}
+            per_variant: dict[str, dict[str, MetricSummary]] = {}
             for variant, texts in language_variants.items():
                 per_variant[variant] = {
                     "fertility": summarise_metric(fertility(tokenizer, texts)),
@@ -514,6 +617,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         language: script_variants(texts, language) for language, texts in sentences.items()
     }
 
+    # Computed on the SLP1 strings the metrics below actually consume, i.e. after the
+    # blank-index filtering, unlike `roundtrip`, which reports on the corpus as loaded.
+    coverage = {
+        language: slp1_coverage(language_variants[ORIGINAL], language_variants[SLP1])
+        for language, language_variants in variants.items()
+        if SLP1 in language_variants
+    }
+    for language, report in coverage.items():
+        if not (report["n_with_nukta"] or report["n_non_ascii_after_slp1"]):
+            logger.info("SLP1 coverage: %s is fully inside SLP1's inventory", language)
+            continue
+        logger.warning(
+            "SLP1 coverage: %d/%d %s sentences contain a nukta (no SLP1 phoneme; the sign "
+            "transliterates to a literal ASCII '0') and %d/%d SLP1 strings still contain "
+            "a non-ASCII character (signs outside the scheme, e.g. candra-o, pass through "
+            "unconverted); the SLP1 variant of this language is approximate",
+            report["n_with_nukta"],
+            report["n"],
+            language,
+            report["n_non_ascii_after_slp1"],
+            report["n"],
+        )
+        for example in report["examples_non_ascii"]:
+            logger.warning(
+                "  non-ASCII after SLP1, at index %d: %r", example["index"], example["slp1"]
+            )
+
     tokenizers = [load_tokenizer(name) for name in config["tokenizers"]]
     metrics = compute_metrics(tokenizers, variants)
     parity_rows = compute_parity(tokenizers, variants, pivots, parity_source)
@@ -546,6 +676,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "roundtrip": roundtrip,
         "roundtrip_failures": roundtrip["failures"],
+        # How far each Devanagari language falls outside SLP1's Sanskrit-only inventory.
+        # `hin_Deva`'s SLP1 numbers are approximate for exactly this reason.
+        "slp1_coverage": coverage,
         "metrics": metrics,
         "parity": parity_rows,
     }

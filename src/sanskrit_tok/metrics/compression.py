@@ -13,7 +13,7 @@ and records which one it was; `sanskrit_tok.encoding` does the conversion.
 
 from collections.abc import Sequence
 
-from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
+from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer, require_texts
 
 __all__ = ["compression"]
 
@@ -30,7 +30,10 @@ def compression(tokenizer: Tokenizer, texts: Sequence[str]) -> DetailedMetricRes
     Pooled, not averaged per text, so `value` is generally not the mean of `per_text`.
     A text that yields no tokens contributes `0.0` to `per_text`; when no text yields any
     token, `value` is `0.0` and `n` is `0`.
+
+    Raises `TypeError` if `texts` is a single `str` rather than a sequence of them.
     """
+    require_texts(texts)
     per_text: list[float] = []
     total_bytes = 0
     total_tokens = 0

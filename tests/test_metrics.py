@@ -110,6 +110,12 @@ def test_fertility_of_whitespace_only_text_has_no_words() -> None:
     assert result["per_word"] == []
 
 
+def test_fertility_rejects_a_bare_str() -> None:
+    """A `str` is a `Sequence[str]`, so this would otherwise be measured per character."""
+    with pytest.raises(TypeError, match="single str"):
+        fertility(CHAR, "ab cde")  # type: ignore[arg-type]
+
+
 # --- compression -----------------------------------------------------------------
 
 
@@ -165,6 +171,11 @@ def test_compression_of_text_yielding_no_tokens_is_zero_not_an_error() -> None:
     assert result["value"] == 0.0
     assert result["n"] == 0
     assert result["per_text"] == [0.0]
+
+
+def test_compression_rejects_a_bare_str() -> None:
+    with pytest.raises(TypeError, match="single str"):
+        compression(CHAR, "ab cde")  # type: ignore[arg-type]
 
 
 # --- parity ----------------------------------------------------------------------
@@ -225,6 +236,14 @@ def test_parity_with_no_pivot_tokens_is_zero_not_an_error() -> None:
     assert result["value"] == 0.0
     assert result["n"] == 1
     assert result["per_pair"] == [0.0]
+
+
+def test_parity_rejects_a_bare_str_on_either_side() -> None:
+    """Both sides are checked: `parity(tok, ["abc"], "abc")` compared 1 text with 3."""
+    with pytest.raises(TypeError, match="single str"):
+        parity(CHAR, "abc", ["abc"])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="single str"):
+        parity(CHAR, ["abc"], "abc")  # type: ignore[arg-type]
 
 
 # --- purity ----------------------------------------------------------------------

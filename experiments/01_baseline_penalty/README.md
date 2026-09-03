@@ -45,11 +45,16 @@ in this column mixes "the tokenizer segments badly" with "the language packs mor
 word" — and inflates any cross-language ratio taken from it. Compare it against the parity
 table below, never in place of it.
 
-| Arm | `san_Deva` | `hin_Deva` | `eng_Latn` | `san_Deva` (SLP1) | `hin_Deva` (SLP1) |
+| Arm | `san_Deva` | `hin_Deva` | `eng_Latn` | `san_Deva` (SLP1) | `hin_Deva` (SLP1) † |
 |---|---|---|---|---|---|
 | `T0_o200k`  | 3.75 | 2.23 | 1.42 | 3.50 | 2.56 |
 | `T0_llama4` | 3.88 | 2.34 | 1.42 | 3.56 | 2.57 |
 | `T0_gemma3` | 3.11 | 1.79 | 1.35 | 3.50 | 2.52 |
+
+† **Approximate — Hindi is outside SLP1's inventory.** SLP1 encodes the Sanskrit phoneme
+set, so transliterating Hindi is a lossy approximation rather than a change of script; see
+the SLP1-coverage caveat below before reading this column, and never quote it as a
+measurement of Hindi. The `san_Deva` (SLP1) column is affected far less, but not zero.
 
 Per-word standard deviation on `san_Deva` is large (1.67–2.05), i.e. the mean hides a long
 tail of compounds — the distribution, not the mean, is what a compound-aware tokenizer has
@@ -69,16 +74,22 @@ against the same Latin-script English pivot.
 Two things to note. First, Sa/Hi is stable at ~1.33 across all three arms while Sa/En
 ranges over 1.77–2.19: the English-relative penalty is largely a property of the
 tokenizer, the Hindi-relative one a property of the language pair. Second, `T0_gemma3` is
-the best of the three on Devanagari (Sa/En 1.77) but the *worst* once the Sanskrit side is
-transliterated to SLP1 (2.19 vs 1.77) — its 262k vocabulary covers Devanagari well and
-gains nothing from romanisation, which is a caution against assuming SLP1 is free.
+the best of the three on Devanagari (Sa/En 1.77) and is the arm that *loses the most* from
+transliteration: SLP1 costs it +0.41 (1.77 → 2.19), against +0.09 for `T0_o200k`
+(2.09 → 2.18) and +0.05 for `T0_llama4` (2.19 → 2.24). At 2.19 it still sits between the
+other two on `Sa(SLP1)/En` — `T0_llama4` is the worst there at 2.24 — so the point is the
+size of the change, not the rank. Its 262k vocabulary covers Devanagari well and gains
+nothing from romanisation, which is a caution against assuming SLP1 is free.
 
 ## Compression (UTF-8 bytes per token), original script
 
 `san_Deva` 5.86–7.21, `hin_Deva` 7.55–9.49, `eng_Latn` 4.87–4.92. Devanagari is 3 UTF-8
 bytes per character, so these are not comparable across scripts; the SLP1 column
-(`san_Deva` 2.31–2.38, `hin_Deva` 2.27–2.31) is the like-for-like one and puts Sanskrit
-and Hindi within 3% of each other.
+(`san_Deva` 2.31–2.38, `hin_Deva` 2.27–2.31) is the closer to like-for-like of the two,
+and under this approximate transliteration it puts Sanskrit and Hindi within 3% of each
+other. That 3% is not a measurement of Hindi: half its sentences carry a nukta SLP1 cannot
+encode, so the Hindi denominator is built from strings SLP1 only partly represents (see
+the SLP1-coverage caveat).
 
 ## Caveats
 
@@ -94,8 +105,23 @@ and Hindi within 3% of each other.
   Devanagari → SLP1 → Devanagari. 92 contain Latin letters and cannot, by construction;
   of the remaining 225, 136 contain ASCII digits (which come back as Devanagari digits)
   and 89 contain no ASCII letter or digit at all — those are almost entirely ASCII `.`
-  and `|` used as danda, which SLP1 claims as phonemes, plus one nukta case. None of this
+  and `|` used as danda, which SLP1 claims as phonemes, plus one nukta case (that is one
+  nukta sentence *in this bucket*; the corpus holds 40, the rest of which also carry Latin
+  letters or ASCII digits — see the SLP1-coverage caveat below). None of this
   affects the numbers above: every metric is computed on the original script and on SLP1
   separately, and the corpus stores the original script alongside (CLAUDE.md §2.3).
+- **SLP1 coverage — the `hin_Deva` (SLP1) column is approximate.** SLP1 encodes the
+  Sanskrit phoneme inventory, so applying it to Hindi is an approximation, not a
+  transliteration, and it fails in two ways. Nukta consonants (`क़ ज़ ड़ ढ़ फ़`) have no SLP1
+  phoneme and `sanscript` emits the sign as a literal ASCII `0` (`क़` → `k0a`); signs
+  outside the scheme, chiefly candra-o and candra-e (`ॉ ऑ ॅ`), pass through unconverted, so
+  the "ASCII" SLP1 string still holds raw three-byte Devanagari (`डॉक्टर` → `qaॉkwara`).
+  On FLORES devtest (`slp1_coverage` in `results.json`): **`hin_Deva` 513/1012 sentences
+  contain a nukta and 256/1012 SLP1 strings still contain a non-ASCII character**;
+  `san_Deva` is affected too but far less, at **40/1012 and 100/1012**. Both effects
+  inflate the SLP1 byte count and change how a tokenizer segments the string, so the
+  `hin_Deva` SLP1 fertility and compression numbers are indicative only. Everything in the
+  original-script columns, and every parity number, is unaffected: parity's SLP1 row scores
+  the *Sanskrit* side against a Latin English pivot and never touches Hindi.
 - **No sentences were dropped:** all 1012 FLORES devtest indices are non-blank in all
   three languages (`n_sentences_used` = `n_sentences_total` = 1012).

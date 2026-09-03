@@ -13,7 +13,7 @@ a density measure. It is the FLORES-anchored diagnostic for RQ1; tokens-per-prop
 
 from collections.abc import Sequence
 
-from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
+from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer, require_texts
 
 __all__ = ["parity"]
 
@@ -40,8 +40,11 @@ def parity(
     A pair whose pivot side yields no tokens contributes `0.0` to `per_pair`; when the
     whole pivot side yields no tokens, `value` is `0.0`.
 
-    Raises `ValueError` if the two sequences differ in length.
+    Raises `TypeError` if either side is a single `str` rather than a sequence of them,
+    and `ValueError` if the two sequences differ in length.
     """
+    require_texts(texts)
+    require_texts(pivot_texts)
     if len(texts) != len(pivot_texts):
         raise ValueError(
             "texts and pivot_texts must be aligned pairs of equal length: "

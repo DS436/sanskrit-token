@@ -8,11 +8,15 @@ each arm T0..T7 (CLAUDE.md §6); the metrics never import the registry.
 `MetricResult` is the metric contract of CLAUDE.md §7: every metric returns at least
 `value`, `n` and `unit`. `DetailedMetricResult` adds the optional per-item distributions
 that individual metrics attach on top of it.
+
+`require_texts` is the one piece of validation every metric shares, and it exists because
+`str` is itself a `Sequence[str]`: passing a single sentence where a corpus is expected
+type-checks, runs, and silently measures the text one *character* at a time.
 """
 
 from typing import Protocol, TypedDict, runtime_checkable
 
-__all__ = ["DetailedMetricResult", "MetricResult", "Tokenizer"]
+__all__ = ["DetailedMetricResult", "MetricResult", "Tokenizer", "require_texts"]
 
 
 @runtime_checkable
@@ -51,3 +55,23 @@ class DetailedMetricResult(MetricResult, total=False):
     per_word: list[int]
     per_text: list[float]
     per_pair: list[float]
+
+
+def require_texts(texts: object) -> None:
+    """Raise `TypeError` if `texts` is a bare `str` rather than a sequence of texts.
+
+    Every metric takes `(tokenizer, list[str])` (CLAUDE.md §7), and a `str` satisfies
+    `Sequence[str]` structurally: `fertility(tok, "rAmaH gacCati")` would type-check, run,
+    and return a number computed over single characters — a wrong answer rather than an
+    error. The mistake is easy to make from a REPL or a one-sentence sanity check, and the
+    resulting number is plausible enough to survive review, so the metrics reject it.
+
+    Deliberately narrow: only `str` is rejected, because only `str` is silently wrong.
+    Anything else that is not iterable of strings fails loudly on its own.
+    """
+    if isinstance(texts, str):
+        raise TypeError(
+            "expected a sequence of texts, got a single str; a str is itself a "
+            "Sequence[str], so this would be measured one character at a time. "
+            "Wrap it in a list: [text]"
+        )

@@ -171,6 +171,22 @@ def _load_tiktoken_arm(name: str, encoding_name: str) -> LoadedTokenizer:
 def _load_hf_arm(name: str, candidates: tuple[str, ...]) -> LoadedTokenizer:
     """First candidate that loads wins; every failure is logged at WARNING.
 
+    Only `OSError` is caught, and that is deliberate: it is what "this repository is not
+    available to you" looks like from this stack. `huggingface_hub`'s `GatedRepoError` and
+    `RepositoryNotFoundError` derive from `HfHubHTTPError` -> `requests.HTTPError` ->
+    `IOError` (= `OSError`), as do plain network failures, and `transformers` re-raises a
+    repo it cannot resolve as `OSError("Can't load tokenizer for ...")`. Anything else — a
+    `TypeError` from a signature change, an `ImportError` from a missing extra, a bug in
+    `_hf_vocab_size` — is a defect in this repository, not an unavailable candidate, and
+    must propagate rather than be silently retried against the next model id and then
+    reported as "no candidate could be loaded".
+
+    One known gap: `huggingface_hub.errors.EntryNotFoundError` (a repo that exists but is
+    missing a requested file) is *not* an `OSError`. `transformers` converts that case
+    into the `OSError` above before it reaches here; if a future version stops doing so,
+    the arm will raise rather than fall through to its next candidate — which is the safe
+    direction to fail, since a mirror missing its tokenizer files is not a licence gate.
+
     Raises `RuntimeError` naming every candidate and its error when none loads, since an
     arm that silently disappears would leave a hole in the experiment's results table.
     """
@@ -179,7 +195,7 @@ def _load_hf_arm(name: str, candidates: tuple[str, ...]) -> LoadedTokenizer:
     for model_id in candidates:
         try:
             tokenizer = _hf_from_pretrained(model_id, token)
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("%s: could not load %s: %s", name, model_id, exc)
             failures.append(f"{model_id}: {_first_line(str(exc))}")
             continue
