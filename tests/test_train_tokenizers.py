@@ -16,6 +16,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
@@ -23,6 +24,7 @@ from sanskrit_tok.data.exclusion import (
     assert_not_excluded,
     load_exclusion_hashes,
     sentence_hash,
+    sentence_hash_en,
 )
 from sanskrit_tok.encoding import from_slp1, to_slp1
 from sanskrit_tok.tokenizers.corpus import build_training_corpus
@@ -35,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TRAIN_TOKENIZERS_PY = (
     REPO_ROOT / "experiments" / "02_tpp_parallel" / "train_tokenizers.py"
 )
+TOKENIZERS_YAML = REPO_ROOT / "experiments" / "02_tpp_parallel" / "tokenizers.yaml"
 
 
 def _load_train_tokenizers_module() -> ModuleType:
@@ -189,6 +192,165 @@ def test_ensure_training_corpus_records_raw_and_leaked_counts_in_the_manifest(
     written = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
     assert written["n_in_raw"] == {"a": 2, "b": 1}
     assert written["n_leaked_dropped"] == {"a": 1, "b": 0}
+
+
+# ------------------------------------------------- English control side (E1, exp02 Task 6)
+
+
+def test_build_training_corpus_can_skip_transliteration_for_english(tmp_path: Path) -> None:
+    """The E1 corpus is the English side of the same splits and must reach the trainer as
+    written: `to_slp1` would mangle it (CLAUDE.md §2.3 applies to Sanskrit text only)."""
+    from sanskrit_tok.tokenizers.corpus import identity_transform
+
+    sources = {"a": ["Rama goes to the forest", "Sita speaks"]}
+    out_path = tmp_path / "corpus_en.txt"
+
+    manifest = build_training_corpus(
+        sources,
+        out_path,
+        frozenset(),
+        transform=identity_transform,
+        hash_fn=sentence_hash_en,
+    )
+
+    assert out_path.read_text(encoding="utf-8").splitlines() == [
+        "Rama goes to the forest",
+        "Sita speaks",
+    ]
+    assert manifest["n_out"] == 2
+
+
+def test_build_training_corpus_english_raises_leakage_error(tmp_path: Path) -> None:
+    from sanskrit_tok.tokenizers.corpus import identity_transform
+
+    excluded = frozenset({sentence_hash_en("Rama goes to the forest")})
+    sources = {"a": ["Rama goes to the forest", "Sita speaks"]}
+
+    with pytest.raises(LeakageError):
+        build_training_corpus(
+            sources,
+            tmp_path / "corpus_en.txt",
+            excluded,
+            transform=identity_transform,
+            hash_fn=sentence_hash_en,
+        )
+
+
+def test_build_training_corpus_forwards_the_hash_fn(tmp_path: Path) -> None:
+    """Guards the reason `hash_fn` exists at all. The default hash transliterates
+    Devanagari to SLP1 first, so for any sentence carrying Devanagari it lands somewhere
+    an English exclusion list (built with `sentence_hash_en`) does not have — the corpus
+    would then be built while leaking. Passing the list's own hash function catches it."""
+    from sanskrit_tok.tokenizers.corpus import identity_transform
+
+    text = "The verse रामः गच्छति opens the chapter"
+    excluded = frozenset({sentence_hash_en(text)})
+
+    missed = build_training_corpus(
+        {"a": [text]}, tmp_path / "default_hash.txt", excluded, transform=identity_transform
+    )
+    assert missed["n_out"] == 1  # the Sanskrit hash never matches this English list
+
+    with pytest.raises(LeakageError):
+        build_training_corpus(
+            {"a": [text]},
+            tmp_path / "english_hash.txt",
+            excluded,
+            transform=identity_transform,
+            hash_fn=sentence_hash_en,
+        )
+
+
+def test_ensure_training_corpus_writes_the_manifest_it_is_given(tmp_path: Path) -> None:
+    """The Sanskrit and English corpora live side by side in `data/processed/`, so the
+    English one needs its own manifest name (`manifest_en.json`) rather than overwriting
+    the Sanskrit corpus's `manifest.json`."""
+    from sanskrit_tok.tokenizers.corpus import identity_transform
+
+    corpus_path = tmp_path / "tok_train_en.txt"
+    manifest_path = tmp_path / "manifest_en.json"
+
+    manifest = train_tokenizers.ensure_training_corpus(
+        {"a": ["Rama goes", "Sita speaks"]},
+        corpus_path,
+        frozenset(),
+        manifest_path=manifest_path,
+        transform=identity_transform,
+        hash_fn=sentence_hash_en,
+    )
+
+    assert manifest_path.exists()
+    assert not (tmp_path / "manifest.json").exists()
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["n_out"] == manifest["n_out"]
+
+
+def test_english_train_split_loaders_are_registered() -> None:
+    assert "samayik_train_en" in train_tokenizers.SOURCE_LOADERS
+    assert "itihasa_train_en" in train_tokenizers.SOURCE_LOADERS
+
+
+def test_arm_side_defaults_to_sanskrit() -> None:
+    assert train_tokenizers.arm_side({"name": "T1_bpe_raw_32k", "algo": "bpe"}) == "sa"
+
+
+def test_arm_side_reads_the_configured_side() -> None:
+    assert train_tokenizers.arm_side({"name": "E1_bpe_32k", "side": "en"}) == "en"
+    assert train_tokenizers.arm_side({"name": "T1_bpe_raw_32k", "side": "sa"}) == "sa"
+
+
+def test_arm_side_rejects_an_unknown_side() -> None:
+    with pytest.raises(ValueError, match="side"):
+        train_tokenizers.arm_side({"name": "E1_bpe_32k", "side": "de"})
+
+
+def test_select_arms_to_train_skips_an_already_trained_arm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    trained = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
+    trained.parent.mkdir(parents=True)
+    trained.write_text("{}", encoding="utf-8")
+    arms = [{"name": "T1_bpe_raw_32k"}, {"name": "E1_bpe_32k"}]
+
+    selected = train_tokenizers.select_arms_to_train(arms, retrain=False)
+
+    assert [arm["name"] for arm in selected] == ["E1_bpe_32k"]
+
+
+def test_select_arms_to_train_retrains_everything_when_asked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    trained = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
+    trained.parent.mkdir(parents=True)
+    trained.write_text("{}", encoding="utf-8")
+    arms = [{"name": "T1_bpe_raw_32k"}, {"name": "E1_bpe_32k"}]
+
+    selected = train_tokenizers.select_arms_to_train(arms, retrain=True)
+
+    assert [arm["name"] for arm in selected] == ["T1_bpe_raw_32k", "E1_bpe_32k"]
+
+
+def test_tokenizers_yaml_declares_the_english_control_arms_and_sides() -> None:
+    config = yaml.safe_load(TOKENIZERS_YAML.read_text(encoding="utf-8"))
+
+    assert config["english_corpus_path"] == "data/processed/tok_train_en.txt"
+    assert config["english_sources"] == ["samayik_train_en", "itihasa_train_en"]
+    assert config["english_exclusion_path"] == "data/exclusion_hashes_en.txt"
+
+    by_name = {arm["name"]: arm for arm in config["arms"]}
+    for name in ("T1_bpe_raw_32k", "T1_bpe_raw_64k", "T2_unigram_raw_32k", "T2_unigram_raw_64k"):
+        assert by_name[name]["side"] == "sa"
+    assert by_name["E1_bpe_32k"] == {
+        "name": "E1_bpe_32k",
+        "algo": "bpe",
+        "vocab_size": 32000,
+        "side": "en",
+    }
+    assert by_name["E1_bpe_64k"]["vocab_size"] == 64000
+    assert by_name["E1_unigram_32k"]["algo"] == "unigram"
+    assert by_name["E1_unigram_64k"]["vocab_size"] == 64000
+    assert all(by_name[name]["side"] == "en" for name in by_name if name.startswith("E1_"))
 
 
 # ------------------------------------------------------------------------------ train_bpe

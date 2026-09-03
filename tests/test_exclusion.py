@@ -10,6 +10,7 @@ from sanskrit_tok.data.exclusion import (
     build_exclusion_list,
     load_exclusion_hashes,
     sentence_hash,
+    sentence_hash_en,
 )
 
 
@@ -80,3 +81,63 @@ def test_assert_not_excluded_names_up_to_five_offending_indices() -> None:
 def test_assert_not_excluded_passes_for_a_clean_list() -> None:
     hashes = frozenset({sentence_hash("रामः")})
     assert assert_not_excluded(["सीता", "गच्छति"], hashes, label="clean") is None
+
+
+# ---------------------------------------------------- English control list (E1 arms)
+
+
+def test_sentence_hash_en_is_stable_and_whitespace_insensitive() -> None:
+    assert sentence_hash_en("Rama goes to the forest") == sentence_hash_en(
+        "  Rama goes to the forest\n"
+    )
+
+
+def test_sentence_hash_en_differs_for_different_text() -> None:
+    assert sentence_hash_en("Rama goes") != sentence_hash_en("Sita speaks")
+
+
+def test_sentence_hash_en_does_not_transliterate() -> None:
+    """`sentence_hash` runs its input through Devanagari->SLP1 first; `sentence_hash_en`
+    never does. On pure ASCII the two happen to agree, because transliteration passes
+    Latin characters through untouched — which is exactly why the English list must not
+    lean on that accident: the moment a sentence carries any Devanagari (a quoted term,
+    say) the two part ways, and only `sentence_hash_en` still describes the text as the
+    English tokenizer will see it."""
+    assert sentence_hash_en("Rama goes") == sentence_hash("Rama goes")
+    assert sentence_hash_en("रामः") != sentence_hash("रामः")
+
+
+def test_build_exclusion_list_accepts_an_english_hash_fn(tmp_path: Path) -> None:
+    path = tmp_path / "exclusion_hashes_en.txt"
+    count = build_exclusion_list(
+        {"a": ["Rama goes", "Sita speaks"], "b": ["Rama goes"]},
+        path,
+        hash_fn=sentence_hash_en,
+    )
+    assert count == 2
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert "English" in lines[0]
+    assert lines[1].startswith("# sources: a=2, b=1")
+    assert lines[2:] == sorted({sentence_hash_en("Rama goes"), sentence_hash_en("Sita speaks")})
+
+
+def test_assert_not_excluded_accepts_an_english_hash_fn() -> None:
+    hashes = frozenset({sentence_hash_en("Rama goes")})
+    with pytest.raises(LeakageError) as excinfo:
+        assert_not_excluded(
+            ["Sita speaks", "Rama goes"],
+            hashes,
+            label="E1 training text",
+            hash_fn=sentence_hash_en,
+        )
+    assert "E1 training text" in str(excinfo.value)
+
+
+def test_assert_not_excluded_with_the_english_hash_fn_passes_for_a_clean_list() -> None:
+    hashes = frozenset({sentence_hash_en("Rama goes")})
+    assert (
+        assert_not_excluded(
+            ["Sita speaks"], hashes, label="clean", hash_fn=sentence_hash_en
+        )
+        is None
+    )

@@ -8,11 +8,23 @@ TPP is the headline metric of this project (CLAUDE.md §7): fertility asks how m
 tokens a *word* costs, which punishes Sanskrit for the very density under study (sandhi,
 compounding); TPP asks how many tokens the *same proposition* costs on aligned
 translation pairs. This script computes TPP, with a paired bootstrap CI, for every
-Sanskrit tokenizer arm against English (o200k primary pivot, Llama-4 secondary) on four
-corpora, prose before verse (CLAUDE.md §2.7): Sāmayik test and test_ood (primary, prose),
-Itihāsa test (secondary, verse — meter is a confound), FLORES devtest (tertiary). It also
-computes a Hindi-pivot TPP on FLORES for the T0/T3 arms, and fertility/compression on the
-Sanskrit side of every corpus x arm x script variant, reported but never headlined.
+Sanskrit tokenizer arm against English on four corpora, prose before verse (CLAUDE.md
+§2.7): Sāmayik test and test_ood (primary, prose), Itihāsa test (secondary, verse — meter
+is a confound), FLORES devtest (tertiary). It also computes a Hindi-pivot TPP on FLORES
+for the T0/T3 arms, and fertility/compression on the Sanskrit side of every corpus x arm
+x script variant, reported but never headlined.
+
+Two English sides, and they answer different questions:
+
+* `tpp_controlled` — each trained Sanskrit arm against the `E1_*` arm that matches it on
+  algorithm, vocabulary size and training corpus (`config["controlled_pairs"]`). This is
+  the **controlled** comparison: algorithm, vocabulary size and domain fit are held equal
+  on both sides, which is what H2 needs (docs/decisions.md, "Add a matched English
+  control family E1"). Not everything is controlled even here — corpus size and diversity
+  differ between the two languages' sides, and the English text is a translation.
+* `tpp` — every arm against `T0_o200k` (primary) and `T0_llama4` (secondary), 200k-plus
+  general-domain vocabularies. This is **deployed practice**: what today's tokenizers
+  charge for Sanskrit, never a matched comparison (CLAUDE.md §2.5).
 
 Run it with `uv run python experiments/02_tpp_parallel/run.py`. Relative paths in the
 config are resolved against the repository root, so the working directory does not
@@ -74,10 +86,15 @@ HINDI_PIVOT_FAMILIES = frozenset({"T0", "T3"})
 #: Hugging Face/tiktoken id, and whose file is therefore hashed into `tokenizer_sources`.
 #: `outputs/` is gitignored and `UnigramTrainer` is not bit-reproducible
 #: (docs/decisions.md), so the sha256 is the only thing tying a number in `results.json`
-#: to the exact artifact that produced it. Currently the same families as
-#: `PROVISIONAL_FAMILIES`, but for an unrelated reason: these are file-backed, those are
-#: trained on the interim corpus, and either could change without the other.
-FILE_BACKED_FAMILIES = frozenset({"T1", "T2"})
+#: to the exact artifact that produced it. A superset of `PROVISIONAL_FAMILIES`, and for
+#: an unrelated reason: these are file-backed (E1, the matched English control, included),
+#: those are trained on the interim Sanskrit corpus, and either could change without the
+#: other.
+FILE_BACKED_FAMILIES = frozenset({"T1", "T2", "E1"})
+
+#: The script variant the controlled (T1/T2 vs E1) comparison reads. T1/T2 have no other
+#: variant, and the English side is always the text as written.
+CONTROLLED_VARIANT = SLP1
 
 FIGURE_STEM = "tpp_by_arm"
 #: The pivot and script variant the figure's main marker reads, so every arm — T0/T3
@@ -87,6 +104,10 @@ FIGURE_PIVOT = "T0_o200k"
 FIGURE_MAIN_VARIANT = SLP1
 FIGURE_SECONDARY_VARIANT = ORIGINAL
 FIGURE_SUPTITLE = "Tokens per proposition: Sanskrit vs English (o200k), 95% bootstrap CI"
+#: Header over the figure's right-hand column, which holds the controlled comparison.
+FIGURE_CONTROLLED_TITLE = (
+    "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab, training corpus)"
+)
 #: Static half of the caption; the omitted-arms half is built at plot time from
 #: `results["unavailable_arms"]` (`_unavailable_caption`) since it depends on the run.
 FIGURE_CAPTION_PROVISIONAL = "* provisional: trained on parallel-corpus training splits"
@@ -447,6 +468,93 @@ def compute_tpp(
     return results
 
 
+def controlled_pair_key(sanskrit_arm: str, english_arm: str) -> str:
+    """`results.json`'s `tpp_controlled` key for one matched pair: `"<sa>/<en>"`."""
+    return f"{sanskrit_arm}/{english_arm}"
+
+
+def select_controlled_pairs(
+    controlled_pairs: Sequence[Sequence[str]],
+    arms: Mapping[str, LoadedTokenizer],
+) -> list[tuple[str, str]]:
+    """The configured `(sanskrit_arm, english_arm)` pairs whose *both* sides loaded.
+
+    A pair with an unavailable side is dropped with a WARNING rather than silently
+    substituted: the whole point of the pair is that the two arms match on algorithm,
+    vocabulary size and training corpus, so falling back to some other English arm would
+    quietly turn the controlled comparison back into an uncontrolled one. Raises
+    `ValueError` for a malformed entry (not exactly two names), since that is a config
+    error, not a missing artifact.
+    """
+    selected: list[tuple[str, str]] = []
+    for pair in controlled_pairs:
+        names = list(pair)
+        if len(names) != 2:
+            raise ValueError(
+                f"config['controlled_pairs'] entry {names!r} must be [sanskrit_arm, english_arm]"
+            )
+        sanskrit_arm, english_arm = names
+        missing = [name for name in (sanskrit_arm, english_arm) if name not in arms]
+        if missing:
+            logger.warning(
+                "controlled pair %s is skipped: %s unavailable this run",
+                controlled_pair_key(sanskrit_arm, english_arm),
+                ", ".join(missing),
+            )
+            continue
+        selected.append((sanskrit_arm, english_arm))
+    return selected
+
+
+def compute_tpp_controlled(
+    corpora: Sequence[CorpusData],
+    arms: Mapping[str, LoadedTokenizer],
+    pairs: Sequence[tuple[str, str]],
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """`corpus -> "<sa_arm>/<en_arm>" -> summary`: the controlled TPP (docs/decisions.md,
+    "Add a matched English control family E1 for TPP").
+
+    This is the headline comparison. Everything else in `tpp` divides a Sanskrit arm's
+    token count by a general-domain, 200k-vocabulary English tokenizer's, so the ratio
+    mixes the language effect H2 is about with vocabulary size and training domain. Here
+    both sides come from the same algorithm at the same vocabulary size, trained on the
+    two sides of the *same* sentences, so those two nuisance factors are held constant —
+    at each corpus both sides are in-domain, or neither is.
+
+    The Sanskrit side is read in `CONTROLLED_VARIANT` (SLP1 — the only variant T1/T2
+    have) and the English side as written; the summaries carry the same enriched keys as
+    `tpp`, so the two blocks read the same way.
+    """
+    results: dict[str, dict[str, dict[str, Any]]] = {}
+    for corpus in corpora:
+        pair_results: dict[str, dict[str, Any]] = {}
+        for sanskrit_arm, english_arm in pairs:
+            raw = tpp(
+                arms[sanskrit_arm],
+                corpus.sanskrit[CONTROLLED_VARIANT],
+                corpus.english,
+                arms[english_arm],
+                n_bootstrap=n_bootstrap,
+                seed=seed,
+                ci=ci,
+            )
+            key = controlled_pair_key(sanskrit_arm, english_arm)
+            pair_results[key] = _enrich_summary(raw, ci)
+            logger.info(
+                "%s / controlled %s: TPP %.3f [%.3f, %.3f]",
+                corpus.name,
+                key,
+                raw["value"],
+                raw["ci_low"],
+                raw["ci_high"],
+            )
+        results[corpus.name] = pair_results
+    return results
+
+
 def compute_tpp_hindi(
     corpus: CorpusData | None,
     arms: Mapping[str, LoadedTokenizer],
@@ -566,16 +674,107 @@ def _unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
     return "Not shown (unavailable this run): " + "; ".join(parts) + "."
 
 
+def controlled_pair_label(sanskrit_arm: str, english_arm: str) -> str:
+    """X-tick label for one controlled pair: `"T1_bpe_raw_32k* / E1_bpe_32k"`.
+
+    The `*` marks the provisional Sanskrit arm, exactly as `arm_label` does; the English
+    control arm carries none — it is trained on the same (parallel-corpus) text, but the
+    caveat the star stands for is about the Sanskrit side's interim training corpus.
+    Vocabulary sizes are omitted: within a pair they are equal by construction, which is
+    the whole point, and both are named in the arm keys already.
+    """
+    star = "*" if sanskrit_arm.split("_", 1)[0] in PROVISIONAL_FAMILIES else ""
+    return f"{sanskrit_arm}{star} / {english_arm}"
+
+
+def _plot_controlled_panel(
+    axes: Any,
+    corpus_name: str,
+    controlled: Mapping[str, Any],
+    pairs: Sequence[Sequence[str]],
+) -> None:
+    """One right-column panel: controlled TPP for every matched pair, with its CI.
+
+    `pairs` is `config["controlled_pairs"]` (config order); a pair with no entry for this
+    corpus — because one of its arms was unavailable — is omitted from the x-axis rather
+    than drawn as a gap. The dashed line at 1.0 is the same reference the left column
+    uses, so the two columns are read against the same threshold.
+    """
+    corpus_controlled = controlled.get(corpus_name, {})
+    labels: list[str] = []
+    values: list[float] = []
+    lower_err: list[float] = []
+    upper_err: list[float] = []
+    for pair in pairs:
+        sanskrit_arm, english_arm = pair[0], pair[1]
+        entry = corpus_controlled.get(controlled_pair_key(sanskrit_arm, english_arm))
+        if entry is None:
+            continue
+        value = entry.get("value")
+        labels.append(controlled_pair_label(sanskrit_arm, english_arm))
+        if value is None:
+            values.append(math.nan)
+            lower_err.append(0.0)
+            upper_err.append(0.0)
+            continue
+        ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
+        values.append(float(value))
+        lower_err.append(float(value) - ci_low if ci_low is not None else 0.0)
+        upper_err.append(ci_high - float(value) if ci_high is not None else 0.0)
+
+    positions = list(range(len(labels)))
+    axes.errorbar(
+        positions,
+        values,
+        yerr=[lower_err, upper_err],
+        fmt="o",
+        capsize=3,
+        color="#2f855a",
+        zorder=3,
+    )
+    axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
+
+    # 1.0 is the threshold every one of these panels is read against, so it is kept
+    # inside the axes with headroom rather than left to land on the frame, where a CI
+    # sitting just below it is indistinguishable from one sitting just above.
+    finite = [
+        bound
+        for value, lower, upper in zip(values, lower_err, upper_err, strict=True)
+        if not math.isnan(value)
+        for bound in (value - lower, value + upper)
+    ]
+    if finite:
+        span_low, span_high = min([*finite, 1.0]), max([*finite, 1.0])
+        span = span_high - span_low
+        pad = span * FIGURE_Y_PAD_FRACTION if span > 0 else max(span_high * 0.2, 0.1)
+        axes.set_ylim(span_low - pad, span_high + pad)
+
+    axes.set_xticks(positions)
+    axes.set_xticklabels(labels, rotation=40, ha="right", fontsize=6)
+    axes.set_xlim(-0.5, max(len(positions) - 0.5, 0.5))
+    axes.set_ylabel("TPP ratio", fontsize=9)
+    axes.set_title(corpus_name, fontsize=9, loc="left")
+    axes.spines[["top", "right"]].set_visible(False)
+
+
 def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
-    """Build (but do not save or close) the four-panel TPP figure; returns the `Figure`.
+    """Build (but do not save or close) the TPP figure; returns the `Figure`.
 
     Split out from `make_figure` so tests can inspect the constructed `Figure` — its
     axes' tick labels, its `.texts` (the caption) — before anything is written to disk or
     the figure is closed, rather than only being able to check that two files exist.
 
-    Four panels stacked vertically, one per corpus in config order (prose first). Each
-    panel plots, for every arm present in that corpus's `tpp` entry (unavailable arms
-    have none and are silently omitted from the x-axis): the TPP of the SLP1 variant
+    One row per corpus in config order (prose first), and two columns whenever the run
+    produced a controlled comparison (`figure_pivot_controlled` and a non-empty
+    `tpp_controlled`; otherwise the left column alone, so a `results.json` from before the
+    E1 arms existed still plots). **Right column — the controlled comparison, and the one
+    to read first:** each matched pair's TPP with its CI, Sanskrit arm over the English
+    arm that matches it on algorithm, vocabulary size and training corpus. **Left column —
+    deployed practice:** every arm against `T0_o200k`, whose 200k general-domain
+    vocabulary makes it a description of what today's tokenizers do, not a control.
+
+    Each left panel plots, for every arm present in that corpus's `tpp` entry (unavailable
+    arms have none and are silently omitted from the x-axis): the TPP of the SLP1 variant
     against `T0_o200k` as a point with a 95% bootstrap-CI error bar (every arm has an
     SLP1 variant, so this puts T0/T3/T1/T2 on the same footing), plus — for T0/T3 arms,
     which also carry an `original`-script variant — a second, thin marker at the same x
@@ -611,9 +810,25 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
     if not corpus_entries:
         raise ValueError("results['config']['corpora'] is empty; nothing to plot")
 
+    controlled = results.get("tpp_controlled", {})
+    controlled_pairs = list(config.get("controlled_pairs", []))
+    show_controlled = bool(config.get("figure_pivot_controlled")) and bool(
+        controlled and controlled_pairs
+    )
+
     n_panels = len(corpus_entries)
-    figure, axes_grid = plt.subplots(n_panels, 1, figsize=(9.5, 3.2 * n_panels), squeeze=False)
+    n_columns = 2 if show_controlled else 1
+    figure, axes_grid = plt.subplots(
+        n_panels,
+        n_columns,
+        figsize=(7.6 * n_columns if show_controlled else 9.5, 3.2 * n_panels),
+        squeeze=False,
+    )
     axes_list = [row[0] for row in axes_grid]
+
+    if show_controlled:
+        for row, entry in zip(axes_grid, corpus_entries, strict=True):
+            _plot_controlled_panel(row[1], str(entry["name"]), controlled, controlled_pairs)
 
     for panel_index, (axes, entry) in enumerate(zip(axes_list, corpus_entries, strict=True)):
         corpus_name = str(entry["name"])
@@ -752,7 +967,13 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
 
     figure.suptitle(FIGURE_SUPTITLE, fontsize=11)
     figure.text(0.01, 0.005, caption, fontsize=7)
-    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
+    if show_controlled:
+        # A column header rather than a per-panel title: it describes all four right-hand
+        # panels, and each of those still carries its corpus name like its left neighbour.
+        figure.text(0.75, 0.955, FIGURE_CONTROLLED_TITLE, ha="center", fontsize=8)
+        figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.94))
+    else:
+        figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
     return figure
 
 
@@ -808,6 +1029,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError(f"{args.config}: 'corpora' is empty; nothing to measure")
     sanskrit_arm_names: list[str] = list(config["sanskrit_arms"])
     english_pivots: list[str] = list(config["english_pivots"])
+    controlled_pairs: list[list[str]] = [list(pair) for pair in config.get("controlled_pairs", [])]
     hindi_pivot_corpus_name = str(config["hindi_pivot_corpus"])
     script_variants: dict[str, list[str]] = {
         family: list(variants) for family, variants in config["script_variants"].items()
@@ -831,11 +1053,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report["n"],
             )
 
-    all_arm_names = sorted(set(sanskrit_arm_names) | set(english_pivots))
+    all_arm_names = sorted(
+        set(sanskrit_arm_names)
+        | set(english_pivots)
+        | {name for pair in controlled_pairs for name in pair}
+    )
     arms, unavailable_arms = load_arms(all_arm_names)
 
     tpp_results = compute_tpp(
         corpora, arms, sanskrit_arm_names, english_pivots, script_variants, n_bootstrap, seed, ci
+    )
+    tpp_controlled = compute_tpp_controlled(
+        corpora,
+        arms,
+        select_controlled_pairs(controlled_pairs, arms),
+        n_bootstrap,
+        seed,
+        ci,
     )
     hindi_corpus = next((c for c in corpora if c.name == hindi_pivot_corpus_name), None)
     if hindi_corpus is None:
@@ -871,6 +1105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for corpus in corpora
         },
         "exclusion_check": exclusion_check,
+        "tpp_controlled": tpp_controlled,
         "tpp": tpp_results,
         "tpp_hindi": tpp_hindi,
         "fertility": fertility_results,

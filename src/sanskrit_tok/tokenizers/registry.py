@@ -21,7 +21,11 @@ tokenizers, not as a matched experiment. `T3_*` (off-the-shelf Indic tokenizers)
 same kind of arm, one family over. `T1_*`/`T2_*` are the opposite: trained from scratch by
 this project at matched vocabulary sizes (CLAUDE.md §5), so they are read from a
 `tokenizer.json` file on disk rather than downloaded, and are absent — `TokenizerUnavailable`
-— until `tokenizers/train_bpe.py` / `train_unigram.py` (Task 4) have written one.
+— until `tokenizers/train_bpe.py` / `train_unigram.py` (Task 4) have written one. `E1_*`
+is the matched *English* control family (CLAUDE.md §6): the same two algorithms at the
+same two vocabulary sizes, trained on the English side of the same corpus, so a TPP ratio
+against an E1 arm holds algorithm, vocabulary size and training domain constant on both
+sides. It is file-backed for exactly the same reason as T1/T2 and loads the same way.
 
 **Gated repositories.** `meta-llama/*` and `google/*` need an accepted licence and an
 `HF_TOKEN`. Each HF arm therefore declares a list of candidate ids, tried in order, first
@@ -152,8 +156,8 @@ class TokenizerUnavailable(RuntimeError):
     """A registered arm exists but could not be loaded this run.
 
     Two causes: every candidate in an HF arm's candidate list failed (`_load_hf_arm`,
-    `_load_brahmic131k_arm`), or a file-backed arm's `tokenizer.json` (T1/T2, written by
-    `tokenizers/train_*.py`) does not exist yet at `trained_tokenizer_path(name)`.
+    `_load_brahmic131k_arm`), or a file-backed arm's `tokenizer.json` (T1/T2/E1, written
+    by `tokenizers/train_*.py`) does not exist yet at `trained_tokenizer_path(name)`.
     Distinct from `KeyError`, which means the arm is not registered at all.
 
     Subclasses `RuntimeError` on purpose: the two loaders raised a bare `RuntimeError` for
@@ -205,7 +209,7 @@ class TokenizersAdapter:
     plain `str -> list[int]` callable.
 
     Used for repos that ship a `tokenizer.json` but nothing `AutoTokenizer` can resolve
-    (`_load_brahmic131k_arm`'s second tier) and for the file-backed T1/T2 arms, which are
+    (`_load_brahmic131k_arm`'s second tier) and for the file-backed T1/T2/E1 arms, which are
     always this exact type since they are loaded with `Tokenizer.from_file`.
     `add_special_tokens=False` for the same reason as `HFAdapter`: metrics encode
     individual words, so per-call special tokens would be counted once per word.
@@ -451,7 +455,7 @@ def _repo_root() -> Path:
 
 
 def _tokenizer_dir(root: Path) -> Path:
-    """Where trained (T1/T2) tokenizers live: `$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to
+    """Where trained (T1/T2/E1) tokenizers live: `$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to
     `outputs/tokenizers`, resolved against `root` when relative."""
     value = os.environ.get("SANSKRIT_TOK_TOKENIZER_DIR", "outputs/tokenizers")
     path = Path(value)
@@ -470,7 +474,7 @@ def trained_tokenizer_path(name: str) -> Path:
 
 
 def _load_trained_arm(name: str) -> LoadedTokenizer:
-    """Load a file-backed T1/T2 arm from its trained `tokenizer.json`.
+    """Load a file-backed T1/T2/E1 arm from its trained `tokenizer.json`.
 
     Raises `TokenizerUnavailable` naming the expected path if the file does not exist —
     the arm is registered (it is a known name) but has not been trained yet, which is
@@ -512,6 +516,10 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "T1_bpe_raw_64k": functools.partial(_load_trained_arm, "T1_bpe_raw_64k"),
     "T2_unigram_raw_32k": functools.partial(_load_trained_arm, "T2_unigram_raw_32k"),
     "T2_unigram_raw_64k": functools.partial(_load_trained_arm, "T2_unigram_raw_64k"),
+    "E1_bpe_32k": functools.partial(_load_trained_arm, "E1_bpe_32k"),
+    "E1_bpe_64k": functools.partial(_load_trained_arm, "E1_bpe_64k"),
+    "E1_unigram_32k": functools.partial(_load_trained_arm, "E1_unigram_32k"),
+    "E1_unigram_64k": functools.partial(_load_trained_arm, "E1_unigram_64k"),
 }
 
 

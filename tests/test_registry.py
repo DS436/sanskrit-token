@@ -33,8 +33,12 @@ from sanskrit_tok.tokenizers.registry import (
 
 ARMS = ("T0_gemma3", "T0_llama4", "T0_o200k")
 
-#: Every arm the registry must carry after this task (CLAUDE.md §6, exp02 plan Task 2).
+#: Every arm the registry must carry after this task (CLAUDE.md §6, exp02 plan Tasks 2/6).
 ALL_ARMS = (
+    "E1_bpe_32k",
+    "E1_bpe_64k",
+    "E1_unigram_32k",
+    "E1_unigram_64k",
     "T0_gemma3",
     "T0_gpt2",
     "T0_llama4",
@@ -51,7 +55,18 @@ ALL_ARMS = (
 
 T3_ARMS = ("T3_brahmic131k", "T3_indicsuper", "T3_sarvam", "T3_sutra")
 
-TRAINED_ARMS = ("T1_bpe_raw_32k", "T1_bpe_raw_64k", "T2_unigram_raw_32k", "T2_unigram_raw_64k")
+#: The matched English control family (CLAUDE.md §6, docs/decisions.md "Add a matched
+#: English control family E1 for TPP"): same algorithms and vocabulary sizes as T1/T2,
+#: trained on the English side of the same corpus.
+E1_ARMS = ("E1_bpe_32k", "E1_bpe_64k", "E1_unigram_32k", "E1_unigram_64k")
+
+TRAINED_ARMS = (
+    "T1_bpe_raw_32k",
+    "T1_bpe_raw_64k",
+    "T2_unigram_raw_32k",
+    "T2_unigram_raw_64k",
+    *E1_ARMS,
+)
 
 NETWORK_TESTS = pytest.mark.skipif(
     not os.environ.get("SANSKRIT_TOK_NETWORK_TESTS"),
@@ -133,6 +148,14 @@ def test_list_tokenizers_returns_every_arm_name_sorted() -> None:
 
 def test_list_tokenizers_filters_by_family() -> None:
     assert list_tokenizers(family="T3") == sorted(T3_ARMS)
+
+
+def test_registry_carries_sixteen_arms() -> None:
+    assert len(list_tokenizers()) == 16
+
+
+def test_list_tokenizers_filters_the_english_control_family() -> None:
+    assert list_tokenizers(family="E1") == sorted(E1_ARMS)
 
 
 def test_registry_keys_are_exactly_the_listed_arms() -> None:
@@ -380,6 +403,34 @@ def test_trained_tokenizer_path_resolves_under_the_tokenizer_dir(
 @pytest.mark.parametrize("arm", TRAINED_ARMS)
 def test_every_trained_arm_is_registered(arm: str) -> None:
     assert arm in REGISTRY
+
+
+@pytest.mark.parametrize("arm", E1_ARMS)
+def test_english_control_arm_loads_from_tokenizer_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arm: str
+) -> None:
+    """E1 is file-backed exactly like T1/T2 — same loader, same directory layout — so it
+    is absent until `train_tokenizers.py` has written its `tokenizer.json`."""
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    path = tmp_path / arm / "tokenizer.json"
+    _write_tiny_bpe_tokenizer(path, vocab_size=50)
+
+    tok = load_tokenizer(arm)
+
+    assert tok.family == "E1"
+    assert tok.vocab_size == 50
+    assert tok.source_id == str(path)
+    assert tok.encode("Rama goes")
+
+
+@pytest.mark.parametrize("arm", E1_ARMS)
+def test_untrained_english_control_arm_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arm: str
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    with pytest.raises(TokenizerUnavailable) as excinfo:
+        load_tokenizer(arm)
+    assert str(trained_tokenizer_path(arm)) in str(excinfo.value)
 
 
 # --------------------------------------------------------------------------------- T3 arms

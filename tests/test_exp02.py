@@ -397,3 +397,197 @@ def test_compute_tpp_does_not_warn_when_every_pivot_is_available(
             ci=0.95,
         )
     assert not [record for record in caplog.records if record.levelname == "WARNING"]
+
+
+# --- controlled TPP: T1/T2 against the matched English control E1 ---------------------
+
+
+def _controlled_arms() -> dict[str, object]:
+    return {
+        "T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", "sa.json", "T1"),
+        "E1_bpe_32k": _fake_arm("E1_bpe_32k", "en.json", "E1"),
+    }
+
+
+def test_controlled_pair_key_joins_the_two_arm_names() -> None:
+    assert run.controlled_pair_key("T1_bpe_raw_32k", "E1_bpe_32k") == "T1_bpe_raw_32k/E1_bpe_32k"
+
+
+def test_select_controlled_pairs_keeps_pairs_whose_both_sides_loaded() -> None:
+    pairs = run.select_controlled_pairs(
+        [["T1_bpe_raw_32k", "E1_bpe_32k"]],
+        _controlled_arms(),  # type: ignore[arg-type]
+    )
+    assert pairs == [("T1_bpe_raw_32k", "E1_bpe_32k")]
+
+
+def test_select_controlled_pairs_skips_a_pair_with_an_unavailable_side(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An untrained E1 arm (or an unavailable Sanskrit arm) must drop its pair rather than
+    silently pairing the Sanskrit arm against something else."""
+    with caplog.at_level("WARNING", logger="exp02"):
+        pairs = run.select_controlled_pairs(
+            [
+                ["T1_bpe_raw_32k", "E1_bpe_32k"],
+                ["T1_bpe_raw_64k", "E1_bpe_64k"],  # neither side loaded
+                ["T1_bpe_raw_32k", "E1_unigram_32k"],  # English side missing
+            ],
+            _controlled_arms(),  # type: ignore[arg-type]
+        )
+    assert pairs == [("T1_bpe_raw_32k", "E1_bpe_32k")]
+    messages = " ".join(record.getMessage() for record in caplog.records)
+    assert "E1_bpe_64k" in messages
+    assert "E1_unigram_32k" in messages
+
+
+def test_select_controlled_pairs_rejects_a_malformed_pair() -> None:
+    with pytest.raises(ValueError, match="controlled_pairs"):
+        run.select_controlled_pairs(
+            [["T1_bpe_raw_32k"]],
+            _controlled_arms(),  # type: ignore[arg-type]
+        )
+
+
+def test_compute_tpp_controlled_is_keyed_by_corpus_then_pair() -> None:
+    results = run.compute_tpp_controlled(
+        [_one_corpus()],
+        _controlled_arms(),  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        n_bootstrap=10,
+        seed=0,
+        ci=0.95,
+    )
+    assert list(results) == ["corpus_a"]
+    summary = results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+    for key in (
+        "value",
+        "n",
+        "unit",
+        "distribution",
+        "mean",
+        "std",
+        "ci_low",
+        "ci_high",
+        "ci",
+        "n_bootstrap",
+        "seed",
+        "n_undefined",
+        "source_tokens",
+        "pivot_tokens",
+    ):
+        assert key in summary
+    assert summary["n"] == 2
+    assert summary["ci"] == 0.95
+
+
+def _char_arm(name: str, family: str) -> object:
+    """A `LoadedTokenizer` emitting one id per character, so a token count is a length."""
+    return run.LoadedTokenizer(
+        name=name,
+        source_id=f"{name}.json",
+        vocab_size=32000,
+        _encode=lambda text: [0] * len(text),
+        family=family,
+        attempted=(f"{name}.json",),
+    )
+
+
+def test_compute_tpp_controlled_reads_the_slp1_sanskrit_side_and_raw_english() -> None:
+    """The Sanskrit arm scores SLP1 (T1/T2 have no other variant) and the control arm
+    scores the English side as written — these two fakes emit one id per character, so
+    the recorded token counts are exactly the character lengths of those two sides."""
+    corpus = _one_corpus()
+    results = run.compute_tpp_controlled(
+        [corpus],
+        {
+            "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+            "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        },  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        n_bootstrap=0,
+        seed=0,
+        ci=0.95,
+    )
+    summary = results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+    expected_source = sum(len(text) for text in corpus.sanskrit[run.SLP1])  # type: ignore[attr-defined]
+    expected_pivot = sum(len(text) for text in corpus.english)  # type: ignore[attr-defined]
+    assert summary["source_tokens"] == expected_source
+    assert summary["pivot_tokens"] == expected_pivot
+    assert summary["value"] == expected_source / expected_pivot
+
+
+# --- the controlled column of the central figure --------------------------------------
+
+
+def _synthetic_results_with_control() -> dict[str, object]:
+    results = _synthetic_results()
+    config = results["config"]
+    assert isinstance(config, dict)
+    config["controlled_pairs"] = [["T1_bpe_raw_32k", "E1_bpe_32k"]]
+    config["figure_pivot_controlled"] = True
+    sources = results["tokenizer_sources"]
+    assert isinstance(sources, dict)
+    sources["E1_bpe_32k"] = {"source_id": "en.json", "vocab_size": 32000, "family": "E1"}
+    results["tpp_controlled"] = {
+        "corpus_a": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {
+                "value": 0.85,
+                "ci_low": 0.80,
+                "ci_high": 0.90,
+                "n": 5,
+                "unit": "x",
+            }
+        },
+        "corpus_b": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {
+                "value": 1.15,
+                "ci_low": 1.10,
+                "ci_high": 1.20,
+                "n": 5,
+                "unit": "x",
+            }
+        },
+    }
+    return results
+
+
+def test_controlled_pair_label_names_both_arms_and_marks_the_provisional_side() -> None:
+    assert run.controlled_pair_label("T1_bpe_raw_32k", "E1_bpe_32k") == (
+        "T1_bpe_raw_32k* / E1_bpe_32k"
+    )
+
+
+def test_build_tpp_figure_adds_a_controlled_column() -> None:
+    """Two columns, one row per corpus: the left column is unchanged (Sanskrit vs o200k),
+    the right column is the matched control (T1/T2 vs E1)."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_figure(_synthetic_results_with_control())
+    try:
+        assert len(figure.axes) == 4  # two corpora x (deployed, controlled)
+        right_labels = [
+            label.get_text()
+            for axes in figure.axes[1::2]
+            for label in axes.get_xticklabels()
+        ]
+        assert any("E1_bpe_32k" in label for label in right_labels)
+        left_labels = [label.get_text() for label in figure.axes[0].get_xticklabels()]
+        assert not any("E1_bpe_32k" in label for label in left_labels)
+        texts = [text.get_text() for text in figure.texts]
+        assert any(run.FIGURE_CONTROLLED_TITLE in text for text in texts)
+        assert any(run.FIGURE_SUPTITLE in text for text in texts)
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_figure_stays_single_column_without_controlled_results() -> None:
+    """The controlled column appears only when the run produced one, so a results.json
+    from before this task still plots."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_figure(_synthetic_results())
+    try:
+        assert len(figure.axes) == 2
+    finally:
+        plt.close(figure)

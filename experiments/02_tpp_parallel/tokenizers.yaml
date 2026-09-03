@@ -1,34 +1,65 @@
-# Provisional T1/T2 tokenizer training (exp02 Task 4).
+# Provisional T1/T2 tokenizer training and the matched English control E1 (exp02 Tasks 4, 6).
 #
 # Trains BPE and Unigram tokenizers on the Sanskrit side of the Sāmayik and Itihāsa
 # *training* splits, in SLP1, at matched 32k/64k vocabulary sizes (CLAUDE.md §2.5). These
 # arms are provisional (docs/decisions.md, "Provisional T1/T2 tokenizers..."): they will
 # be retrained on the monolingual corpus (DCS, GRETIL, Wikipedia) once milestone M1 lands.
 #
+# The `E1_*` arms (`side: en`) are the matched English control: same algorithms, same
+# vocabulary sizes, same trainer settings, trained on the *English* side of those same
+# training splits (docs/decisions.md, "Add a matched English control family E1 for TPP").
+# The English corpus is not transliterated and is asserted against its own exclusion list.
+#
 # Relative paths are resolved against the repository root, not the working directory.
 
 corpus_path: data/processed/tok_train_slp1.txt
+english_corpus_path: data/processed/tok_train_en.txt
 
 # Prose before verse (CLAUDE.md §7): Sāmayik precedes Itihāsa in every table and config.
 sources:
   - samayik_train
   - itihasa_train
 
+english_sources:
+  - samayik_train_en
+  - itihasa_train_en
+
 exclusion_path: data/exclusion_hashes.txt
+english_exclusion_path: data/exclusion_hashes_en.txt
 
 arms:
   - name: T1_bpe_raw_32k
     algo: bpe
     vocab_size: 32000
+    side: sa
   - name: T1_bpe_raw_64k
     algo: bpe
     vocab_size: 64000
+    side: sa
   - name: T2_unigram_raw_32k
     algo: unigram
     vocab_size: 32000
+    side: sa
   - name: T2_unigram_raw_64k
     algo: unigram
     vocab_size: 64000
+    side: sa
+  - name: E1_bpe_32k
+    algo: bpe
+    vocab_size: 32000
+    side: en
+  - name: E1_bpe_64k
+    algo: bpe
+    vocab_size: 64000
+    side: en
+  - name: E1_unigram_32k
+    algo: unigram
+    vocab_size: 32000
+    side: en
+  - name: E1_unigram_64k
+    algo: unigram
+    vocab_size: 64000
+    side: en
 
 seed: 0
 

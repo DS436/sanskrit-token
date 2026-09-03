@@ -4,81 +4,132 @@
 tokens-per-proposition on parallel corpora is lower for Sanskrit than English. With
 English-centric tokenizers it is higher. The sign flips depending on tokenizer.
 
-**Success:** at least one Sanskrit-native arm below 1.0 on Sāmayik with its CI excluding
-1.0, and the T0 (English-centric) arms above 1.0.
+**Success (pre-registered, as reframed):** at least one Sanskrit-native arm below 1.0 on
+Sāmayik with its CI excluding 1.0 **against the matched English control `E1_*`** — same
+algorithm, same vocabulary size, same training corpus. The comparison against the T0
+(English-centric) arms cannot establish it: those arms differ from the trained Sanskrit
+arms in vocabulary size and training domain as well as language, so a flip there is not
+attributable to language (`docs/decisions.md`, "Experiment 02 verdict reframed…").
 
 **Run:** `uv run python experiments/02_tpp_parallel/run.py`
 
-**Runtime:** 2m07s wall-clock (109.7s user, 87% CPU) on this machine with every
-tokenizer cache, corpus jsonl and trained `tokenizer.json` already warm — no network
-access. A cold run additionally pays for four Sāmayik/Itihāsa split downloads (already
-cached under `data/raw/`) and the Hugging Face/tiktoken downloads for nine of the twelve
-arms (already cached; `T3_indicsuper` has none, see below).
+**Runtime:** 3m58s wall-clock (220.1s user, 93% CPU) on this machine with every tokenizer
+cache, corpus jsonl and trained `tokenizer.json` already warm — no network access. That is
+up from 2m07s before the E1 arms: `english_pivots` went from two entries to six, and each
+Sanskrit arm x script variant is scored against every pivot. A cold run additionally pays
+for four Sāmayik/Itihāsa split downloads (already cached under `data/raw/`), the tiktoken
+download for `T0_o200k` and Hugging Face downloads for six more Sanskrit arms (all cached;
+the four T1/T2 arms and the four E1 pivots are local files, and `T3_indicsuper` resolves
+to nothing — see below). Training the four E1 arms first (a one-off,
+`uv run python experiments/02_tpp_parallel/train_tokenizers.py`) took 8.8s wall-clock.
 
 ---
 
 ## Summary
 
-**The TPP sign flips on two of the four corpora, and both are corpora the trained arms
-were fitted to.** On Sāmayik test — the primary prose corpus this hypothesis is
-pre-registered against — `T1_bpe_raw_64k`*, a 64k-vocabulary BPE tokenizer trained from
-scratch on Sanskrit, costs **0.908 tokens per English token** [0.896, 0.921], a 95% CI
-entirely below 1.0, while every T0 and T3 arm costs more tokens than English on the same
-sentences, with CIs entirely above 1.0 (`T0_o200k` 1.835 [1.813, 1.858] up to
-`T3_sarvam` 2.416 [2.386, 2.447]). Two more Sanskrit-native arms sit within noise of
-parity (`T1_bpe_raw_32k`* 1.009 [0.995, 1.023], `T2_unigram_raw_64k`* 0.999
-[0.985, 1.014]), and one (`T2_unigram_raw_32k`*, 1.070) stays above. **Itihāsa test shows
-the largest flip of all four corpora**: all four provisional T1/T2 arms cost roughly half
-an English token per Sanskrit token (0.47–0.55, all CIs entirely below 1.0) while every
-T0/T3 arm stays above 1.0 — but Itihāsa is verse, where meter, not tokenization, is the
-leading suspect for why Sanskrit looks unusually compact (CLAUDE.md §2.7), so it
-corroborates rather than proves anything.
+**Against the matched English control, the Sāmayik sign flip disappears.** On Sāmayik test
+— the primary prose corpus this hypothesis is pre-registered against — every one of the
+four matched pairs costs *more* tokens per proposition in Sanskrit than in English, with
+every 95% CI entirely above 1.0: `T1_bpe_raw_64k`*/`E1_bpe_64k` **1.027 [1.014, 1.040]**,
+up to `T2_unigram_raw_32k`*/`E1_unigram_32k` 1.148 [1.134, 1.164]. The same Sanskrit arm
+measured against the deployed 200k-vocabulary `T0_o200k` reads 0.908 [0.896, 0.921] —
+below parity. Nothing about the Sanskrit side changed between those two numbers; the
+English side did. `E1_bpe_64k` spends 34,801 tokens on the English half of Sāmayik test
+where `T0_o200k` spends 39,339 (11.5% fewer), because it too was trained on this domain.
+That denominator accounts for the whole move: 0.908 x 39,339/34,801 = 1.026, the measured
+value to three decimals. The apparent Sanskrit advantage was the English pivot's handicap.
 
-**On the two corpora the trained arms never saw, nothing flips.** On Sāmayik's
-out-of-domain split (`test_ood`, Mann Ki Baat transcripts) every arm, Sanskrit-native and
-English-centric alike, costs more tokens than English: the CIs of all eleven available
-arms sit entirely above 1.0, including the same `T1_bpe_raw_64k`* that flipped on `test`
-(1.066 [1.053, 1.077] here). On FLORES devtest, likewise, every arm is above 1.0, T0 and
-T3 most severely (2.18–2.90 for the SLP1 variant). The split is exact: the flip appears on
-Sāmayik test and Itihāsa test, which are in-domain for the provisional T1/T2 tokenizers
-(trained on the training splits of those same two corpora), and on neither of the two
-out-of-domain sets. One aside from the Itihāsa panel: the off-the-shelf `T0_gemma3`
-original-script number comes in at 0.996 [0.991, 1.000] — a T0 arm essentially at parity,
-CI barely straddling 1.0 — which is a reminder that the SLP1-vs-original split (not just
-the T0-vs-T1/T2 split) moves these numbers, not evidence of a second sign flip for an
-off-the-shelf arm.
+**The controlled numbers on the other three corpora, in the same direction.** Sāmayik
+`test_ood` (Mann Ki Baat transcripts, out-of-domain for *both* sides) 1.067–1.161, all four
+CIs above 1.0; FLORES devtest (out-of-domain for both sides) 1.138–1.219, likewise. Only
+**Itihāsa test stays below 1.0 under the control** — 0.607 [0.604, 0.610] to 0.663
+[0.660, 0.667], all four CIs excluding 1.0 — a smaller flip than the 0.47–0.55 the same
+arms show against `T0_o200k`, but a decisive one. Itihāsa is verse: meter, not
+tokenization, is the leading suspect for why Sanskrit looks compact there (CLAUDE.md
+§2.7), and its English side is a 19th-century verse translation whose own verbosity sits
+in the denominator. So the one surviving flip is on the one corpus whose confounds this
+experiment was already told not to trust.
 
-**Verdict on H2: consistent with H2, but not yet separable from domain fit.** Two
-explanations predict this exact pattern equally well, and this experiment cannot tell them
-apart. H2 says a Sanskrit-*native* tokenizer recovers density that an English-centric one
-destroys. Domain fit says a tokenizer trained on a corpus is cheap on that corpus's held-out
-split and no cheaper anywhere else — and the English pivot (o200k) is general-domain on all
-four corpora, so only the Sanskrit side of the ratio gets a home-field advantage. The
-observed flip lands exactly where domain fit predicts it (in-domain test splits) and is
-absent exactly where domain fit predicts it is absent (`test_ood`, FLORES); a genuine
-language-level effect should have survived the register change, and it did not. Nothing
-here is evidence *against* H2 — the in-domain drop from 1.8–2.4 to 0.9 is far larger than a
-vocabulary-size effect alone would explain — but "consistent with" is as far as it goes.
+**Deployed practice is unchanged and still the robust finding.** Against the tokenizers
+people actually use, Sanskrit costs 1.8–2.9 English tokens per proposition on prose and
+Wikipedia text (`T0_o200k` 1.835 [1.813, 1.858] on Sāmayik test, up to `T3_sarvam` 2.899
+[2.865, 2.929] on FLORES), for every off-the-shelf arm, English-centric and Indic alike.
+Every number in the four per-corpus tables below is byte-identical to the pre-E1 run.
 
-Two planned runs separate the two explanations, and the verdict should not be firmed up
-before them (`docs/decisions.md`, "Experiment 02 verdict reframed…"). **E1, the matched
-English control:** train `E1_bpe_{32k,64k}` and `E1_unigram_{32k,64k}` on the English side
-of the same Sāmayik and Itihāsa training splits, same algorithm, same vocabulary size, same
-domain — then TPP against E1 holds domain and vocabulary constant on both sides, and
-whatever gap survives is the language effect H2 is about. **M1, the monolingual retrain:**
-retrain T1/T2 on the monolingual corpus (DCS, GRETIL, Wikipedia), which is not the domain of
-any evaluation split here, so a flip that persists on Sāmayik test cannot be home-field
-advantage. Read alongside Experiment 01, what is settled so far is narrower than H2:
-Sanskrit's word-level density is real, and it does not survive an English-centric
-tokenizer — how much of it survives a Sanskrit-native one is what E1 and M1 will say.
+**Verdict on H2: not supported on prose; the in-domain flip was domain fit, not
+language.** The reframing this experiment was carrying — "consistent with H2, but not yet
+separable from domain fit" — is now resolved in one direction on prose. H2 says a
+Sanskrit-*native* tokenizer recovers density that an English-centric one destroys. Domain
+fit says a tokenizer trained on a corpus is cheap on that corpus's held-out split and no
+cheaper anywhere else. E1 shares the training domain with T1/T2 corpus-for-corpus, so at
+each corpus both sides of the ratio now have the same home-field advantage or the same
+lack of it: in-domain on Sāmayik test and Itihāsa test, out-of-domain on `test_ood` and
+FLORES. The Sāmayik-test flip did not survive that equalisation — it vanished, and it
+vanished by roughly the amount the English side gained. That is the signature of domain
+fit, and per `docs/decisions.md` ("Add a matched English control family E1 for TPP") a
+flip that vanishes against E1 is domain fit rather than evidence for H2. The Itihāsa flip
+*did* survive, which is evidence for H2 in exactly the register CLAUDE.md §2.7 says not to
+lead with; it is a lead to follow on verse, not a prose result.
+
+Two caveats keep this a provisional verdict rather than a refutation. First, both sides
+are still trained on ~116–118k sentences of the same two parallel corpora, so the control
+equalises domain *fit* but not corpus *size or diversity* — and neither side has seen a
+real monolingual corpus. **M1, the monolingual retrain** (T1/T2 on DCS, GRETIL, Wikipedia)
+is the remaining planned run: it moves the Sanskrit side out of every evaluation domain,
+which is a harder test than this one, not an easier one. Second, TPP against a translated
+pivot inherits the translator's verbosity; a Sanskrit–English pair is not a controlled
+propositional unit, only the best available proxy. Read alongside Experiment 01, what is
+settled is: Sanskrit's word-level density is real, it does not survive an English-centric
+tokenizer, and — on prose — training a Sanskrit-native tokenizer of matched size on
+matched text does not by itself buy back below-parity tokens per proposition.
 
 ---
 
-## Results by corpus
+## The controlled comparison (matched English control, `E1_*`)
 
-Vocabulary sizes differ across arms (T0/T3 are existing practice, never a controlled
-comparison, CLAUDE.md §2.5); `*` marks the two provisional T1/T2 families (trained on
-~118k parallel-corpus sentences, not the monolingual corpus — see the caveat below).
+Each row is one matched pair: a trained Sanskrit arm over the English arm sharing its
+algorithm, its vocabulary size and its training corpus (the two sides of the same Sāmayik
++ Itihāsa training splits). This is the controlled comparison and the one the verdict
+reads from; the tables after it are deployed practice. Sanskrit is scored in SLP1 (T1/T2
+have no other variant), English as written. Values are TPP with a 95% bootstrap CI; prose
+first (CLAUDE.md §2.7). `*` marks the provisional Sanskrit arms (see caveats).
+
+| Matched pair (Sanskrit / English) | Sāmayik test (prose) | Sāmayik test_ood (prose, OOD) | Itihāsa test (verse) | FLORES devtest |
+|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` (32k) | 1.077 [1.063, 1.091] | 1.091 [1.078, 1.103] | **0.653 [0.650, 0.657]** | 1.139 [1.128, 1.150] |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` (64k) | 1.027 [1.014, 1.040] | 1.067 [1.054, 1.078] | **0.607 [0.604, 0.610]** | 1.138 [1.126, 1.149] |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` (32k) | 1.148 [1.134, 1.164] | 1.161 [1.146, 1.174] | **0.663 [0.660, 0.667]** | 1.207 [1.194, 1.220] |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` (64k) | 1.096 [1.082, 1.111] | 1.146 [1.132, 1.159] | **0.626 [0.622, 0.629]** | 1.219 [1.206, 1.232] |
+
+Per corpus: **Sāmayik test** — 0 pairs below 1.0, 4 above (CIs exclude 1.0), 0 straddling.
+**Sāmayik test_ood** — 0 below, 4 above, 0 straddling. **Itihāsa test** — 4 below (CIs
+exclude 1.0), 0 above. **FLORES devtest** — 0 below, 4 above, 0 straddling. `n` is 2417 /
+4047 / 11721 / 1012 pairs respectively and `n_undefined` is 0 throughout: no English
+sentence encoded to zero tokens under any control arm.
+
+Why the same Sanskrit arms read differently here than in the tables below: the control
+arms are cheaper on English than the deployed pivot, because they share its domain.
+`E1_bpe_64k` uses 34,801 tokens on Sāmayik test's English side against `T0_o200k`'s 39,339
+(11.5% fewer) and 376,705 against 484,898 on Itihāsa test (22.3% fewer). A ratio whose
+denominator shrinks by a tenth to a fifth moves accordingly, and that movement is
+vocabulary and domain, not language — which is the entire reason this table exists.
+
+`results.json` stores these under `tpp_controlled` as `corpus -> "<sa_arm>/<en_arm>" ->
+summary`, each summary carrying the same keys as a `tpp` entry (`value`, `n`, `unit`,
+`distribution`, `mean`, `std`, `ci_low`, `ci_high`, `ci`, `n_bootstrap`, `seed`,
+`n_undefined`, `source_tokens`, `pivot_tokens`).
+
+---
+
+## Deployed practice: results by corpus
+
+These four tables are **deployed practice**, not a controlled comparison: every column
+divides a Sanskrit arm's tokens by those of a 200k-vocabulary, general-domain English
+tokenizer, so vocabulary size and training domain vary alongside language (CLAUDE.md
+§2.5). They answer "what does Sanskrit cost under the tokenizers people ship?" — the
+controlled question is answered by the E1 table above. Vocabulary sizes differ across
+arms; `*` marks the two provisional T1/T2 families (trained on ~118k parallel-corpus
+sentences, not the monolingual corpus — see the caveat below).
 "SLP1" is the transliterated variant every arm has and the one the figure and this
 verdict read from; "original" is the untransliterated script, available for T0/T3 only.
 Fertility is reported in the last column for completeness (CLAUDE.md §2.1) — it is not
@@ -190,14 +241,26 @@ unavailable this run (see below).
 
 ## The central figure
 
-`tpp_by_arm.pdf` / `.png`: four panels stacked vertically in the corpus order above
-(prose first). Each panel plots the SLP1-variant TPP of every available arm against
-`T0_o200k`, as a point with its 95% bootstrap-CI error bar, plus a thin marker at the
-same x-position for the *original*-script variant where the arm has one (T0/T3). A
-dashed line at 1.0 marks the sign flip this experiment tests for. Provisional (T1/T2)
-arms carry a `*` in their x-tick label; the caption explains it.
+`tpp_by_arm.pdf` / `.png`: one row per corpus in the order above (prose first) and two
+columns.
 
-Each panel's y-axis is scaled from the SLP1 series alone, not from every point on the
+The **right column is the controlled comparison** and the one to read first: for each
+corpus, the four matched pairs (Sanskrit arm over its `E1_*` twin) as points with 95%
+bootstrap-CI error bars, against the same dashed 1.0 line. Its column header names what
+is held constant — "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab,
+training corpus)". Read across the four rows, it shows three panels sitting entirely above
+1.0 and only Itihāsa (verse) below.
+
+The **left column is deployed practice**: the SLP1-variant TPP of every available arm
+against `T0_o200k`, as a point with its 95% bootstrap-CI error bar, plus a thin marker at
+the same x-position for the *original*-script variant where the arm has one (T0/T3), and
+the same dashed line at 1.0. Provisional (T1/T2) arms carry a `*` in their x-tick label;
+the caption explains it. The two columns share no y-axis: the left one spans the T0/T3
+arms' 1.8–2.9, the right one the narrow band the controlled pairs occupy, so each is
+scaled to be readable rather than to be compared by eye across the page — compare the
+numbers, not the marker heights.
+
+Each left panel's y-axis is scaled from the SLP1 series alone, not from every point on the
 panel: `T0_gpt2`'s original-script number is 4–8x every other arm's (its old,
 Devanagari-blind vocabulary falls back to near-byte-level segmentation on raw Sanskrit —
 see Experiment 01), and letting it set the axis would squeeze the sign flip this figure
@@ -225,6 +288,24 @@ candidate tokenizer could be loaded)").
   deterministic..."); the numbers above are from the `tokenizer.json` files committed to
   `outputs/tokenizers/` at the time of this run, not necessarily reproducible bit-for-bit
   from a fresh training run on the same recipe.
+- **The E1 control arms are matched on what they are matched on, and no more.** Same two
+  algorithms, same 32k/64k vocabulary sizes, same trainer settings, same sentences —
+  trained on the English side of the very splits whose Sanskrit side trained T1/T2
+  (`data/processed/manifest_en.json`: 118,654 raw sentences → 680 dropped for colliding
+  with `data/exclusion_hashes_en.txt` → 1,847 exact duplicates removed → **116,127
+  training sentences**, against the Sanskrit corpus's 117,720). The English corpus is not
+  transliterated; its exclusion list is the English side of the same six evaluation
+  splits, hashed with `sentence_hash_en` (27,686 unique hashes,
+  `data/exclusion_hashes_en.txt`, committed). What is *not* matched: English and Sanskrit
+  differ in what a "sentence" of ~116k of them contains, and both corpora are small and
+  single-domain by tokenizer standards, so this control equalises domain fit, not corpus
+  size or diversity. `E1_unigram_*` inherits the same Unigram non-determinism caveat as
+  `T2_*`; `results.json` records the sha256 of every E1 `tokenizer.json` under
+  `tokenizer_sources`, as it does for T1/T2.
+- **The English side of a TPP ratio is a translation.** Sāmayik and Itihāsa pair Sanskrit
+  with an English rendering, and a translator's verbosity lands in the denominator — most
+  visibly for Itihāsa, whose English is a 19th-century verse translation. TPP is the least
+  bad available proxy for "cost per proposition", not a measurement of propositions.
 - **`T3_indicsuper` is unavailable this run.** All three candidate repository ids
   (`krutrim-ai-labs/IndicSuperTokenizer`, `ai4bharat/IndicSuperTokenizer`,
   `ai4bharat/indic-super-tokenizer`) fail to resolve on the Hugging Face Hub — not
@@ -249,7 +330,8 @@ candidate tokenizer could be loaded)").
   the opposite bias from TPP — so it appears only in each table's last column and this
   one-line note, never in the summary above.
 - **Every stored TPP summary carries its bootstrap settings.** Each `results.json["tpp"][corpus][arm][variant][pivot]`
-  (and the equivalent `tpp_hindi` entry) is `{value, n, unit, distribution, mean, std,
+  (and the equivalent `tpp_controlled[corpus][pair]` and `tpp_hindi` entries) is
+  `{value, n, unit, distribution, mean, std,
   ci_low, ci_high, ci, n_bootstrap, seed, n_undefined, source_tokens, pivot_tokens}` —
   `ci` is the nominal confidence level the bootstrap targeted (`0.95` throughout this
   run, from `config.yaml`'s `ci` key), so a reader of `results.json` alone can tell what
@@ -257,6 +339,10 @@ candidate tokenizer could be loaded)").
 - **No evaluation leakage detected.** `exclusion_check` in `results.json`: every Sanskrit
   sentence used by this experiment (2417 + 4047 + 11721 + 1012 = 19,197 total) hashes to
   an entry already in `data/exclusion_hashes.txt`; `n_missing` is 0 for all four corpora.
+  On the English side, training the E1 arms dropped 680 of 118,654 training sentences for
+  colliding with `data/exclusion_hashes_en.txt` (675 Sāmayik, 5 Itihāsa) before any
+  tokenizer saw them — the same filter-then-assert path the Sanskrit corpus uses, with the
+  English hash function.
 - **`results.json` is strict JSON.** A handful of per-pair TPP ratios and, in principle,
   a bootstrap CI can be undefined (`nan`) when a pivot sentence yields zero tokens;
   `sanitize_json` replaces every `nan`/`inf` float with `null` before writing, and the

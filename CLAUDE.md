@@ -128,6 +128,7 @@ Each `experiments/NN_name/` has `run.py`, `config.yaml`, and a `README.md` stati
 | `T5_morphbpe_raw_{32k,64k}` | Morpheme-constrained merges on raw |
 | `T6_morphbpe_split_{32k,64k}` | Sandhi-split + morpheme-constrained (**proposed**) |
 | `T7_byt5` | Byte-level, no subword |
+| `E1_bpe_{32k,64k}`, `E1_unigram_{32k,64k}` | Matched English control trained on the English side of the same corpus |
 
 Ablation suffixes: `_deva` / `_slp1` / `_iast` for script; `_oracle` for gold splits.
 
