@@ -16,3 +16,8 @@ Reversible: yes, `pip uninstall uv` and reinstall by any other method; no projec
 Why: macOS Finder writes `.DS_Store` into every directory it opens; several were picked up by `git add -A` during the initial scaffold. They carry no project information and would churn every commit.
 Alternatives: a global `~/.gitignore_global` (does not travel with the repo, so other contributors would still commit them).
 Reversible: yes, delete the line.
+
+## 2026-09-03 — SLP1 roundtrip is guaranteed for Devanagari/IAST only, not for embedded Latin text; no NFC normalisation
+Why: SLP1 is itself an ASCII scheme, so `from_slp1` must read Latin letters as phonemes, ASCII digits as Devanagari digits, and `'` `.` `~` `|` as avagraha, danda, candrabindu and Vedic ḻh. A line mixing English with Devanagari therefore cannot roundtrip — `from_slp1` has no way to tell "The" from a run of SLP1 phonemes — and fixture line 10 of `tests/fixtures/devanagari_sample.txt` is kept as a strict `xfail` documenting that boundary. Unicode NFC normalisation was *not* added to `to_slp1`: the eleven pure-Devanagari fixture lines roundtrip without it, and normalising inside `to_slp1` would in fact break identity roundtrip for any decomposed input (the output would come back composed). Callers that need decomposed text handled must normalise on ingest, in `data/`.
+Alternatives: wrapping Latin runs in `sanscript` toggle markers (`##`) so they survive the reverse trip — rejected, it injects non-Sanskrit markers into the SLP1 string that tokenizers are trained on, which is the whole point of the encoding. Per CLAUDE.md §2.3 the original script is stored alongside the SLP1 form instead.
+Reversible: yes; adding NFC or a toggle-based passthrough is a local change to `encoding.py` plus its tests.
