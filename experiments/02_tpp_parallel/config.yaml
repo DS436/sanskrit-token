@@ -1,0 +1,23 @@
+# Experiment 02 — tokens-per-proposition on parallel text (RQ2), CLAUDE.md §7.
+#
+# Relative paths are resolved against the repository root (the parent of `experiments/`),
+# not the working directory, so the runner works from anywhere in the repo.
+
+corpora:               # prose before verse; order is binding for tables and figure panels
+  - {name: samayik_test, loader: samayik, split: test}
+  - {name: samayik_test_ood, loader: samayik, split: test_ood}
+  - {name: itihasa_test, loader: itihasa, split: test}
+  - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
+
+sanskrit_arms: [T0_o200k, T0_llama4, T0_gemma3, T0_gpt2, T3_sarvam, T3_sutra, T3_indicsuper, T3_brahmic131k, T1_bpe_raw_32k, T1_bpe_raw_64k, T2_unigram_raw_32k, T2_unigram_raw_64k]
+english_pivots: [T0_o200k, T0_llama4]      # o200k is primary
+
+hindi_pivot_corpus: flores_devtest         # Sa/Hi under the same tokenizer, T0/T3 arms only
+
+script_variants: {T0: [original, slp1], T3: [original, slp1], T1: [slp1], T2: [slp1]}
+
+n_bootstrap: 1000
+seed: 0
+
+exclusion_path: data/exclusion_hashes.txt
+output_dir: outputs/02_tpp_parallel
