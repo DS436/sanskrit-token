@@ -41,7 +41,7 @@ import math
 import random
 import shutil
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,7 +50,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash
+from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
 from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl, save_jsonl
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
@@ -103,7 +103,11 @@ FIGURE_STEM = "tpp_by_arm"
 FIGURE_PIVOT = "T0_o200k"
 FIGURE_MAIN_VARIANT = SLP1
 FIGURE_SECONDARY_VARIANT = ORIGINAL
-FIGURE_SUPTITLE = "Tokens per proposition: Sanskrit vs English (o200k), 95% bootstrap CI"
+#: The figure now carries two columns measured against *different* English sides, so the
+#: suptitle names neither; each column header names its own pivot.
+FIGURE_SUPTITLE = "Tokens per proposition (Sanskrit / English), 95% bootstrap CI"
+#: Header over the figure's left-hand column, which holds the deployed-practice pivot.
+FIGURE_DEPLOYED_TITLE = "Deployed practice: every arm vs English o200k (200k, general domain)"
 #: Header over the figure's right-hand column, which holds the controlled comparison.
 FIGURE_CONTROLLED_TITLE = (
     "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab, training corpus)"
@@ -284,17 +288,26 @@ def prepare_corpus(entry: Mapping[str, Any], root: Path) -> CorpusData:
 # --------------------------------------------------------------------------- leakage
 
 
-def exclusion_check_for(sentences: Sequence[str], hashes: frozenset[str]) -> dict[str, int]:
+def exclusion_check_for(
+    sentences: Sequence[str],
+    hashes: frozenset[str],
+    hash_fn: Callable[[str], str] = sentence_hash,
+) -> dict[str, int]:
     """`{"n": len(sentences), "n_missing": how many hash to something not in `hashes`}`.
 
-    Every Sanskrit evaluation sentence used by this experiment is expected to be in
-    `data/exclusion_hashes.txt` (CLAUDE.md §2.4): a non-zero `n_missing` means this
-    corpus's Sanskrit side (or some of it) was not included when the exclusion list was
-    built, which is worth a WARNING but not an abort — this experiment reads evaluation
-    text, it does not train anything, so there is nothing here for a missed hash to leak
-    into.
+    Every evaluation sentence used by this experiment is expected to be in the exclusion
+    list for its side (CLAUDE.md §2.4): `data/exclusion_hashes.txt` for the Sanskrit side
+    (`sentence_hash`), `data/exclusion_hashes_en.txt` for the English side
+    (`sentence_hash_en`, which is what the `E1_*` control arms were kept away from). A
+    non-zero `n_missing` means that side of this corpus (or some of it) was not included
+    when the list was built, which is worth a WARNING but not an abort — this experiment
+    reads evaluation text, it does not train anything, so there is nothing here for a
+    missed hash to leak into. It matters all the same: a missed English hash means an E1
+    arm could have been trained on a sentence it is now being evaluated on.
+
+    `hash_fn` must be the function `hashes` was built with.
     """
-    n_missing = sum(1 for sentence in sentences if sentence_hash(sentence) not in hashes)
+    n_missing = sum(1 for sentence in sentences if hash_fn(sentence) not in hashes)
     return {"n": len(sentences), "n_missing": n_missing}
 
 
@@ -968,12 +981,15 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
     figure.suptitle(FIGURE_SUPTITLE, fontsize=11)
     figure.text(0.01, 0.005, caption, fontsize=7)
     if show_controlled:
-        # A column header rather than a per-panel title: it describes all four right-hand
-        # panels, and each of those still carries its corpus name like its left neighbour.
+        # Column headers rather than per-panel titles: each describes its whole column,
+        # and every panel still carries its corpus name. They, not the suptitle, name the
+        # English side a column is measured against — the two columns use different ones.
+        figure.text(0.25, 0.955, FIGURE_DEPLOYED_TITLE, ha="center", fontsize=8)
         figure.text(0.75, 0.955, FIGURE_CONTROLLED_TITLE, ha="center", fontsize=8)
         figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.94))
     else:
-        figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
+        figure.text(0.5, 0.955, FIGURE_DEPLOYED_TITLE, ha="center", fontsize=8)
+        figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.94))
     return figure
 
 
@@ -1036,11 +1052,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     out_dir = resolve_path(str(config["output_dir"]), root)
     exclusion_path = resolve_path(str(config["exclusion_path"]), root)
+    exclusion_path_en = resolve_path(str(config["exclusion_path_en"]), root)
 
     corpora = [prepare_corpus(entry, root) for entry in corpora_config]
 
     hashes = load_exclusion_hashes(exclusion_path)
+    hashes_en = load_exclusion_hashes(exclusion_path_en)
     exclusion_check: dict[str, dict[str, int]] = {}
+    exclusion_check_en: dict[str, dict[str, int]] = {}
     for corpus in corpora:
         report = exclusion_check_for(corpus.sanskrit[ORIGINAL], hashes)
         exclusion_check[corpus.name] = report
@@ -1051,6 +1070,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 corpus.name,
                 report["n_missing"],
                 report["n"],
+            )
+        # The same check for the English side, which is what kept the E1 control arms
+        # away from this evaluation text (CLAUDE.md §2.4 applies to them as to T1/T2).
+        report_en = exclusion_check_for(corpus.english, hashes_en, sentence_hash_en)
+        exclusion_check_en[corpus.name] = report_en
+        if report_en["n_missing"]:
+            logger.warning(
+                "%s: %d/%d English sentences are NOT in the English exclusion list "
+                "(data/exclusion_hashes_en.txt may be stale; the E1 arms could have "
+                "trained on evaluation text)",
+                corpus.name,
+                report_en["n_missing"],
+                report_en["n"],
             )
 
     all_arm_names = sorted(
@@ -1105,6 +1137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             for corpus in corpora
         },
         "exclusion_check": exclusion_check,
+        "exclusion_check_en": exclusion_check_en,
         "tpp_controlled": tpp_controlled,
         "tpp": tpp_results,
         "tpp_hindi": tpp_hindi,

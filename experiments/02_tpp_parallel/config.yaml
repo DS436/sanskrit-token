@@ -11,10 +11,13 @@ corpora:               # prose before verse; order is binding for tables and fig
 
 sanskrit_arms: [T0_o200k, T0_llama4, T0_gemma3, T0_gpt2, T3_sarvam, T3_sutra, T3_indicsuper, T3_brahmic131k, T1_bpe_raw_32k, T1_bpe_raw_64k, T2_unigram_raw_32k, T2_unigram_raw_64k]
 
-# E1 first: the matched English control (same algorithm, vocab size and training corpus as
-# the T1/T2 arm it is paired with) is the controlled comparison. T0_o200k/T0_llama4 follow
-# as deployed practice — a 200k general-domain English tokenizer, never a matched control.
-english_pivots: [E1_bpe_32k, E1_bpe_64k, E1_unigram_32k, E1_unigram_64k, T0_o200k, T0_llama4]
+# Deployed practice only: o200k primary, Llama-4 secondary. The E1 control arms are
+# deliberately NOT listed here — pairing every Sanskrit arm with every E1 arm would fill
+# results.json["tpp"] with cross-entries nothing reads (a T0 arm over an in-domain English
+# control interprets as neither deployed practice nor a matched comparison). The controlled
+# comparison comes from `controlled_pairs` below, which names the one E1 arm each Sanskrit
+# arm is matched to; run.py loads those arms whether or not they appear in this list.
+english_pivots: [T0_o200k, T0_llama4]      # o200k is primary
 
 # The controlled headline: each Sanskrit arm against the English arm that matches it on
 # algorithm, vocabulary size and training corpus. Measured on the SLP1 variant (T1/T2 have
@@ -36,4 +39,8 @@ seed: 0
 ci: 0.95
 
 exclusion_path: data/exclusion_hashes.txt
+# The English side of the same six evaluation splits, hashed with `sentence_hash_en`: what
+# kept the E1 control arms away from this evaluation text (results.json's
+# `exclusion_check_en` re-verifies it every run).
+exclusion_path_en: data/exclusion_hashes_en.txt
 output_dir: outputs/02_tpp_parallel

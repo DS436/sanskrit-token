@@ -159,6 +159,19 @@ def test_exclusion_check_none_present_is_all_missing() -> None:
     assert run.exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 2}
 
 
+def test_exclusion_check_uses_the_english_hash_for_the_english_side() -> None:
+    """`exclusion_check_en` verifies the list that kept the E1 control arms away from this
+    evaluation text, so it must hash the way that list was built (`sentence_hash_en`)."""
+    sentences = ["Rama goes", "The verse रामः गच्छति opens the chapter"]
+    hashes = frozenset({run.sentence_hash_en(text) for text in sentences})
+    assert run.exclusion_check_for(sentences, hashes, run.sentence_hash_en) == {
+        "n": 2,
+        "n_missing": 0,
+    }
+    # the Sanskrit hash transliterates first, so the Devanagari-bearing sentence misses
+    assert run.exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 1}
+
+
 # --- arm-label helper (figure x-tick labels) ----------------------------------------
 
 
@@ -576,7 +589,10 @@ def test_build_tpp_figure_adds_a_controlled_column() -> None:
         assert not any("E1_bpe_32k" in label for label in left_labels)
         texts = [text.get_text() for text in figure.texts]
         assert any(run.FIGURE_CONTROLLED_TITLE in text for text in texts)
+        assert any(run.FIGURE_DEPLOYED_TITLE in text for text in texts)
         assert any(run.FIGURE_SUPTITLE in text for text in texts)
+        # the two columns use different English sides, so the suptitle names neither
+        assert "o200k" not in run.FIGURE_SUPTITLE
     finally:
         plt.close(figure)
 
@@ -589,5 +605,9 @@ def test_build_tpp_figure_stays_single_column_without_controlled_results() -> No
     figure = run._build_tpp_figure(_synthetic_results())
     try:
         assert len(figure.axes) == 2
+        # the single column is still labelled with the pivot it is measured against
+        texts = [text.get_text() for text in figure.texts]
+        assert any(run.FIGURE_DEPLOYED_TITLE in text for text in texts)
+        assert not any(run.FIGURE_CONTROLLED_TITLE in text for text in texts)
     finally:
         plt.close(figure)
