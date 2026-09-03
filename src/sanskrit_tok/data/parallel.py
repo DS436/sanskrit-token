@@ -15,6 +15,9 @@ no silent breakage of an established interface).
 
 import json
 import logging
+import os
+import shutil
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +26,7 @@ __all__ = [
     "CORPUS_NAME",
     "DEFAULT_SPLIT",
     "ParallelCorpus",
+    "download_file",
     "load_jsonl",
     "read_aligned_files",
     "save_jsonl",
@@ -129,6 +133,34 @@ def load_jsonl(
         raise ValueError(f"{path} is empty: no records to load")
     logger.info("loaded %d aligned sentences from %s", index, path)
     return ParallelCorpus(name=name, split=split, languages=languages, sentences=sentences)
+
+
+# --------------------------------------------------------------------- download I/O
+
+
+def download_file(url: str, destination: Path, *, timeout: float = 120.0) -> None:
+    """Download `url` to `destination`, atomically: a sibling `.part` file plus `os.replace`.
+
+    `destination` either does not exist or holds a complete download; an interrupted
+    transfer can never be mistaken for a cached file on the next run, because the `.part`
+    file is what receives the bytes and is only moved onto `destination` after the copy
+    finishes, and is always removed in the `finally` block otherwise. No checksum is
+    verified here — that is `flores.py`'s `_download_verified`, which adds sha256
+    verification for its tarball source; this helper is the plain atomic-download half
+    that `samayik.py` and `itihasa.py` share, where the commit pinned into `url` is the
+    reproducibility mechanism instead.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    part = destination.with_name(destination.name + ".part")
+    try:
+        with (
+            urllib.request.urlopen(url, timeout=timeout) as response,
+            part.open("wb") as handle,
+        ):
+            shutil.copyfileobj(response, handle)
+        os.replace(part, destination)
+    finally:
+        part.unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------- plain-text pairs

@@ -10,18 +10,19 @@ GitHub API tree, 2026-09-03); recorded as unspecified in `data/README.md`, with 
 dataset described in Aralikatte et al., WAT 2021.
 
 Reproducibility follows the raw-URL pin, not a per-file sha256: `ITIHASA_COMMIT` is
-baked into every download URL, the same mechanism `samayik.py` and `flores.py` use.
+baked into every download URL, the same mechanism `samayik.py` uses. `flores.py` uses a
+checksum-verified variant of this download mechanism for its tarball source; this
+loader's files have no published per-file checksum to verify against, so the commit pin
+alone is the reproducibility guarantee.
 """
 
 import logging
-import os
-import shutil
-import urllib.request
 from pathlib import Path
 from typing import Literal
 
 from sanskrit_tok.data.parallel import (
     ParallelCorpus,
+    download_file,
     load_jsonl,
     read_aligned_files,
     save_jsonl,
@@ -56,25 +57,6 @@ def _raw_url(repo_relative_path: str) -> str:
     return f"https://raw.githubusercontent.com/{ITIHASA_REPO}/{ITIHASA_COMMIT}/{repo_relative_path}"
 
 
-def _download(url: str, destination: Path) -> None:
-    """Download `url` to `destination`, atomically: a sibling `.part` file plus `os.replace`.
-
-    `destination` either does not exist or holds a complete download; an interrupted
-    transfer can never be mistaken for a cached file on the next run.
-    """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    part = destination.with_name(destination.name + ".part")
-    try:
-        with (
-            urllib.request.urlopen(url, timeout=ITIHASA_DOWNLOAD_TIMEOUT_S) as response,
-            part.open("wb") as handle,
-        ):
-            shutil.copyfileobj(response, handle)
-        os.replace(part, destination)
-    finally:
-        part.unlink(missing_ok=True)
-
-
 def load_itihasa(split: Split, cache_dir: Path | None = None) -> ParallelCorpus:
     """Load one Itihāsa split as a `ParallelCorpus` of `("san_Deva", "eng_Latn")`.
 
@@ -99,10 +81,10 @@ def load_itihasa(split: Split, cache_dir: Path | None = None) -> ParallelCorpus:
     en_path = resolved_cache_dir / f"{split}.en"
     if not sn_path.exists():
         logger.info("downloading Itihāsa %s (Sanskrit) to %s", split, sn_path)
-        _download(_raw_url(f"{repo_relative}.sn"), sn_path)
+        download_file(_raw_url(f"{repo_relative}.sn"), sn_path, timeout=ITIHASA_DOWNLOAD_TIMEOUT_S)
     if not en_path.exists():
         logger.info("downloading Itihāsa %s (English) to %s", split, en_path)
-        _download(_raw_url(f"{repo_relative}.en"), en_path)
+        download_file(_raw_url(f"{repo_relative}.en"), en_path, timeout=ITIHASA_DOWNLOAD_TIMEOUT_S)
 
     corpus, dropped = read_aligned_files(
         {"san_Deva": sn_path, "eng_Latn": en_path}, name="itihasa", split=split

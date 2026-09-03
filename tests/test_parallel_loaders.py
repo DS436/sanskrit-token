@@ -6,13 +6,15 @@ each four lines with one empty Sanskrit line, matching the network-gate pattern 
 `SANSKRIT_TOK_NETWORK_TESTS` is set.
 """
 
+import io
 import os
+import urllib.request
 from pathlib import Path
 
 import pytest
 
 from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl, save_jsonl
-from sanskrit_tok.data.parallel import read_aligned_files
+from sanskrit_tok.data.parallel import download_file, read_aligned_files
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SAMAYIK_MINI = FIXTURES / "samayik_mini"
@@ -22,6 +24,49 @@ NETWORK_TESTS = pytest.mark.skipif(
     not os.environ.get("SANSKRIT_TOK_NETWORK_TESTS"),
     reason="set SANSKRIT_TOK_NETWORK_TESTS=1 to exercise the real download",
 )
+
+
+# -------------------------------------------------------------------------- download_file
+
+
+def test_download_file_lands_atomically_with_no_part_file_left(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = b"aligned sentence bytes"
+
+    def fake_urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    destination = tmp_path / "nested" / "file.sa"
+    download_file("https://example.invalid/file.sa", destination, timeout=5)
+
+    assert destination.read_bytes() == payload
+    assert list(tmp_path.rglob("*.part")) == []
+
+
+class _RaisingStream(io.BytesIO):
+    """A response whose `read` fails partway through, to exercise the interrupted path."""
+
+    def read(self, *args: object, **kwargs: object) -> bytes:
+        raise OSError("connection reset mid-copy")
+
+
+def test_download_file_leaves_nothing_behind_when_the_stream_fails_mid_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_urlopen(url: str, timeout: float | None = None) -> _RaisingStream:
+        return _RaisingStream(b"partial")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    destination = tmp_path / "file.sa"
+    with pytest.raises(OSError, match="mid-copy"):
+        download_file("https://example.invalid/file.sa", destination, timeout=5)
+
+    assert not destination.exists()
+    assert list(tmp_path.glob("*.part")) == []
 
 
 # --------------------------------------------------------------- read_aligned_files

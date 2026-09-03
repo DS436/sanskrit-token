@@ -13,18 +13,18 @@ dataset described in Aralikatte et al., LREC-COLING 2024.
 
 Reproducibility follows the raw-URL pin, not a per-file sha256: `SAMAYIK_COMMIT` is
 baked into every download URL, so a re-run always fetches the exact bytes this project
-was built against, the same mechanism `flores.py` documents for its non-tarball sources.
+was built against. `flores.py` uses a checksum-verified variant of this download
+mechanism for its tarball source; this loader's files have no published per-file
+checksum to verify against, so the commit pin alone is the reproducibility guarantee.
 """
 
 import logging
-import os
-import shutil
-import urllib.request
 from pathlib import Path
 from typing import Literal
 
 from sanskrit_tok.data.parallel import (
     ParallelCorpus,
+    download_file,
     load_jsonl,
     read_aligned_files,
     save_jsonl,
@@ -62,25 +62,6 @@ def _raw_url(repo_relative_path: str) -> str:
     return f"https://raw.githubusercontent.com/{SAMAYIK_REPO}/{SAMAYIK_COMMIT}/{repo_relative_path}"
 
 
-def _download(url: str, destination: Path) -> None:
-    """Download `url` to `destination`, atomically: a sibling `.part` file plus `os.replace`.
-
-    `destination` either does not exist or holds a complete download; an interrupted
-    transfer can never be mistaken for a cached file on the next run.
-    """
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    part = destination.with_name(destination.name + ".part")
-    try:
-        with (
-            urllib.request.urlopen(url, timeout=SAMAYIK_DOWNLOAD_TIMEOUT_S) as response,
-            part.open("wb") as handle,
-        ):
-            shutil.copyfileobj(response, handle)
-        os.replace(part, destination)
-    finally:
-        part.unlink(missing_ok=True)
-
-
 def load_samayik(split: Split, cache_dir: Path | None = None) -> ParallelCorpus:
     """Load one Sāmayik split as a `ParallelCorpus` of `("san_Deva", "eng_Latn")`.
 
@@ -106,10 +87,10 @@ def load_samayik(split: Split, cache_dir: Path | None = None) -> ParallelCorpus:
     en_path = resolved_cache_dir / f"{split}.en"
     if not sa_path.exists():
         logger.info("downloading Sāmayik %s (Sanskrit) to %s", split, sa_path)
-        _download(_raw_url(f"{repo_relative}.sa"), sa_path)
+        download_file(_raw_url(f"{repo_relative}.sa"), sa_path, timeout=SAMAYIK_DOWNLOAD_TIMEOUT_S)
     if not en_path.exists():
         logger.info("downloading Sāmayik %s (English) to %s", split, en_path)
-        _download(_raw_url(f"{repo_relative}.en"), en_path)
+        download_file(_raw_url(f"{repo_relative}.en"), en_path, timeout=SAMAYIK_DOWNLOAD_TIMEOUT_S)
 
     corpus, dropped = read_aligned_files(
         {"san_Deva": sa_path, "eng_Latn": en_path}, name="samayik", split=split
