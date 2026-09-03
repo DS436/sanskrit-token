@@ -182,3 +182,78 @@ def test_make_figure_creates_a_missing_output_directory(tmp_path: Path) -> None:
     out_dir = tmp_path / "nested" / "outputs"
     paths = run.make_figure(_synthetic_results(), out_dir)
     assert all(path.exists() for path in paths)
+
+
+def test_build_tpp_figure_omits_unavailable_arm_and_captions_it() -> None:
+    """`T3_missing` sits in `config["sanskrit_arms"]` but has no `tpp` entry (it is in
+    `unavailable_arms` instead): it must not appear on any panel's x-axis, and the
+    caption must name it, built straight from `results["unavailable_arms"]`."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_figure(_synthetic_results())
+    try:
+        for axes in figure.axes:
+            tick_labels = [label.get_text() for label in axes.get_xticklabels()]
+            assert not any("T3_missing" in label for label in tick_labels)
+            # the two arms that DO have data are still there, in config order
+            assert any("T0_o200k" in label for label in tick_labels)
+            assert any("T1_bpe_raw_32k" in label for label in tick_labels)
+
+        caption_texts = [text.get_text() for text in figure.texts]
+        assert any("T3_missing" in text for text in caption_texts)
+        assert any("provisional" in text for text in caption_texts)
+    finally:
+        plt.close(figure)
+
+
+def test_unavailable_caption_lists_every_omitted_arm() -> None:
+    caption = run._unavailable_caption(
+        {"T3_indicsuper": "T3_indicsuper: no candidate tokenizer could be loaded. Tried:\n  a\n  b"}
+    )
+    assert "T3_indicsuper" in caption
+    assert "omitted" in caption
+    # the redundant "T3_indicsuper: " prefix and the per-candidate "Tried:" list are
+    # trimmed, so the per-candidate detail does not leak into the one-line caption.
+    assert "Tried" not in caption
+
+
+def test_unavailable_caption_is_empty_when_nothing_is_unavailable() -> None:
+    assert run._unavailable_caption({}) == ""
+
+
+# --- TPP summary enrichment ----------------------------------------------------------
+
+
+def test_enrich_summary_copies_bootstrap_keys_and_sets_ci() -> None:
+    raw = {
+        "value": 1.5,
+        "n": 2,
+        "unit": "tokens/proposition ratio",
+        "per_pair": [1.0, 2.0],
+        "n_undefined": 0,
+        "source_tokens": 3,
+        "pivot_tokens": 2,
+        "ci_low": 1.2,
+        "ci_high": 1.8,
+        "n_bootstrap": 1000,
+        "seed": 0,
+    }
+    summary = run._enrich_summary(raw, ci=0.95)
+    for key in (
+        "ci_low",
+        "ci_high",
+        "n_undefined",
+        "n_bootstrap",
+        "seed",
+        "source_tokens",
+        "pivot_tokens",
+    ):
+        assert summary[key] == raw[key]
+    assert summary["ci"] == 0.95
+    # summarise_metric's own contract still holds: value/n/unit passed through, and the
+    # per_pair distribution is reduced to distribution/mean/std rather than kept whole.
+    assert summary["value"] == 1.5
+    assert summary["n"] == 2
+    assert summary["unit"] == "tokens/proposition ratio"
+    assert summary["distribution"] == "per_pair"
+    assert "per_pair" not in summary

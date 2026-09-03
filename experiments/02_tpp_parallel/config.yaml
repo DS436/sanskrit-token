@@ -18,6 +18,7 @@ script_variants: {T0: [original, slp1], T3: [original, slp1], T1: [slp1], T2: [s
 
 n_bootstrap: 1000
 seed: 0
+ci: 0.95
 
 exclusion_path: data/exclusion_hashes.txt
 output_dir: outputs/02_tpp_parallel

@@ -20,20 +20,20 @@ arms (already cached; `T3_indicsuper` has none, see below).
 ## Summary
 
 **On Sāmayik test — the primary prose corpus this hypothesis is pre-registered
-against — the sign flips exactly as H2 predicts, for one arm.** `T1_bpe_raw_64k`, a
-32k/64k-vocabulary BPE tokenizer trained from scratch on Sanskrit, costs **0.908 tokens
+against — the sign flips exactly as H2 predicts, for one arm.** `T1_bpe_raw_64k`*, a
+64k-vocabulary BPE tokenizer trained from scratch on Sanskrit, costs **0.908 tokens
 per English token** [0.896, 0.921], a 95% CI entirely below 1.0; every English-centric
 T0 arm costs more tokens than English on the same sentences, with CIs entirely above 1.0
 (`T0_o200k` 1.835 [1.813, 1.858] up to `T3_sarvam` 2.416 [2.386, 2.447]). Two more
-Sanskrit-native arms sit within noise of parity (`T1_bpe_raw_32k` 1.009 [0.995, 1.023],
-`T2_unigram_raw_64k` 0.999 [0.985, 1.014]), and one (`T2_unigram_raw_32k`, 1.070) stays
+Sanskrit-native arms sit within noise of parity (`T1_bpe_raw_32k`* 1.009 [0.995, 1.023],
+`T2_unigram_raw_64k`* 0.999 [0.985, 1.014]), and one (`T2_unigram_raw_32k`*, 1.070) stays
 above. The flip is real but narrow: it holds for the best-performing provisional arm, on
 the primary corpus, and nowhere near universally.
 
 **The flip does not generalise past that one corpus.** On Sāmayik's out-of-domain split
 (`test_ood`, Mann Ki Baat transcripts) every arm, Sanskrit-native and English-centric
 alike, costs more tokens than English — the CIs of all eleven available arms sit
-entirely above 1.0, including the same `T1_bpe_raw_64k` that flipped on `test` (1.066
+entirely above 1.0, including the same `T1_bpe_raw_64k`* that flipped on `test` (1.066
 [1.053, 1.077] here). On FLORES devtest, likewise, every arm is above 1.0, T0 most
 severely (2.18–2.90 for the SLP1 variant). **Itihāsa (verse, secondary — meter is a
 confound, CLAUDE.md §2.7) shows the largest flip of all four corpora**: every one of the
@@ -87,8 +87,8 @@ short for Sanskrit, the opposite bias from TPP.
 | `T2_unigram_raw_32k`* (32k) | 1.070 [1.056, 1.086] | 1.051 [1.036, 1.067] | — | 1.80 |
 | `T2_unigram_raw_64k`* (64k) | 0.999 [0.985, 1.014] | 0.981 [0.967, 0.995] | — | 1.68 |
 
-Below 1.0 (CI excludes): `T1_bpe_raw_64k`. Above 1.0 (CI excludes): every T0/T3 arm and
-`T2_unigram_raw_32k`. Straddling 1.0: `T1_bpe_raw_32k`, `T2_unigram_raw_64k`.
+Below 1.0 (CI excludes): `T1_bpe_raw_64k`*. Above 1.0 (CI excludes): every T0/T3 arm and
+`T2_unigram_raw_32k`*. Straddling 1.0: `T1_bpe_raw_32k`*, `T2_unigram_raw_64k`*.
 
 ### Sāmayik test_ood (prose, primary, out-of-domain, n=4047)
 
@@ -151,10 +151,13 @@ Below 1.0: none. Above 1.0 (CI excludes): all eleven available arms. Straddling:
 ## Hindi pivot (FLORES devtest only, T0/T3 arms, same tokenizer both sides)
 
 Sa/Hi under the *original* script is close to parity or slightly above for every arm
-(1.06–1.41); under SLP1 it drops below 1.0 for every arm (0.91–0.95) — the same direction
-Experiment 01 found on this pivot (parity §, `hin_Deva`), and it is read with the same
-caveat: SLP1 encodes the Sanskrit phoneme inventory, so the Hindi side of this row is an
-approximation, not a faithful transliteration (see the caveat below).
+(1.06–1.41); under SLP1 it drops below 1.0 for every arm (0.91–0.95) — read that drop as
+a transliteration artifact, not a real result. It is driven by Hindi characters that fall
+outside SLP1's Sanskrit-only inventory, which inflates the Hindi token count sitting in
+this ratio's *denominator* and mechanically depresses it (mechanism and exact counts in
+the caveat below). The original-script column is the one to trust. Experiment 01's own
+Sa/Hi finding (1.06–1.35) is likewise an original-script number — it never measured an
+SLP1 Hindi pivot, so there is no earlier SLP1 result to compare this one against.
 
 | Arm | Sa/Hi (original) | Sa/Hi (SLP1, approximate) |
 |---|---|---|
@@ -179,6 +182,17 @@ same x-position for the *original*-script variant where the arm has one (T0/T3).
 dashed line at 1.0 marks the sign flip this experiment tests for. Provisional (T1/T2)
 arms carry a `*` in their x-tick label; the caption explains it.
 
+Each panel's y-axis is scaled from the SLP1 series alone, not from every point on the
+panel: `T0_gpt2`'s original-script number is 4–8x every other arm's (its old,
+Devanagari-blind vocabulary falls back to near-byte-level segmentation on raw Sanskrit —
+see Experiment 01), and letting it set the axis would squeeze the sign flip this figure
+exists to show into a sliver at the bottom. Any original-script marker that falls outside
+that range is drawn as a triangle just inside the axis edge, pointing further off-scale
+and annotated with its true value (e.g. "▲ 6.56"), rather than distorting the panel. The
+caption also names any arm omitted from a panel for being unavailable this run
+(built from `results.json`'s `unavailable_arms`, e.g. "`T3_indicsuper` omitted (no
+candidate tokenizer could be loaded)").
+
 ## Caveats
 
 - **T0/T3 arms are existing practice, not a controlled comparison** (CLAUDE.md §2.5):
@@ -202,15 +216,29 @@ arms carry a `*` in their x-tick label; the caption explains it.
   publicly released as of 2026-09-03 (`docs/decisions.md`). It is omitted from every
   table and the figure; `results.json`'s `unavailable_arms` records the three failures
   verbatim.
-- **Hindi SLP1 is approximate**, not a faithful transliteration: SLP1 encodes the
-  Sanskrit phoneme inventory, and Hindi carries nukta consonants and other signs outside
-  it (Experiment 01's `slp1_coverage` caveat applies identically here — the same FLORES
-  `hin_Deva` sentences are reused). Read the Sa/Hi (SLP1) column as indicative, and the
-  Sa/Hi (original) column as the faithful measurement.
+- **Hindi SLP1 is not trustworthy — mechanism and direction.** SLP1 encodes the Sanskrit
+  phoneme inventory; Hindi carries characters outside it. Of the 1012 FLORES Hindi
+  sentences, 513 contain a nukta consonant (क़ ज़ ड़ ढ़ फ़, and the other precomposed nukta
+  letters), which `sanscript` renders as a literal ASCII `'0'` rather than a phoneme, and
+  256 of the resulting SLP1 strings still contain raw, unconverted Devanagari (signs such
+  as candra-o, `ॉ`, that fall outside the scheme) — Experiment 01's `slp1_coverage`
+  measured these same two counts on these same FLORES `hin_Deva` sentences. Both effects
+  inflate the Hindi token count, which sits in the *denominator* of the Sa/Hi ratio, so
+  they mechanically depress the SLP1 numbers below their true value (0.91–0.95 above);
+  this is not evidence that Sanskrit costs fewer tokens than Hindi under these
+  tokenizers. The **original**-script Sa/Hi column (1.06–1.41) is the faithful
+  measurement and the one to read. Experiment 01's own Sa/Hi finding (1.06–1.35) is
+  likewise an original-script number — it never measured an SLP1 Hindi pivot.
 - **Fertility is reported, never headlined** (CLAUDE.md §2.1, §7): it counts tokens per
   whitespace word, which sandhi and compounding make artificially short for Sanskrit —
   the opposite bias from TPP — so it appears only in each table's last column and this
   one-line note, never in the summary above.
+- **Every stored TPP summary carries its bootstrap settings.** Each `results.json["tpp"][corpus][arm][variant][pivot]`
+  (and the equivalent `tpp_hindi` entry) is `{value, n, unit, distribution, mean, std,
+  ci_low, ci_high, ci, n_bootstrap, seed, n_undefined, source_tokens, pivot_tokens}` —
+  `ci` is the nominal confidence level the bootstrap targeted (`0.95` throughout this
+  run, from `config.yaml`'s `ci` key), so a reader of `results.json` alone can tell what
+  `ci_low`/`ci_high` are a CI *of* without cross-referencing `config.yaml`.
 - **No evaluation leakage detected.** `exclusion_check` in `results.json`: every Sanskrit
   sentence used by this experiment (2417 + 4047 + 11721 + 1012 = 19,197 total) hashes to
   an entry already in `data/exclusion_hashes.txt`; `n_missing` is 0 for all four corpora.

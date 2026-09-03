@@ -77,11 +77,19 @@ FIGURE_PIVOT = "T0_o200k"
 FIGURE_MAIN_VARIANT = SLP1
 FIGURE_SECONDARY_VARIANT = ORIGINAL
 FIGURE_SUPTITLE = "Tokens per proposition: Sanskrit vs English (o200k), 95% bootstrap CI"
-FIGURE_CAPTION = "* provisional: trained on parallel-corpus training splits"
+#: Static half of the caption; the omitted-arms half is built at plot time from
+#: `results["unavailable_arms"]` (`_unavailable_caption`) since it depends on the run.
+FIGURE_CAPTION_PROVISIONAL = "* provisional: trained on parallel-corpus training splits"
+#: Fraction of the SLP1-series y-range added above and below as headroom, and how far
+#: inside the top/bottom edge an off-scale (clipped) secondary marker is drawn.
+FIGURE_Y_PAD_FRACTION = 0.15
+FIGURE_CLIP_INSET_FRACTION = 0.04
 
 #: `DetailedMetricResult` keys `summarise_metric` drops (it keeps only value/n/unit/
 #: distribution/mean/std); the brief requires them copied from the raw `tpp` result into
-#: the stored summary by hand.
+#: the stored summary by hand. `ci` (the nominal confidence level, e.g. 0.95) is not
+#: itself a key `tpp()` returns — only `ci_low`/`ci_high` are — so it is not in this
+#: tuple; `_enrich_summary` sets it explicitly from the value the caller used.
 _TPP_EXTRA_KEYS: tuple[str, ...] = (
     "ci_low",
     "ci_high",
@@ -303,17 +311,22 @@ def variants_for_family(family: str, script_variants: Mapping[str, Sequence[str]
 # ------------------------------------------------------------------------- TPP / metrics
 
 
-def _enrich_summary(raw: Mapping[str, Any]) -> dict[str, Any]:
+def _enrich_summary(raw: Mapping[str, Any], ci: float) -> dict[str, Any]:
     """`summarise_metric(raw)` plus the bootstrap/undefined-count keys it drops.
 
     `summarise_metric` (CLAUDE.md §7 contract) keeps only `value`/`n`/`unit`/
     `distribution`/`mean`/`std`; `tpp`'s `ci_low`, `ci_high`, `n_undefined`,
     `n_bootstrap`, `seed`, `source_tokens` and `pivot_tokens` are the caller's to record
     alongside it (`summary.py`'s own docstring says as much), which is what this does.
+    `ci` (the nominal confidence level the caller passed to `tpp()`, e.g. `0.95`) is not
+    part of `tpp()`'s own return value — only the resulting `ci_low`/`ci_high` bounds are
+    — so it is set here from the argument, next to the bounds it produced, rather than
+    copied from `raw`.
     """
     summary = dict(summarise_metric(raw))
     for key in _TPP_EXTRA_KEYS:
         summary[key] = raw[key]
+    summary["ci"] = ci
     return summary
 
 
@@ -325,6 +338,7 @@ def compute_tpp(
     script_variants: Mapping[str, Sequence[str]],
     n_bootstrap: int,
     seed: int,
+    ci: float,
 ) -> dict[str, dict[str, dict[str, dict[str, dict[str, Any]]]]]:
     """`corpus -> arm -> variant -> pivot -> summary`, per the brief's `results.json` shape.
 
@@ -354,8 +368,9 @@ def compute_tpp(
                         pivot_tokenizer,
                         n_bootstrap=n_bootstrap,
                         seed=seed,
+                        ci=ci,
                     )
-                    pivot_result[pivot_name] = _enrich_summary(raw)
+                    pivot_result[pivot_name] = _enrich_summary(raw, ci)
                     logger.info(
                         "%s / %s / %s / vs %s: TPP %.3f [%.3f, %.3f]",
                         corpus.name,
@@ -379,6 +394,7 @@ def compute_tpp_hindi(
     script_variants: Mapping[str, Sequence[str]],
     n_bootstrap: int,
     seed: int,
+    ci: float,
 ) -> dict[str, dict[str, Any]]:
     """`arm -> variant -> summary` for the Hindi pivot: T0/T3 arms only, same tokenizer
     scoring both sides (config.yaml resolution 4); `{}` if the corpus has no Hindi side.
@@ -398,8 +414,9 @@ def compute_tpp_hindi(
                 corpus.hindi[variant],
                 n_bootstrap=n_bootstrap,
                 seed=seed,
+                ci=ci,
             )
-            variant_result[variant] = _enrich_summary(raw)
+            variant_result[variant] = _enrich_summary(raw, ci)
             logger.info(
                 "%s / %s / %s vs Hindi: TPP %.3f [%.3f, %.3f]",
                 corpus.name,
@@ -464,17 +481,61 @@ def arm_label(name: str, vocab_size: int) -> str:
     return f"{name}{star} ({thousands}k)"
 
 
-def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
-    """Four panels stacked vertically, one per corpus in config order (prose first).
+def _unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
+    """One short sentence naming every arm omitted this run, built from `unavailable_arms`.
 
-    Each panel plots, for every arm present in that corpus's `tpp` entry (unavailable
-    arms have none and are silently omitted from the x-axis): the TPP of the SLP1
-    variant against `T0_o200k` as a point with a 95% bootstrap-CI error bar (every arm
-    has an SLP1 variant, so this puts T0/T3/T1/T2 on the same footing), plus — for T0/T3
-    arms, which also carry an `original`-script variant — a second, thin marker at the
-    same x position showing the un-transliterated number, so the transliteration effect
-    is visible. A dashed line at 1.0 marks the sign flip TPP is testing for. Provisional
-    (T1/T2) arms carry a `*` in their tick label; the caption explains it.
+    `unavailable_arms[name]` is the full exception text (every candidate id tried, one
+    per line); this keeps only the first sentence, with the redundant `"<name>: "` prefix
+    `TokenizerUnavailable` puts on it stripped, so the caption stays one line per arm
+    instead of reproducing the whole candidate list. Returns `""` when nothing is
+    unavailable, so the caller can omit the sentence entirely rather than print "Omitted:
+    (none)".
+    """
+    if not unavailable_arms:
+        return ""
+    parts: list[str] = []
+    for name in sorted(unavailable_arms):
+        message = unavailable_arms[name]
+        first_line = message.splitlines()[0] if message else ""
+        first_line = first_line.split(" Tried:")[0].strip()
+        prefix = f"{name}:"
+        if first_line.startswith(prefix):
+            first_line = first_line[len(prefix) :].strip()
+        first_line = first_line.rstrip(".")
+        parts.append(f"{name} omitted ({first_line})" if first_line else f"{name} omitted")
+    return "Not shown (unavailable this run): " + "; ".join(parts) + "."
+
+
+def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
+    """Build (but do not save or close) the four-panel TPP figure; returns the `Figure`.
+
+    Split out from `make_figure` so tests can inspect the constructed `Figure` — its
+    axes' tick labels, its `.texts` (the caption) — before anything is written to disk or
+    the figure is closed, rather than only being able to check that two files exist.
+
+    Four panels stacked vertically, one per corpus in config order (prose first). Each
+    panel plots, for every arm present in that corpus's `tpp` entry (unavailable arms
+    have none and are silently omitted from the x-axis): the TPP of the SLP1 variant
+    against `T0_o200k` as a point with a 95% bootstrap-CI error bar (every arm has an
+    SLP1 variant, so this puts T0/T3/T1/T2 on the same footing), plus — for T0/T3 arms,
+    which also carry an `original`-script variant — a second, thin marker at the same x
+    position showing the un-transliterated number, so the transliteration effect is
+    visible. A dashed line at 1.0 marks the sign flip TPP is testing for.
+
+    Each panel's y-axis is scaled from the SLP1 series alone (its values and CI bounds,
+    plus 1.0, plus headroom) rather than from every point on the panel: `T0_gpt2`'s
+    original-script number is 4-8x every other arm's (CLAUDE.md §2.1 — an old,
+    Devanagari-blind vocabulary falling back to near-byte-level segmentation), and
+    letting it set the axis limits, as an unscaled scatter would, squeezes every other
+    point — including the SLP1 sign flip this figure exists to show — into a sliver at
+    the bottom. A secondary marker that falls outside the resulting y-range is instead
+    drawn just inside the axis edge as a triangle pointing further off-scale, annotated
+    with its true value (e.g. "▲ 6.56"), so the reader can see it exists and what it is
+    without it distorting the rest of the panel.
+
+    Provisional (T1/T2) arms carry a `*` in their tick label; the caption explains it,
+    together with one sentence naming any arm omitted for being unavailable this run
+    (`results["unavailable_arms"]`, `_unavailable_caption`).
     """
     import matplotlib
 
@@ -490,7 +551,6 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
     if not corpus_entries:
         raise ValueError("results['config']['corpora'] is empty; nothing to plot")
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     n_panels = len(corpus_entries)
     figure, axes_grid = plt.subplots(n_panels, 1, figsize=(9.5, 3.2 * n_panels), squeeze=False)
     axes_list = [row[0] for row in axes_grid]
@@ -512,10 +572,11 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
             labels.append(arm_label(arm_name, vocab_size))
 
             main_entry = corpus_tpp[arm_name].get(FIGURE_MAIN_VARIANT, {}).get(FIGURE_PIVOT)
-            if main_entry is not None and main_entry["value"] is not None:
-                value = float(main_entry["value"])
-                ci_low = main_entry.get("ci_low")
-                ci_high = main_entry.get("ci_high")
+            main_value = main_entry.get("value") if main_entry is not None else None
+            if main_value is not None:
+                value = float(main_value)
+                ci_low = main_entry.get("ci_low") if main_entry is not None else None
+                ci_high = main_entry.get("ci_high") if main_entry is not None else None
                 main_values.append(value)
                 lower_err.append(value - ci_low if ci_low is not None else 0.0)
                 upper_err.append(ci_high - value if ci_high is not None else 0.0)
@@ -527,11 +588,32 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
             secondary_entry = (
                 corpus_tpp[arm_name].get(FIGURE_SECONDARY_VARIANT, {}).get(FIGURE_PIVOT)
             )
-            if secondary_entry is not None and secondary_entry["value"] is not None:
+            secondary_value = secondary_entry.get("value") if secondary_entry is not None else None
+            if secondary_value is not None:
                 secondary_x.append(position)
-                secondary_values.append(float(secondary_entry["value"]))
+                secondary_values.append(float(secondary_value))
 
         positions = list(range(len(available_arms)))
+
+        # Y-range from the SLP1 (main) series alone, so an off-scale original-script
+        # point (chiefly T0_gpt2) cannot squash the rest of the panel.
+        main_lows = [
+            value - lower for value, lower in zip(main_values, lower_err, strict=True)
+        ]
+        main_highs = [
+            value + upper for value, upper in zip(main_values, upper_err, strict=True)
+        ]
+        finite_lows = [value for value in main_lows if not math.isnan(value)]
+        finite_highs = [value for value in main_highs if not math.isnan(value)]
+        if finite_lows and finite_highs:
+            span_low = min([*finite_lows, 1.0])
+            span_high = max([*finite_highs, 1.0])
+            span = span_high - span_low
+            pad = span * FIGURE_Y_PAD_FRACTION if span > 0 else max(span_high * 0.2, 0.1)
+            y_bottom, y_top = span_low - pad, span_high + pad
+        else:
+            y_bottom, y_top = 0.0, 2.0
+
         axes.errorbar(
             positions,
             main_values,
@@ -542,10 +624,48 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
             label="SLP1 (every arm)",
             zorder=3,
         )
-        if secondary_values:
+
+        # Secondary (original-script) markers: plotted normally inside the SLP1-derived
+        # range, clipped to the nearest edge with an annotated arrow otherwise.
+        in_range_x, in_range_values = [], []
+        clip_inset = (y_top - y_bottom) * FIGURE_CLIP_INSET_FRACTION
+        for x, value in zip(secondary_x, secondary_values, strict=True):
+            if value > y_top:
+                clip_y = y_top - clip_inset
+                axes.scatter(
+                    [x], [clip_y], marker="^", s=70, color="#c05621", zorder=4
+                )
+                axes.annotate(
+                    f"▲ {value:.2f}",
+                    (x, clip_y),
+                    textcoords="offset points",
+                    xytext=(0, 4),
+                    ha="center",
+                    fontsize=6,
+                    color="#c05621",
+                )
+            elif value < y_bottom:
+                clip_y = y_bottom + clip_inset
+                axes.scatter(
+                    [x], [clip_y], marker="v", s=70, color="#c05621", zorder=4
+                )
+                axes.annotate(
+                    f"▼ {value:.2f}",
+                    (x, clip_y),
+                    textcoords="offset points",
+                    xytext=(0, -4),
+                    ha="center",
+                    va="top",
+                    fontsize=6,
+                    color="#c05621",
+                )
+            else:
+                in_range_x.append(x)
+                in_range_values.append(value)
+        if in_range_values:
             axes.scatter(
-                secondary_x,
-                secondary_values,
+                in_range_x,
+                in_range_values,
                 marker="_",
                 s=90,
                 linewidths=2,
@@ -553,7 +673,9 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
                 label="original script (T0/T3 only)",
                 zorder=2,
             )
+
         axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
+        axes.set_ylim(y_bottom, y_top)
         axes.set_xticks(positions)
         axes.set_xticklabels(labels, rotation=40, ha="right", fontsize=7)
         axes.set_xlim(-0.5, max(len(positions) - 0.5, 0.5))
@@ -563,10 +685,23 @@ def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
         if panel_index == 0:
             axes.legend(fontsize=7, loc="best")
 
-    figure.suptitle(FIGURE_SUPTITLE, fontsize=11)
-    figure.text(0.01, 0.005, FIGURE_CAPTION, fontsize=7)
-    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
+    caption = FIGURE_CAPTION_PROVISIONAL
+    omitted = _unavailable_caption(results.get("unavailable_arms", {}))
+    if omitted:
+        caption = f"{caption}  {omitted}"
 
+    figure.suptitle(FIGURE_SUPTITLE, fontsize=11)
+    figure.text(0.01, 0.005, caption, fontsize=7)
+    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
+    return figure
+
+
+def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
+    """Build the central TPP figure (`_build_tpp_figure`) and save it as PDF and PNG."""
+    import matplotlib.pyplot as plt
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    figure = _build_tpp_figure(results)
     paths = [out_dir / f"{FIGURE_STEM}.pdf", out_dir / f"{FIGURE_STEM}.png"]
     for path in paths:
         figure.savefig(path, dpi=200)
@@ -606,6 +741,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     random.seed(seed)
     np.random.seed(seed)
     n_bootstrap = int(config["n_bootstrap"])
+    ci = float(config.get("ci", 0.95))
 
     corpora_config: list[dict[str, Any]] = list(config["corpora"])
     if not corpora_config:
@@ -639,7 +775,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arms, unavailable_arms = load_arms(all_arm_names)
 
     tpp_results = compute_tpp(
-        corpora, arms, sanskrit_arm_names, english_pivots, script_variants, n_bootstrap, seed
+        corpora, arms, sanskrit_arm_names, english_pivots, script_variants, n_bootstrap, seed, ci
     )
     hindi_corpus = next((c for c in corpora if c.name == hindi_pivot_corpus_name), None)
     if hindi_corpus is None:
@@ -649,7 +785,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             hindi_pivot_corpus_name,
         )
     tpp_hindi = compute_tpp_hindi(
-        hindi_corpus, arms, sanskrit_arm_names, script_variants, n_bootstrap, seed
+        hindi_corpus, arms, sanskrit_arm_names, script_variants, n_bootstrap, seed, ci
     )
     fertility_results, compression_results = compute_fertility_compression(
         corpora, arms, sanskrit_arm_names, script_variants
