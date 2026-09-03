@@ -1,0 +1,35 @@
+# Provisional T1/T2 tokenizer training (exp02 Task 4).
+#
+# Trains BPE and Unigram tokenizers on the Sanskrit side of the Sāmayik and Itihāsa
+# *training* splits, in SLP1, at matched 32k/64k vocabulary sizes (CLAUDE.md §2.5). These
+# arms are provisional (docs/decisions.md, "Provisional T1/T2 tokenizers..."): they will
+# be retrained on the monolingual corpus (DCS, GRETIL, Wikipedia) once milestone M1 lands.
+#
+# Relative paths are resolved against the repository root, not the working directory.
+
+corpus_path: data/processed/tok_train_slp1.txt
+
+# Prose before verse (CLAUDE.md §7): Sāmayik precedes Itihāsa in every table and config.
+sources:
+  - samayik_train
+  - itihasa_train
+
+exclusion_path: data/exclusion_hashes.txt
+
+arms:
+  - name: T1_bpe_raw_32k
+    algo: bpe
+    vocab_size: 32000
+  - name: T1_bpe_raw_64k
+    algo: bpe
+    vocab_size: 64000
+  - name: T2_unigram_raw_32k
+    algo: unigram
+    vocab_size: 32000
+  - name: T2_unigram_raw_64k
+    algo: unigram
+    vocab_size: 64000
+
+seed: 0
+
+output_dir: outputs/tokenizers
