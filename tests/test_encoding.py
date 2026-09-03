@@ -99,9 +99,16 @@ def test_non_slp1_ascii_passes_through_both_directions(script: Script) -> None:
 
 
 def test_latin_digits_and_punctuation_pass_through_to_slp1() -> None:
-    """Everything non-Devanagari survives the ingest direction unchanged."""
+    """Everything non-Devanagari survives the ingest direction from a Devanagari source."""
     text = "The word संस्कृतम् means Sanskrit (1.5%)."
     assert to_slp1(text, "devanagari") == "The word saMskftam means Sanskrit (1.5%)."
+
+
+def test_iast_source_reads_ascii_letters_as_phonemes() -> None:
+    """The forward passthrough guarantee is scoped to Devanagari: IAST is romanised."""
+    assert to_slp1("The", "iast") == "Te"
+    assert to_slp1("Sanskrit", "iast") == "sanskrit"
+    assert to_slp1("|", "iast") == "."
 
 
 def test_from_slp1_decodes_ascii_and_so_does_not_roundtrip_latin() -> None:

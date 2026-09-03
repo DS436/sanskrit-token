@@ -6,8 +6,13 @@ ASCII, one character per phoneme, and lossless for the Sanskrit phoneme inventor
 
 Passthrough is asymmetric, because SLP1 is itself written in ASCII:
 
-- `to_slp1` leaves every non-Devanagari character alone, so Latin words, digits,
-  punctuation and whitespace embedded in a Devanagari line survive conversion.
+- `to_slp1(text, "devanagari")` leaves every non-Devanagari character alone, so Latin
+  words, digits, punctuation and whitespace embedded in a Devanagari line survive
+  conversion. That guarantee is scoped to `source="devanagari"`.
+- `to_slp1(text, "iast")` does **not** give it. IAST is itself a romanisation, so ASCII
+  letters are read as phonemes in the forward direction too (`"The"` -> `"Te"`,
+  `"Sanskrit"` -> `"sanskrit"`) and `|` is danda (-> `.`). Only ASCII outside the IAST
+  alphabet passes through.
 - `from_slp1` reads its input as SLP1, so ASCII characters that SLP1 uses are decoded
   rather than passed through: letters are phonemes, digits become Devanagari digits,
   `'` is avagraha, `.` is danda, `~` is candrabindu and `|` is Vedic `ḻh`. Only
