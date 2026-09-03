@@ -1,0 +1,30 @@
+# Experiment 01 — baseline penalty (RQ1), CLAUDE.md §10.
+#
+# Relative paths are resolved against the repository root (the parent of `experiments/`),
+# not the working directory, so the runner works from anywhere in the repo.
+
+experiment: 01_baseline_penalty
+
+# Off-the-shelf English-centric arms (CLAUDE.md §6). Reported as *existing practice*:
+# their vocabulary sizes differ, so this is not a controlled comparison (CLAUDE.md §2.5).
+tokenizers:
+  - T0_o200k
+  - T0_llama4
+  - T0_gemma3
+
+# FLORES-200 is aligned by index across languages, which is what makes parity meaningful.
+languages:
+  - san_Deva
+  - hin_Deva
+  - eng_Latn
+
+split: devtest
+flores_jsonl: data/raw/flores/devtest.jsonl
+output_dir: outputs/01_baseline_penalty
+
+# Parity denominators. `eng_Latn` is the default pivot, `hin_Deva` the Indic control.
+pivots:
+  - eng_Latn
+  - hin_Deva
+
+seed: 0
