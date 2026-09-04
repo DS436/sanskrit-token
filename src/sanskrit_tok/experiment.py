@@ -53,6 +53,7 @@ from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailab
 
 if TYPE_CHECKING:
     from sanskrit_tok.data.parallel import ParallelCorpus
+    from sanskrit_tok.tokenizers.base import Tokenizer
 
 __all__ = [
     "ENGLISH_LANGUAGE",
@@ -437,6 +438,10 @@ class TextInvariants(TypedDict):
     nonletter_multiset_preserved: bool
     nonletter_missing: dict[str, int]
     nonletter_added: dict[str, int]
+    nonletter_chars_missing_gross: int
+    nonletter_chars_added_gross: int
+    nonletter_missing_net: dict[str, int]
+    nonletter_added_net: dict[str, int]
     letter_chars_raw: int
     letter_chars_out: int
     letter_retention: float
@@ -464,7 +469,12 @@ def text_invariants(
       phonemes and the splitter normalises orthography (anusvāra, visarga). Those get a
       ratio, `letter_retention`, to be reported and interpreted rather than asserted on.
 
-    `nonletter_missing` and `nonletter_added` break the failure down by character, because
+    `nonletter_missing`/`nonletter_added` are **gross**: the per-sentence differences,
+    summed. `nonletter_missing_net`/`nonletter_added_net` are the corpus-level net, which
+    cancels a character deleted in one sentence against the same character invented in
+    another and can read zero over a corpus riddled with both.
+    `nonletter_multiset_preserved` is the strict, per-sentence claim: both gross tallies
+    empty. They break the failure down by character, because
     "the multiset changed" is not by itself actionable and the causes are not equivalent. On
     Experiment 03's text the residual after affix preservation is almost entirely *mid-word*
     marks — a hyphen inside a compound the splitter turns into a space, an avagraha marking
@@ -484,37 +494,133 @@ def text_invariants(
         )
     raw_nonletters: Counter[str] = Counter()
     out_nonletters: Counter[str] = Counter()
+    missing: Counter[str] = Counter()
+    added: Counter[str] = Counter()
     letters_raw = 0
     letters_out = 0
-    for text in raw_texts:
-        for char in text:
-            if char.isspace():
-                continue
-            if char.isalpha():
-                letters_raw += 1
-            else:
-                raw_nonletters[char] += 1
-    for text in out_texts:
-        for char in text:
-            if char.isspace():
-                continue
-            if char.isalpha():
-                letters_out += 1
-            else:
-                out_nonletters[char] += 1
+    for raw_text, out_text in zip(raw_texts, out_texts, strict=True):
+        raw_counts = _nonletter_counts(raw_text)
+        out_counts = _nonletter_counts(out_text)
+        raw_nonletters += raw_counts
+        out_nonletters += out_counts
+        # Gross, not net: summed per sentence, so a danda deleted here and one invented
+        # there are two faults rather than zero. The corpus-level net difference — which is
+        # what a single `Counter(all) - Counter(all)` gives — cancels them and reports a
+        # clean sheet, which is exactly the kind of comfort this check exists to withhold.
+        missing += raw_counts - out_counts
+        added += out_counts - raw_counts
+        letters_raw += sum(1 for c in raw_text if c.isalpha())
+        letters_out += sum(1 for c in out_text if c.isalpha())
 
-    missing = raw_nonletters - out_nonletters
-    added = out_nonletters - raw_nonletters
     return TextInvariants(**{
         "nonletter_chars_raw": sum(raw_nonletters.values()),
         "nonletter_chars_out": sum(out_nonletters.values()),
-        "nonletter_multiset_preserved": raw_nonletters == out_nonletters,
+        "nonletter_multiset_preserved": not missing and not added,
         "nonletter_missing": dict(missing.most_common()),
         "nonletter_added": dict(added.most_common()),
+        "nonletter_chars_missing_gross": sum(missing.values()),
+        "nonletter_chars_added_gross": sum(added.values()),
+        "nonletter_missing_net": dict((raw_nonletters - out_nonletters).most_common()),
+        "nonletter_added_net": dict((out_nonletters - raw_nonletters).most_common()),
         "letter_chars_raw": letters_raw,
         "letter_chars_out": letters_out,
         "letter_retention": (letters_out / letters_raw) if letters_raw else math.nan,
     })
+
+
+def _nonletter_counts(text: str) -> Counter[str]:
+    return Counter(char for char in text if not char.isspace() and not char.isalpha())
+
+
+def strip_deleted_nonletters(raw: str, out: str) -> str:
+    """`raw` with the **non-letter** characters `out` no longer contains removed in place.
+
+    The deficit is a multiset difference over non-space, **non-letter** characters. Letters
+    are deliberately excluded: they change for legitimate reasons — reversing sandhi
+    restores elided phonemes, the splitter normalises anusvāra and visarga — so stripping
+    them measures garbling, not deletion, and the first version of this helper did exactly
+    that (docs/decisions.md, "Raw hyphens are pre-existing boundaries ... deletion cost
+    prices non-letters only").
+
+    Which *occurrence* of a repeated character is dropped is arbitrary — the multiset says a
+    danda went missing, not which one — so this walks `raw` left to right and drops the
+    first copies it meets. That approximation can move one token boundary relative to the
+    true counterfactual and cannot change the sign.
+    """
+    deficit = _nonletter_counts(raw)
+    deficit.subtract(_nonletter_counts(out))
+    deficit = Counter({char: count for char, count in deficit.items() if count > 0})
+    if not deficit:
+        return raw
+    kept: list[str] = []
+    for char in raw:
+        if deficit.get(char, 0) > 0:
+            deficit[char] -= 1
+            continue
+        kept.append(char)
+    return "".join(kept)
+
+
+def deletion_cost(
+    tokenizer: "Tokenizer",
+    raw_texts: Sequence[str],
+    out_texts: Sequence[str],
+    *,
+    source_tokens_saved: int | None = None,
+) -> dict[str, object]:
+    """How many of `tokenizer`'s tokens are spent on non-letter characters `out_texts` lost.
+
+    The column that keeps a transformed-text comparison honest: an arm measured on rewritten
+    text may look cheaper simply because it was handed less text. On Experiment 03 the
+    punctuation an earlier reconciliation deleted accounted for the entire headline effect
+    (docs/decisions.md, "Reconciliation must preserve every non-letter character").
+
+    Measured by **re-tokenising**, never by pricing characters at the mean bytes-per-token:
+    a punctuation character costs ≈0.5 tokens under these arms and a letter ≈0.2, so an
+    average is wrong by a factor of two in the flattering direction. Each raw text is
+    tokenised as-is and again with the missing non-letters removed; the pooled difference is
+    what the deletion was worth.
+
+    `source_tokens_saved` is the arm's own token saving, if the caller has it; the returned
+    `share_of_saving` is that ratio, and is `nan` when the saving is absent or **not
+    positive** — a share of a saving that does not exist is not a small number, it is not a
+    number.
+
+    A negative total is possible: removing a character can let two tokens merge into one the
+    vocabulary already has. It is reported as measured rather than clamped.
+    """
+    tokens_raw = 0
+    tokens_stripped = 0
+    chars_deleted = 0
+    n_texts_affected = 0
+    for raw, out in zip(raw_texts, out_texts, strict=True):
+        stripped = strip_deleted_nonletters(raw, out)
+        tokens_raw += len(tokenizer.encode(raw))
+        tokens_stripped += len(tokenizer.encode(stripped))
+        deleted = len(raw) - len(stripped)
+        chars_deleted += deleted
+        if deleted:
+            n_texts_affected += 1
+    cost = tokens_raw - tokens_stripped
+    share = (
+        cost / source_tokens_saved
+        if source_tokens_saved is not None and source_tokens_saved > 0
+        else math.nan
+    )
+    return {
+        "tokens_raw": tokens_raw,
+        "tokens_raw_without_deleted_chars": tokens_stripped,
+        "deletion_cost_tokens": cost,
+        "n_chars_deleted": chars_deleted,
+        "n_texts_affected": n_texts_affected,
+        "source_tokens_saved": source_tokens_saved,
+        "share_of_saving": share,
+        "method": (
+            "re-tokenised: tokens(raw) - tokens(raw with the multiset of NON-LETTER "
+            "characters absent from the transformed text removed), pooled; share is nan "
+            "unless the saving is positive"
+        ),
+    }
 
 
 # --------------------------------------------------------------------- results writing

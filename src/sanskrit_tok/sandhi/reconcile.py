@@ -42,7 +42,13 @@ Pure functions only: no I/O, no model, no cache (CLAUDE.md §8).
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-__all__ = ["DEFAULT_THRESHOLD", "MAX_WINDOW_SEGMENTS", "ReconcileResult", "reconcile"]
+__all__ = [
+    "DEFAULT_THRESHOLD",
+    "HYPHEN",
+    "MAX_WINDOW_SEGMENTS",
+    "ReconcileResult",
+    "reconcile",
+]
 
 #: Similarity a window of model segments must reach before it may replace a raw unit.
 #: 0.6 is `difflib`'s own conventional "close enough" cutoff and, on this model's output,
@@ -65,6 +71,11 @@ DEFAULT_THRESHOLD = 0.6
 #: precise failure this module exists to prevent — while the soft one still stops a
 #: degenerate output, whose ratio stops improving immediately, in O(cap) per unit.
 MAX_WINDOW_SEGMENTS = 8
+
+#: The character that already marks a boundary in the raw text. Parts either side of it are
+#: aligned separately and rejoined with it, so a hyphenated compound cannot be turned into
+#: whitespace-separated words and counted as a boundary the splitter found.
+HYPHEN = "-"
 
 
 @dataclass(frozen=True)
@@ -102,6 +113,22 @@ class ReconcileResult:
 
 def _non_space_chars(text: str) -> int:
     return sum(1 for char in text if not char.isspace())
+
+
+def _lstrip_nonletters(text: str) -> str:
+    """`text` without its leading non-letter run (`"'Cancel"` -> `"Cancel"`)."""
+    index = 0
+    while index < len(text) and not text[index].isalpha():
+        index += 1
+    return text[index:]
+
+
+def _rstrip_nonletters(text: str) -> str:
+    """`text` without its trailing non-letter run."""
+    end = len(text)
+    while end > 0 and not text[end - 1].isalpha():
+        end -= 1
+    return text[:end]
 
 
 def _peel(unit: str) -> tuple[str, str, str]:
@@ -263,12 +290,40 @@ def reconcile(
 
     for index, unit in enumerate(raw_units):
         prefix, core, suffix = _peel(unit) if _has_letter(unit) else ("", "", unit)
-        size, ratio = (
-            _best_window(core, segments, cursor, threshold, next_unit_key[index])
-            if core and cursor < len(segments)
-            else (0, 0.0)
-        )
-        if size == 0:
+
+        # Hyphen-separated parts are aligned independently. A hyphen in the raw text is a
+        # boundary the raw arm *already pays a token for*, so turning it into whitespace
+        # would credit T4 with a boundary it did not discover (docs/decisions.md, "Raw
+        # hyphens are pre-existing boundaries"). Each part gets its own window and the
+        # parts are rejoined with the original hyphens, so only boundaries the model found
+        # *inside* a part become spaces.
+        parts = core.split(HYPHEN) if core else []
+        rendered: list[str] = []
+        matched_any = False
+        inexact_here = False
+        for part in parts:
+            if not part:
+                rendered.append("")
+                continue
+            size, ratio = (
+                _best_window(part, segments, cursor, threshold, next_unit_key[index])
+                if cursor < len(segments)
+                else (0, 0.0)
+            )
+            if size == 0:
+                rendered.append(part)
+                continue
+            matched_any = True
+            if ratio < 1.0:
+                inexact_here = True
+            # Hyphens inside the model's own segments are dropped: the raw hyphens are
+            # re-inserted at the part joins below, so any hyphen the model emits is either
+            # an echo of one of those or an invention. Either way keeping it would break
+            # the count, and the raw text is authoritative for it.
+            rendered.append(" ".join(segments[cursor : cursor + size]).replace(HYPHEN, ""))
+            cursor += size
+
+        if not matched_any:
             out_units.append(unit)
             kept_verbatim += 1
             # A unit with no letters is emitted as written, but the model may have emitted
@@ -285,22 +340,24 @@ def reconcile(
             ):
                 cursor += 1
             continue
-        window = list(segments[cursor : cursor + size])
-        # No added whitespace: the prefix rejoins the first output segment and the suffix
-        # the last, so restoring them cannot manufacture a boundary — and therefore a
-        # token — that the raw sentence did not have.
-        window[0] = prefix + window[0]
-        window[-1] = window[-1] + suffix
-        out_units.extend(window)
-        cursor += size
-        if ratio < 1.0:
+
+        # The raw affix is authoritative. The model emits its own punctuation, and a
+        # segment that already carries a quote would otherwise be given the raw one too
+        # (`'Cancel'` against the segment `'Cancel` -> `''Cancel'`), so the first and last
+        # rendered pieces are stripped of their own outer non-letters first. No whitespace
+        # is added: restoring an affix must not manufacture a boundary, and therefore a
+        # token, that the raw sentence did not have.
+        rendered[0] = prefix + _lstrip_nonletters(rendered[0])
+        rendered[-1] = _rstrip_nonletters(rendered[-1]) + suffix
+        out_units.append(HYPHEN.join(rendered))
+        if inexact_here:
             replaced_inexact += 1
 
     text = " ".join(out_units)
     return ReconcileResult(
         text=text,
         n_units_raw=len(raw_units),
-        n_units_out=len(out_units),
+        n_units_out=len(text.split()),
         n_units_kept_verbatim=kept_verbatim,
         n_units_replaced_inexact=replaced_inexact,
         chars_raw=_non_space_chars(raw_slp1),

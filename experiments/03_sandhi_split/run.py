@@ -42,7 +42,6 @@ import logging
 import math
 import random
 import sys
-from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +54,7 @@ from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
     ENGLISH_LANGUAGE,
     SANSKRIT_LANGUAGE,
+    deletion_cost,
     exclusion_check_for,
     load_arms,
     load_config,
@@ -476,77 +476,6 @@ def compute_tpp(
     return results
 
 
-def _strip_deleted_chars(raw: str, split: str) -> str:
-    """`raw` with the characters the split text no longer contains removed, in place.
-
-    The deficit is a multiset difference over non-space characters: whatever `raw` has more
-    copies of than `split` does. Which *occurrence* is dropped is arbitrary — the multiset
-    says a danda went missing, not which one — so this walks `raw` left to right and drops
-    the first copies it meets. That arbitrariness is the documented approximation in
-    `deletion_cost`: it can move a token boundary by one position relative to the true
-    counterfactual, which is immaterial at corpus scale and cannot change the sign.
-    """
-    deficit = Counter(c for c in raw if not c.isspace())
-    deficit.subtract(Counter(c for c in split if not c.isspace()))
-    deficit = Counter({char: count for char, count in deficit.items() if count > 0})
-    if not deficit:
-        return raw
-    kept: list[str] = []
-    for char in raw:
-        if deficit.get(char, 0) > 0 and not char.isspace():
-            deficit[char] -= 1
-            continue
-        kept.append(char)
-    return "".join(kept)
-
-
-def deletion_cost(
-    tokenizer: LoadedTokenizer, raw_texts: Sequence[str], split_texts: Sequence[str]
-) -> dict[str, Any]:
-    """How many of the raw arm's tokens are spent on characters the split text lost.
-
-    This is the column the final review made mandatory. A split arm that looks cheaper may
-    simply have been handed less text: on Sāmayik test the punctuation the old
-    reconciliation deleted accounted for 77-110% of the controlled TPP delta, i.e. all of
-    it (docs/decisions.md, "Reconciliation must preserve every non-letter character").
-
-    Measured by **re-tokenising**, never by pricing characters at the mean bytes-per-token:
-    under these arms a punctuation character costs ~0.5 tokens and a letter ~0.2, so an
-    average is wrong by a factor of two in the direction that flatters the result. For each
-    sentence the raw text is tokenised as-is and again with the missing characters removed
-    (`_strip_deleted_chars`); the difference, pooled, is what the deletion was worth.
-
-    A negative total is possible in principle (removing a character can merge two tokens
-    into a longer one that is still a single token elsewhere in the vocabulary); it is
-    reported as measured rather than clamped.
-    """
-    tokens_raw = 0
-    tokens_stripped = 0
-    chars_deleted = 0
-    n_sentences_affected = 0
-    for raw, split in zip(raw_texts, split_texts, strict=True):
-        stripped = _strip_deleted_chars(raw, split)
-        tokens_raw += len(tokenizer.encode(raw))
-        tokens_stripped += len(tokenizer.encode(stripped))
-        deleted = len([c for c in raw if not c.isspace()]) - len(
-            [c for c in stripped if not c.isspace()]
-        )
-        chars_deleted += deleted
-        if deleted:
-            n_sentences_affected += 1
-    return {
-        "tokens_raw": tokens_raw,
-        "tokens_raw_without_deleted_chars": tokens_stripped,
-        "deletion_cost_tokens": tokens_raw - tokens_stripped,
-        "n_chars_deleted": chars_deleted,
-        "n_sentences_affected": n_sentences_affected,
-        "method": (
-            "re-tokenised: tokens(raw) - tokens(raw with the multiset of characters absent "
-            "from the reconciled text removed), pooled over the corpus"
-        ),
-    }
-
-
 def compute_tpp_delta(
     corpora: Sequence[CorpusData],
     arms: Mapping[str, LoadedTokenizer],
@@ -594,18 +523,21 @@ def compute_tpp_delta(
             entry["pivot"] = pivot_name
             entry["label"] = matched_pair_label(raw_arm, split_arm)
             entry["split_variant"] = SPLIT
-            cost = deletion_cost(arms[raw_arm], corpus.texts[RAW], corpus.texts[SPLIT])
             saving = counts_raw.source_total - counts_split.source_total
+            cost = deletion_cost(
+                arms[raw_arm],
+                corpus.texts[RAW],
+                corpus.texts[SPLIT],
+                source_tokens_saved=saving,
+            )
             entry["deletion_cost"] = cost
             entry["deletion_cost_tokens"] = cost["deletion_cost_tokens"]
             entry["source_tokens_saved"] = saving
-            entry["deletion_cost_share_of_saving"] = (
-                cost["deletion_cost_tokens"] / saving if saving else math.nan
-            )
+            entry["deletion_cost_share_of_saving"] = cost["share_of_saving"]
             pair_results[matched_pair_key(raw_arm, split_arm)] = entry
             logger.info(
                 "%s / %s: delta %+.4f [%+.4f, %+.4f] (split %.3f, raw %.3f, vs %s); "
-                "deletion cost %d token(s) of %d saved",
+                "non-letter deletion cost %s token(s) of %d saved",
                 corpus.name,
                 matched_pair_key(raw_arm, split_arm),
                 float(entry["delta"]),
@@ -614,7 +546,7 @@ def compute_tpp_delta(
                 float(entry["value_a"]),
                 float(entry["value_b"]),
                 pivot_name,
-                int(cost["deletion_cost_tokens"]),
+                cost["deletion_cost_tokens"],
                 int(saving),
             )
         results[corpus.name] = pair_results

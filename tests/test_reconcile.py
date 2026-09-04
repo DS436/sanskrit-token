@@ -362,12 +362,63 @@ def test_a_prefix_is_re_attached_to_the_first_segment_of_a_split() -> None:
     assert result.n_units_out == 2
 
 
-def test_a_mid_unit_hyphen_stays_inside_its_unit() -> None:
-    """Only the outermost non-letter runs are peeled: a hyphen between two letters is part
-    of the core and is the splitter's business, not this function's."""
-    result = reconcile("parAmarSa-dUraBAzA", "parAmarSa-dUra BAzA")
+def test_a_raw_hyphen_is_a_boundary_the_split_arm_is_not_credited_for() -> None:
+    """A hyphen already marks a boundary the raw arm pays a token for, so turning it into
+    whitespace would credit `T4` with a boundary it did not discover (docs/decisions.md,
+    "Raw hyphens are pre-existing boundaries"). The parts either side are aligned
+    independently and rejoined with the original hyphen."""
+    result = reconcile("parAmarSa-dUraBAzA", "parAmarSa dUraBAzA")
+
+    assert result.text == "parAmarSa-dUraBAzA"
+    assert result.n_units_out == 1
+
+
+def test_a_hyphen_survives_when_the_model_splits_on_it() -> None:
+    result = reconcile("rAma-lakzmaRO", "rAma lakzmaRO")
+
+    assert result.text == "rAma-lakzmaRO"
+
+
+def test_a_boundary_the_model_finds_inside_a_part_becomes_a_space() -> None:
+    """Only boundaries the model found *inside* a hyphen-delimited part are whitespace."""
+    result = reconcile("parAmarSa-dUraBAzA", "parAmarSa dUra BAzA")
 
     assert result.text == "parAmarSa-dUra BAzA"
+    assert result.n_units_out == 2
+
+
+def test_the_raw_affix_is_authoritative_and_is_not_doubled() -> None:
+    """The model emits its own quoting; the raw unit's affix wins and the segment's own
+    outer punctuation is stripped first, so `'Cancel'` does not come back as `''Cancel'`."""
+    result = reconcile("'Cancel'", "'Cancel")
+
+    assert result.text == "'Cancel'"
+
+
+def test_hyphen_counts_are_invariant_over_synthetic_cases() -> None:
+    import random
+
+    rng = random.Random(1)
+    stems = ["parAmarSa", "dUraBAzA", "rAma", "lakzmaRO", "viSvAsa", "kAraRAt"]
+    cases = 0
+    for _ in range(300):
+        parts = [rng.choice(stems) for _ in range(rng.randint(1, 3))]
+        unit = "-".join(parts)
+        raw = unit if rng.random() < 0.5 else f'"{unit},'
+        # The model variously keeps the hyphen, drops it, splits further, or drops a part.
+        style = rng.randrange(4)
+        if style == 0:
+            model = " ".join(parts)
+        elif style == 1:
+            model = "-".join(parts)
+        elif style == 2:
+            model = " ".join(p[:4] + " " + p[4:] if len(p) > 5 else p for p in parts)
+        else:
+            model = " ".join(parts[:-1])
+        out = reconcile(raw, model).text
+        assert out.count("-") == raw.count("-"), (raw, model, out)
+        cases += 1
+    assert cases == 300
 
 
 def test_a_suffix_survives_when_the_core_is_kept_verbatim() -> None:

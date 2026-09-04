@@ -573,3 +573,97 @@ def test_write_results_does_not_leave_a_truncated_file_when_sanitising_fails(
     assert json.loads((tmp_path / "results.json").read_text(encoding="utf-8")) == {
         "previous": 1
     }
+
+
+# ------------------------------------------------------- deletion cost (exp03 fix wave 2)
+
+
+class _MetaspaceFake:
+    """A tokenizer that prices a word boundary and every non-letter run as its own token.
+
+    Close enough to Metaspace BPE for the property under test: joining two pieces that were
+    separated by a non-letter costs fewer tokens than keeping them apart, so removing a
+    hyphen is worth at least one token.
+    """
+
+    def encode(self, text: str) -> list[int]:
+        tokens: list[str] = []
+        for word in text.split():
+            piece = ""
+            for char in word:
+                if char.isalpha():
+                    piece += char
+                else:
+                    if piece:
+                        tokens.append(piece)
+                        piece = ""
+                    tokens.append(char)
+            if piece:
+                tokens.append(piece)
+        return list(range(len(tokens)))
+
+
+def test_deletion_cost_is_zero_when_only_letters_changed() -> None:
+    """Letters change legitimately — restored visargas, normalised anusvāra — so they are
+    not deletions and must not be priced (docs/decisions.md, "Raw hyphens are pre-existing
+    boundaries ... deletion cost prices non-letters only")."""
+    from sanskrit_tok.experiment import deletion_cost
+
+    cost = deletion_cost(_MetaspaceFake(), ["prARina Agatya"], ["prARinaH Agatya"])
+
+    assert cost["deletion_cost_tokens"] == 0
+    assert cost["n_chars_deleted"] == 0
+
+
+def test_deletion_cost_prices_a_deleted_hyphen_at_at_least_one_token() -> None:
+    from sanskrit_tok.experiment import deletion_cost
+
+    cost = deletion_cost(_MetaspaceFake(), ["parAmarSa-dUraBAzA"], ["parAmarSa dUraBAzA"])
+
+    assert cost["n_chars_deleted"] == 1
+    assert isinstance(cost["deletion_cost_tokens"], int)
+    assert cost["deletion_cost_tokens"] >= 1
+
+
+def test_deletion_cost_share_is_nan_without_a_positive_saving() -> None:
+    from sanskrit_tok.experiment import deletion_cost
+
+    for saving in (None, 0, -50):
+        cost = deletion_cost(
+            _MetaspaceFake(),
+            ["tadapi karoti."],
+            ["tad api karoti"],
+            source_tokens_saved=saving,
+        )
+        assert math.isnan(float(cost["share_of_saving"])), saving
+
+    positive = deletion_cost(
+        _MetaspaceFake(),
+        ["tadapi karoti."],
+        ["tad api karoti"],
+        source_tokens_saved=10,
+    )
+    assert float(positive["share_of_saving"]) == pytest.approx(
+        float(positive["deletion_cost_tokens"]) / 10
+    )
+
+
+def test_strip_deleted_nonletters_leaves_letters_alone() -> None:
+    from sanskrit_tok.experiment import strip_deleted_nonletters
+
+    assert strip_deleted_nonletters("tadapi karoti.", "tad api karoti") == "tadapi karoti"
+    assert strip_deleted_nonletters("prARina Agatya", "prARinaH Agatya") == "prARina Agatya"
+
+
+def test_text_invariants_pools_gross_differences_not_the_net() -> None:
+    """A danda deleted in one sentence and one invented in another are two faults, not
+    zero; the corpus-level net would cancel them and report a clean sheet."""
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["a.", "b"], ["a", "b."])
+
+    assert stats["nonletter_chars_missing_gross"] == 1
+    assert stats["nonletter_chars_added_gross"] == 1
+    assert stats["nonletter_multiset_preserved"] is False
+    assert stats["nonletter_missing_net"] == {}
+    assert stats["nonletter_added_net"] == {}
