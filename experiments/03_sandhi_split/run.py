@@ -712,7 +712,15 @@ def splitter_stats(
                 f"{sorted(per_corpus)}. The manifest and the corpus jsonl files must come "
                 "from the same split run."
             )
-        invariants = text_invariants(corpus.texts[RAW], corpus.texts[SPLIT])
+        invariants = text_invariants(
+            corpus.texts[RAW], corpus.texts[SPLIT], corpus.texts[SPLIT_MODEL]
+        )
+        if not invariants["letters_out_subset_of_raw_union_model"]:
+            logger.warning(
+                "%s: the reconciled text contains letters present in NEITHER the raw "
+                "sentence nor the model output; reconciliation is inventing text",
+                corpus.name,
+            )
         if not invariants["nonletter_multiset_preserved"]:
             logger.warning(
                 "%s: the reconciled text does not preserve the non-letter character "

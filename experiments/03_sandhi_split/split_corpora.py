@@ -256,6 +256,7 @@ def split_corpus(
 
     started = time.perf_counter()
     raw_slp1_texts: list[str] = []
+    model_texts: list[str] = []
     out_texts: list[str] = []
     n_units_changed = 0
     n_units_raw = n_units_out = n_units_verbatim = n_units_inexact = 0
@@ -284,6 +285,7 @@ def split_corpus(
                 )
                 written += 1
                 raw_slp1_texts.append(raw_slp1)
+                model_texts.append(output_model)
                 out_texts.append(result.text)
                 if result.n_units_out != result.n_units_raw:
                     n_units_changed += 1
@@ -310,7 +312,13 @@ def split_corpus(
                 )
 
     os.replace(tmp_path, out_path)
-    invariants = text_invariants(raw_slp1_texts, out_texts)
+    invariants = text_invariants(raw_slp1_texts, out_texts, model_texts)
+    if not invariants["letters_out_subset_of_raw_union_model"]:
+        logger.warning(
+            "%s: the reconciled text contains letters present in NEITHER the raw sentence "
+            "nor the model output; reconciliation is inventing text",
+            name,
+        )
     if not invariants["nonletter_multiset_preserved"]:
         logger.warning(
             "%s: reconciliation did not preserve the non-letter character multiset "

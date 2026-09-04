@@ -445,10 +445,13 @@ class TextInvariants(TypedDict):
     letter_chars_raw: int
     letter_chars_out: int
     letter_retention: float
+    letters_out_subset_of_raw_union_model: bool
 
 
 def text_invariants(
-    raw_texts: Sequence[str], out_texts: Sequence[str]
+    raw_texts: Sequence[str],
+    out_texts: Sequence[str],
+    model_texts: Sequence[str] | None = None,
 ) -> TextInvariants:
     """What a transformation did to the characters of a corpus, pooled.
 
@@ -468,6 +471,22 @@ def text_invariants(
     * **Letter characters legitimately change**, because reversing sandhi restores elided
       phonemes and the splitter normalises orthography (anusvāra, visarga). Those get a
       ratio, `letter_retention`, to be reported and interpreted rather than asserted on.
+
+    `letters_out_subset_of_raw_union_model` is the third check, and the one that looks for
+    *invention* rather than deletion: per sentence, no letter may appear in the output more
+    often than the raw sentence and the model output together hold it. `model_texts` defaults
+    to `raw_texts`, i.e. to the strict "invent nothing at all" reading, for a transformation
+    with no second source.
+
+    **Its power is limited, and the limit is worth stating.** The budget has to be the *sum*
+    of the two sources rather than their element-wise max, because the output legitimately
+    mixes them — a region replaced by model segments sits beside a region kept verbatim from
+    the raw text, so a letter can exceed what either source alone holds. With the max budget
+    this check flags 471/2,417 Sāmayik-test and 2,627/11,721 Itihāsa sentences, every one of
+    them correct output. The sum budget cannot false-alarm, but it is loose: the rejoin bug
+    that turned `log-in` into `login-in` fits inside it. That class is caught instead by the
+    exact hyphen-count invariant in `sandhi.reconcile`'s tests. Treat this field as a floor —
+    a failure is definitely a bug, a pass is not a certificate.
 
     `nonletter_missing`/`nonletter_added` are **gross**: the per-sentence differences,
     summed. `nonletter_missing_net`/`nonletter_added_net` are the corpus-level net, which
@@ -498,7 +517,14 @@ def text_invariants(
     added: Counter[str] = Counter()
     letters_raw = 0
     letters_out = 0
-    for raw_text, out_text in zip(raw_texts, out_texts, strict=True):
+    letters_contained = True
+    models = list(model_texts) if model_texts is not None else list(raw_texts)
+    if len(models) != len(raw_texts):
+        raise ValueError(
+            f"model_texts must be the same length as raw_texts, got {len(models)} "
+            f"and {len(raw_texts)}"
+        )
+    for raw_text, out_text, model_text in zip(raw_texts, out_texts, models, strict=True):
         raw_counts = _nonletter_counts(raw_text)
         out_counts = _nonletter_counts(out_text)
         raw_nonletters += raw_counts
@@ -511,6 +537,20 @@ def text_invariants(
         added += out_counts - raw_counts
         letters_raw += sum(1 for c in raw_text if c.isalpha())
         letters_out += sum(1 for c in out_text if c.isalpha())
+        if letters_contained:
+            # The budget is the **sum** of the two sources, not their element-wise max.
+            # Max is the tighter reading and is tempting, but the output legitimately
+            # *mixes* the two — a region replaced by model segments sits beside a region
+            # kept verbatim from the raw text — so a letter can appear more often than
+            # either source alone holds it without anything being wrong. Measured on the
+            # real corpora, max flags 471/2,417 Sāmayik-test and 2,627/11,721 Itihāsa
+            # sentences, all of them legitimate. Sum is sound: it cannot false-alarm, and
+            # it still refuses a letter neither source can supply.
+            allowed = Counter(c for c in raw_text if c.isalpha()) + Counter(
+                c for c in model_text if c.isalpha()
+            )
+            if Counter(c for c in out_text if c.isalpha()) - allowed:
+                letters_contained = False
 
     return TextInvariants(**{
         "nonletter_chars_raw": sum(raw_nonletters.values()),
@@ -525,6 +565,7 @@ def text_invariants(
         "letter_chars_raw": letters_raw,
         "letter_chars_out": letters_out,
         "letter_retention": (letters_out / letters_raw) if letters_raw else math.nan,
+        "letters_out_subset_of_raw_union_model": letters_contained,
     })
 
 

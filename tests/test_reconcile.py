@@ -395,6 +395,17 @@ def test_the_raw_affix_is_authoritative_and_is_not_doubled() -> None:
     assert result.text == "'Cancel'"
 
 
+def test_a_hyphenated_compound_the_model_keeps_whole_is_not_duplicated() -> None:
+    """The model sometimes returns a hyphenated compound as a single segment. Because the
+    raw hyphens are re-inserted at the part joins, aligning a part against a segment that
+    still carries its own hyphen duplicated the letters either side of it — `log-in` came
+    back as `login-in`, and 27 records in the corpora were affected (`plag-ins` ->
+    `plagins-ins`, `Super-G` -> `SuperG-G`)."""
+    assert reconcile("log-in", "log-in").text == "log-in"
+    assert reconcile("Super-G", "Super-G").text == "Super-G"
+    assert reconcile("re-use,", "re-use").text == "re-use,"
+
+
 def test_hyphen_counts_are_invariant_over_synthetic_cases() -> None:
     import random
 
@@ -417,6 +428,14 @@ def test_hyphen_counts_are_invariant_over_synthetic_cases() -> None:
             model = " ".join(parts[:-1])
         out = reconcile(raw, model).text
         assert out.count("-") == raw.count("-"), (raw, model, out)
+        # No letter may be invented: the output can only draw on the raw sentence and the
+        # model's own output, which is what rules out the duplication above.
+        from collections import Counter
+
+        allowed = Counter(c for c in raw if c.isalpha()) | Counter(
+            c for c in model if c.isalpha()
+        )
+        assert not (Counter(c for c in out if c.isalpha()) - allowed), (raw, model, out)
         cases += 1
     assert cases == 300
 

@@ -267,7 +267,15 @@ def reconcile(
     at 1.0 only a byte-identical window may replace a unit.
     """
     raw_units = raw_slp1.split()
-    segments = model_slp1.split()
+    # Model segments are split on hyphens as well as whitespace. The model sometimes keeps a
+    # hyphenated compound as one segment (`log-in`), and since the raw hyphens are
+    # re-inserted at the part joins below, aligning a part against a segment that still
+    # carries its own hyphen duplicated the letters either side of it: `log-in` came back as
+    # `login-in`. Treating the model's hyphens as separators is consistent with the rest of
+    # this function, which already regards them as disposable.
+    segments = [
+        piece for chunk in model_slp1.split() for piece in chunk.split(HYPHEN) if piece
+    ]
 
     # What the next raw unit would match, for the lookahead guard: its letter core if it
     # has one, else the unit as written. A unit with no letters is kept verbatim and never
@@ -316,11 +324,10 @@ def reconcile(
             matched_any = True
             if ratio < 1.0:
                 inexact_here = True
-            # Hyphens inside the model's own segments are dropped: the raw hyphens are
-            # re-inserted at the part joins below, so any hyphen the model emits is either
-            # an echo of one of those or an invention. Either way keeping it would break
-            # the count, and the raw text is authoritative for it.
-            rendered.append(" ".join(segments[cursor : cursor + size]).replace(HYPHEN, ""))
+            # No hyphen can appear here: the segments were split on them above, and the raw
+            # hyphens are re-inserted at the part joins below, which is what keeps the
+            # hyphen count exactly equal to the raw text's.
+            rendered.append(" ".join(segments[cursor : cursor + size]))
             cursor += size
 
         if not matched_any:

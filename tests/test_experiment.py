@@ -667,3 +667,43 @@ def test_text_invariants_pools_gross_differences_not_the_net() -> None:
     assert stats["nonletter_multiset_preserved"] is False
     assert stats["nonletter_missing_net"] == {}
     assert stats["nonletter_added_net"] == {}
+
+
+def test_text_invariants_catches_a_letter_neither_source_can_supply() -> None:
+    from sanskrit_tok.experiment import text_invariants
+
+    ok = text_invariants(["log-in"], ["log-in"], ["log-in"])
+    bad = text_invariants(["log-in"], ["log-in-zzz"], ["log-in"])
+
+    assert ok["letters_out_subset_of_raw_union_model"] is True
+    assert bad["letters_out_subset_of_raw_union_model"] is False
+    assert bad["nonletter_chars_missing_gross"] == 0  # nothing deleted, and yet
+
+
+def test_letter_containment_is_a_floor_not_a_certificate() -> None:
+    """The budget is the sum of both sources, because the output legitimately mixes them.
+    That makes the check sound but loose: the `log-in` -> `login-in` rejoin bug fits inside
+    it, and is caught by `sandhi.reconcile`'s exact hyphen-count invariant instead. The
+    tighter element-wise-max budget flags thousands of *correct* sentences, so it is not
+    available."""
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["log-in"], ["login-in"], ["log-in"])
+
+    assert stats["letters_out_subset_of_raw_union_model"] is True
+
+
+def test_text_invariants_allows_letters_the_model_supplied() -> None:
+    """A restored visarga comes from the model, not from thin air."""
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["prARina Agatya"], ["prARinaH Agatya"], ["prARinaH Agatya"])
+
+    assert stats["letters_out_subset_of_raw_union_model"] is True
+
+
+def test_text_invariants_defaults_the_model_side_to_the_raw_texts() -> None:
+    from sanskrit_tok.experiment import text_invariants
+
+    assert text_invariants(["ab"], ["ab"])["letters_out_subset_of_raw_union_model"] is True
+    assert text_invariants(["ab"], ["abc"])["letters_out_subset_of_raw_union_model"] is False
