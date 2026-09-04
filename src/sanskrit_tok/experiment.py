@@ -38,10 +38,11 @@ import json
 import logging
 import math
 import shutil
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import yaml
 
@@ -427,6 +428,95 @@ def unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
     return "Not shown (unavailable this run): " + "; ".join(parts) + "."
 
 
+class TextInvariants(TypedDict):
+    """What `text_invariants` returns. A `TypedDict` rather than `dict[str, object]` so a
+    caller can read `nonletter_missing` without a cast and mypy still checks it."""
+
+    nonletter_chars_raw: int
+    nonletter_chars_out: int
+    nonletter_multiset_preserved: bool
+    nonletter_missing: dict[str, int]
+    nonletter_added: dict[str, int]
+    letter_chars_raw: int
+    letter_chars_out: int
+    letter_retention: float
+
+
+def text_invariants(
+    raw_texts: Sequence[str], out_texts: Sequence[str]
+) -> TextInvariants:
+    """What a transformation did to the characters of a corpus, pooled.
+
+    Experiment 03 measures tokenizers on text a model has rewritten, and the final review
+    found the hard way that "retention looks fine" is not a check: reconciliation kept
+    98.95% of characters while deleting punctuation fused to words on 79-87% of the units
+    that had any, and those deleted characters turned out to be most of the headline effect
+    (docs/decisions.md, "Reconciliation must preserve every non-letter character"). Every
+    experiment measuring on transformed text records this.
+
+    Two different claims, checked two different ways:
+
+    * **Non-letter characters must be preserved exactly.** A transformation that only
+      inserts word boundaries cannot add or remove a danda, a comma or a digit, so the
+      multiset is compared for equality — `nonletter_multiset_preserved`. This is a
+      pass/fail invariant, not a tolerance.
+    * **Letter characters legitimately change**, because reversing sandhi restores elided
+      phonemes and the splitter normalises orthography (anusvāra, visarga). Those get a
+      ratio, `letter_retention`, to be reported and interpreted rather than asserted on.
+
+    `nonletter_missing` and `nonletter_added` break the failure down by character, because
+    "the multiset changed" is not by itself actionable and the causes are not equivalent. On
+    Experiment 03's text the residual after affix preservation is almost entirely *mid-word*
+    marks — a hyphen inside a compound the splitter turns into a space, an avagraha marking
+    an elision that sandhi-reversal legitimately expands back into a letter — which is a
+    different thing from a sentence-final danda being deleted along with the word it was
+    fused to. Whatever the cause, the cost is priced by the re-tokenised deletion column;
+    this breakdown is what says which cause you are looking at.
+
+    Whitespace is ignored throughout: it is what the transformation exists to change.
+    Raises `ValueError` if the two sequences differ in length, since nothing can be pooled
+    over texts that are not the same texts.
+    """
+    if len(raw_texts) != len(out_texts):
+        raise ValueError(
+            f"raw_texts and out_texts must be the same length, got {len(raw_texts)} "
+            f"and {len(out_texts)}"
+        )
+    raw_nonletters: Counter[str] = Counter()
+    out_nonletters: Counter[str] = Counter()
+    letters_raw = 0
+    letters_out = 0
+    for text in raw_texts:
+        for char in text:
+            if char.isspace():
+                continue
+            if char.isalpha():
+                letters_raw += 1
+            else:
+                raw_nonletters[char] += 1
+    for text in out_texts:
+        for char in text:
+            if char.isspace():
+                continue
+            if char.isalpha():
+                letters_out += 1
+            else:
+                out_nonletters[char] += 1
+
+    missing = raw_nonletters - out_nonletters
+    added = out_nonletters - raw_nonletters
+    return TextInvariants(**{
+        "nonletter_chars_raw": sum(raw_nonletters.values()),
+        "nonletter_chars_out": sum(out_nonletters.values()),
+        "nonletter_multiset_preserved": raw_nonletters == out_nonletters,
+        "nonletter_missing": dict(missing.most_common()),
+        "nonletter_added": dict(added.most_common()),
+        "letter_chars_raw": letters_raw,
+        "letter_chars_out": letters_out,
+        "letter_retention": (letters_out / letters_raw) if letters_raw else math.nan,
+    })
+
+
 # --------------------------------------------------------------------- results writing
 
 
@@ -461,18 +551,25 @@ def write_results(
     CLAUDE.md §2.9: every experiment writes a `results.json` and a `config.yaml` to its
     output dir. The JSON is sanitised (`sanitize_json`) and then dumped strictly
     (`allow_nan=False`), so a non-finite float that slipped past the sanitiser is a loud
-    failure rather than a file no strict JSON parser will read; `ensure_ascii=False` keeps
-    Devanagari readable and `indent=2` keeps the diff between two runs legible.
+    failure rather than a file no strict JSON parser will read — and the whole document is
+    serialised before the file is opened, so that failure leaves the previous
+    `results.json` untouched instead of replacing it with a truncated one.
+    `ensure_ascii=False` keeps Devanagari readable and `indent=2` keeps the diff between
+    two runs legible.
 
     `config_src` is copied byte-for-byte to `out_dir/config.yaml` — comments included —
     so the file beside a number is the file that produced it; pass `None` for an output
     directory that has no config of its own. `out_dir` is created if it does not exist.
     """
+    # Serialise fully *before* touching the file: `json.dump` writes as it walks, so a
+    # value the sanitiser missed used to raise halfway through and leave a truncated (or
+    # empty) results.json where a previous run's good one had been.
+    payload = json.dumps(
+        sanitize_json(results), ensure_ascii=False, indent=2, allow_nan=False
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     results_path = out_dir / "results.json"
-    with results_path.open("w", encoding="utf-8") as handle:
-        json.dump(sanitize_json(results), handle, ensure_ascii=False, indent=2, allow_nan=False)
-        handle.write("\n")
+    results_path.write_text(payload + "\n", encoding="utf-8")
     logger.info("wrote %s", results_path)
 
     if config_src is not None:

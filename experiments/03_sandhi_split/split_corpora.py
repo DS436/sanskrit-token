@@ -41,6 +41,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -49,6 +50,7 @@ from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
     SANSKRIT_LANGUAGE,
     SANSKRIT_SOURCE_LOADERS,
+    TextInvariants,
     collect_sources,
     load_config,
     load_corpus_entry,
@@ -58,6 +60,7 @@ from sanskrit_tok.experiment import (
     sanitize_json,
     select_aligned_indices,
     take_indices,
+    text_invariants,
 )
 from sanskrit_tok.sandhi import SandhiSplitter, SplitCache
 from sanskrit_tok.sandhi.reconcile import DEFAULT_THRESHOLD, reconcile
@@ -191,6 +194,12 @@ class CorpusSplitReport:
     characters. The pair is the measurement that justifies reconciliation: the first
     should sit well below 1, the second at or just above it.
 
+    `invariants` is `experiment.text_invariants` over the raw and reconciled text of this
+    corpus. Its `nonletter_multiset_preserved` is the pass/fail check the final review
+    added: retention of 0.9895 looked healthy while punctuation fused to words was being
+    deleted wholesale, and only an exact multiset comparison catches that
+    (docs/decisions.md, "Reconciliation must preserve every non-letter character").
+
     `n_units_kept_verbatim` and `n_units_replaced_inexact` are the pooled honesty counters
     retention cannot supply: retention reads 1.000 whether the model re-segmented a
     sentence faithfully or dropped one word and rewrote another by the same number of
@@ -214,6 +223,7 @@ class CorpusSplitReport:
     chars_out: int
     char_retention_model: float
     char_retention_reconciled: float
+    invariants: TextInvariants
     seconds: float
 
 
@@ -245,6 +255,8 @@ def split_corpus(
     tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
 
     started = time.perf_counter()
+    raw_slp1_texts: list[str] = []
+    out_texts: list[str] = []
     n_units_changed = 0
     n_units_raw = n_units_out = n_units_verbatim = n_units_inexact = 0
     chars_raw = chars_model = chars_out = 0
@@ -271,6 +283,8 @@ def split_corpus(
                     + "\n"
                 )
                 written += 1
+                raw_slp1_texts.append(raw_slp1)
+                out_texts.append(result.text)
                 if result.n_units_out != result.n_units_raw:
                     n_units_changed += 1
                 n_units_raw += result.n_units_raw
@@ -296,6 +310,17 @@ def split_corpus(
                 )
 
     os.replace(tmp_path, out_path)
+    invariants = text_invariants(raw_slp1_texts, out_texts)
+    if not invariants["nonletter_multiset_preserved"]:
+        logger.warning(
+            "%s: reconciliation did not preserve the non-letter character multiset "
+            "(%d raw vs %d out); missing %s, added %s",
+            name,
+            invariants["nonletter_chars_raw"],
+            invariants["nonletter_chars_out"],
+            dict(list(invariants["nonletter_missing"].items())[:6]),
+            dict(list(invariants["nonletter_added"].items())[:6]),
+        )
     seconds = time.perf_counter() - started
     logger.info(
         "%s: wrote %d record(s) to %s in %.1f s (retention %.4f model, %.4f reconciled; "
@@ -326,6 +351,7 @@ def split_corpus(
         chars_out=chars_out,
         char_retention_model=_ratio(chars_model, chars_raw),
         char_retention_reconciled=_ratio(chars_out, chars_raw),
+        invariants=invariants,
         seconds=seconds,
     )
 
@@ -384,6 +410,7 @@ def build_manifest(
                 "chars_out": report.chars_out,
                 "char_retention_model": report.char_retention_model,
                 "char_retention_reconciled": report.char_retention_reconciled,
+                "invariants": report.invariants,
                 "seconds": report.seconds,
             }
             for report in reports
@@ -511,11 +538,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         root=root,
     )
     config.manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    config.manifest_path.write_text(
-        json.dumps(sanitize_json(manifest), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
+    payload = (
+        json.dumps(sanitize_json(manifest), ensure_ascii=False, indent=2, allow_nan=False) + "\n"
     )
+    config.manifest_path.write_text(payload, encoding="utf-8")
     logger.info("wrote %s", config.manifest_path)
+    # A second, timestamped copy. `manifest.json` is what everything downstream reads and is
+    # therefore last-write-wins, and the cache makes re-runs cheap enough that it *will* be
+    # overwritten — which is how the 9.4-hour first run's throughput, chunking and device
+    # facts were lost to a 72-second cache-hit re-run that recorded `n_model: 1`. The
+    # per-run copies are the record of what each run actually did.
+    stamped = config.manifest_path.with_name(
+        f"{config.manifest_path.stem}_{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.json"
+    )
+    stamped.write_text(payload, encoding="utf-8")
+    logger.info("wrote %s", stamped)
     logger.info(
         "done in %.1f min: %d sentence(s) split, %d from cache, %d chunked",
         seconds / 60,

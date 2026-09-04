@@ -14,10 +14,16 @@ lossiness dressed up as a property of Sanskrit. So the T4 text is the model's se
 **reconciled** against the raw sentence (docs/decisions.md, "T4 text is the model's
 segmentation reconciled against the raw sentence, not the raw model output"):
 
-* every raw whitespace unit that aligns to one or more model segments is replaced by
-  those segments — this is exactly where legitimate sandhi and compound reversal lives,
-  and the only place characters are allowed to change;
-* every raw unit that aligns to nothing survives verbatim, as does every unit with no
+* every raw whitespace unit is peeled into a non-letter prefix, a letter core and a
+  non-letter suffix, and only the **core** is aligned; the prefix and suffix are re-attached
+  to the first and last output segments with no added whitespace, so attached punctuation
+  (`karoti.`, `"tadA,`) survives a replacement instead of being deleted with the unit it
+  was fused to (docs/decisions.md, "Reconciliation must preserve every non-letter
+  character"). This is what makes the non-letter multiset an invariant of the function;
+* a core that aligns to one or more model segments is replaced by those segments — this is
+  exactly where legitimate sandhi and compound reversal lives, and the only place
+  characters are allowed to change;
+* every raw unit whose core aligns to nothing survives verbatim, as does every unit with no
   letter in it at all (punctuation, digits), so deletions are undone;
 * the segment cursor only advances on a successful alignment, so a dropped word does not
   knock the rest of the sentence out of alignment;
@@ -98,6 +104,23 @@ def _non_space_chars(text: str) -> int:
     return sum(1 for char in text if not char.isspace())
 
 
+def _peel(unit: str) -> tuple[str, str, str]:
+    """Split `unit` into `(non-letter prefix, letter core, non-letter suffix)`.
+
+    Only the outermost runs are peeled, so a hyphen or apostrophe *between* letters stays
+    in the core, where it belongs — that is the splitter's business, not this function's.
+    A unit with no letters at all comes back as `("", "", unit)` and never reaches
+    alignment; `_has_letter` gates that case before this is called.
+    """
+    start = 0
+    end = len(unit)
+    while start < end and not unit[start].isalpha():
+        start += 1
+    while end > start and not unit[end - 1].isalpha():
+        end -= 1
+    return unit[:start], unit[start:end], unit[end:]
+
+
 def _has_letter(unit: str) -> bool:
     """Whether a raw unit carries any letter, i.e. whether it is worth aligning.
 
@@ -128,8 +151,9 @@ def _best_window(
       it does not stop the scan. A compound scores 0.58 against its first segment alone
       and only clears 0.6 at two segments, so a scan that stopped at the first
       sub-threshold ratio would lose every compound split; and
-    * it resembles `unit` at least as much as it resembles `next_unit`, the next
-      letter-bearing raw unit. Without that lookahead a dropped word is "repaired" by
+    * it resembles `unit` at least as much as it resembles `next_unit`, what the next raw
+      unit would match (its letter core, or the unit itself when it has no letters).
+      Without that lookahead a dropped word is "repaired" by
       stealing the following word's segments and the sentence acquires a duplicate:
       `rAmaH rAmam vadati` with `rAmaH` dropped becomes `rAmam rAmam vadati`, a case error
       introduced by this pipeline, with character retention reading a reassuring 1.000.
@@ -147,10 +171,27 @@ def _best_window(
     exactly at the cap with segments left over, the unit is kept **verbatim** rather than
     replaced by a truncated window. Refusing to reconcile is always safe; truncating is not.
     """
+    available = len(segments) - start
+    if available <= 0:
+        return 0, 0.0
+
+    # The window has to *start* on a segment this unit has a better claim to than the next
+    # one does. Without it, a unit whose own segments the model dropped can open its window
+    # on the next unit's segment and score well on the combination — `tadapi "2020.` with
+    # `tadapi` dropped matches the two-segment window `2020tadapi` at 0.75 and emits `2020`
+    # twice, once here and once when the digit unit is kept verbatim. Checking the whole
+    # window is not enough, because the combination can beat each part.
+    if next_unit is not None:
+        head = segments[start]
+        if (
+            SequenceMatcher(None, unit, head).ratio()
+            < SequenceMatcher(None, next_unit, head).ratio()
+        ):
+            return 0, 0.0
+
     best_size = 0
     best_ratio = 0.0
     best_any_ratio = 0.0
-    available = len(segments) - start
     cap = min(MAX_WINDOW_SEGMENTS, available)
 
     size = 0
@@ -186,10 +227,14 @@ def reconcile(
     Both arguments are SLP1: `raw_slp1` is the source sentence, `model_slp1` is what the
     splitter returned for it (segments separated by single spaces — `SandhiSplitter.split`
     has already normalised the model's `_` separators away). Whitespace units of the raw
-    sentence are walked in order and each is either replaced by the model segments it
-    aligns to or kept as written; the output units are joined with single spaces, so the
-    result has exactly one whitespace unit per segment and can be counted directly by
-    every downstream metric.
+    sentence are walked in order and each is either replaced by the model segments its
+    letter core aligns to — with its non-letter prefix and suffix re-attached — or kept as
+    written; the output units are joined with single spaces, so the result has exactly one
+    whitespace unit per segment and can be counted directly by every downstream metric.
+
+    **Invariant:** the multiset of non-letter, non-space characters in the output equals
+    that of `raw_slp1`. `sanskrit_tok.experiment.text_invariants` checks it corpus-wide,
+    and every experiment measuring on this text records the result.
 
     Raising `threshold` makes replacement stricter and the output closer to `raw_slp1`;
     at 1.0 only a byte-identical window may replace a unit.
@@ -197,15 +242,19 @@ def reconcile(
     raw_units = raw_slp1.split()
     segments = model_slp1.split()
 
-    # The next *letter-bearing* unit after each position, for the lookahead guard: a
-    # punctuation unit between two words never competes for a window, so skipping to the
-    # next real word is what makes the guard fire on `rAmaH , rAmam` as well.
-    next_letter_unit: list[str | None] = [None] * len(raw_units)
+    # What the next raw unit would match, for the lookahead guard: its letter core if it
+    # has one, else the unit as written. A unit with no letters is kept verbatim and never
+    # advances the cursor, so without it in the guard an earlier word could absorb *its*
+    # segment and the sentence would end up with the text twice — `2020` duplicated rather
+    # than dropped, which breaks the non-letter invariant just as surely. Punctuation costs
+    # nothing to include: its similarity to a window of letters is ~0, so it never blocks a
+    # legitimate replacement.
+    next_unit_key: list[str | None] = [None] * len(raw_units)
     following: str | None = None
     for index in range(len(raw_units) - 1, -1, -1):
-        next_letter_unit[index] = following
-        if _has_letter(raw_units[index]):
-            following = raw_units[index]
+        next_unit_key[index] = following
+        unit_at = raw_units[index]
+        following = _peel(unit_at)[1] if _has_letter(unit_at) else unit_at
 
     out_units: list[str] = []
     kept_verbatim = 0
@@ -213,16 +262,36 @@ def reconcile(
     cursor = 0
 
     for index, unit in enumerate(raw_units):
+        prefix, core, suffix = _peel(unit) if _has_letter(unit) else ("", "", unit)
         size, ratio = (
-            _best_window(unit, segments, cursor, threshold, next_letter_unit[index])
-            if _has_letter(unit) and cursor < len(segments)
+            _best_window(core, segments, cursor, threshold, next_unit_key[index])
+            if core and cursor < len(segments)
             else (0, 0.0)
         )
         if size == 0:
             out_units.append(unit)
             kept_verbatim += 1
+            # A unit with no letters is emitted as written, but the model may have emitted
+            # it too (it keeps numerals, it drops punctuation). If the segment at the
+            # cursor is that unit, consume it: leaving it there lets the *next* word open
+            # its window on an orphan segment and swallow it, putting the text in twice
+            # (`2020 rAmaH` -> `2020 2020 rAmaH`). A letter-bearing unit kept verbatim
+            # never advances the cursor — that is the dropped-word case, and its segment
+            # genuinely does not exist.
+            if (
+                not core
+                and cursor < len(segments)
+                and SequenceMatcher(None, unit, segments[cursor]).ratio() >= threshold
+            ):
+                cursor += 1
             continue
-        out_units.extend(segments[cursor : cursor + size])
+        window = list(segments[cursor : cursor + size])
+        # No added whitespace: the prefix rejoins the first output segment and the suffix
+        # the last, so restoring them cannot manufacture a boundary — and therefore a
+        # token — that the raw sentence did not have.
+        window[0] = prefix + window[0]
+        window[-1] = window[-1] + suffix
+        out_units.extend(window)
         cursor += size
         if ratio < 1.0:
             replaced_inexact += 1

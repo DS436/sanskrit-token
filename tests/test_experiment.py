@@ -496,3 +496,80 @@ def test_unavailable_caption_names_every_arm_in_sorted_order() -> None:
 
 def test_unavailable_caption_is_empty_when_nothing_is_unavailable() -> None:
     assert unavailable_caption({}) == ""
+
+
+# --------------------------------------------------------------- text invariants (exp03)
+
+
+def test_text_invariants_reports_a_preserved_multiset() -> None:
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["tadapi karoti."], ["tad api karoti."])
+
+    assert stats["nonletter_multiset_preserved"] is True
+    assert stats["nonletter_chars_raw"] == 1
+    assert stats["nonletter_chars_out"] == 1
+    assert stats["letter_chars_raw"] == len("tadapikaroti")
+    assert stats["letter_chars_out"] == len("tadapikaroti")
+    assert stats["letter_retention"] == pytest.approx(1.0)
+
+
+def test_text_invariants_detects_a_dropped_punctuation_mark() -> None:
+    """The regression the check exists for: a danda deleted with the word it was fused to."""
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["tadapi karoti."], ["tad api karoti"])
+
+    assert stats["nonletter_multiset_preserved"] is False
+    assert stats["nonletter_chars_raw"] == 1
+    assert stats["nonletter_chars_out"] == 0
+
+
+def test_text_invariants_is_pooled_and_ignores_whitespace() -> None:
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["a.", "b,"], ["a  .", "b\t,"])
+
+    assert stats["nonletter_multiset_preserved"] is True
+    assert stats["nonletter_chars_raw"] == 2
+    assert stats["letter_chars_raw"] == 2
+
+
+def test_text_invariants_letter_retention_tracks_the_splitters_rewriting() -> None:
+    """Letters legitimately change (restored visargas, normalised anusvāra), so they get a
+    ratio rather than an equality; non-letters get the equality."""
+    from sanskrit_tok.experiment import text_invariants
+
+    stats = text_invariants(["prARina Agatya"], ["prARinaH Agatya"])
+
+    assert stats["nonletter_multiset_preserved"] is True
+    assert stats["letter_retention"] == pytest.approx(14 / 13)
+
+
+def test_text_invariants_rejects_mismatched_lengths() -> None:
+    from sanskrit_tok.experiment import text_invariants
+
+    with pytest.raises(ValueError, match="same length"):
+        text_invariants(["a"], ["a", "b"])
+
+
+def test_write_results_does_not_leave_a_truncated_file_when_sanitising_fails(
+    tmp_path: Path,
+) -> None:
+    """Sanitising happens before the file is opened, so a failure leaves the previous
+    results.json intact instead of replacing it with an empty one."""
+
+    class Unserialisable:
+        def __repr__(self) -> str:  # pragma: no cover - only for the failure message
+            return "<boom>"
+
+    from sanskrit_tok.experiment import write_results
+
+    (tmp_path / "results.json").write_text('{"previous": 1}\n', encoding="utf-8")
+
+    with pytest.raises(TypeError):
+        write_results({"bad": Unserialisable()}, tmp_path)
+
+    assert json.loads((tmp_path / "results.json").read_text(encoding="utf-8")) == {
+        "previous": 1
+    }

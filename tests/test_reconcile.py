@@ -331,3 +331,104 @@ def test_the_best_window_is_the_highest_ratio_not_the_last_increasing_one() -> N
     result = reconcile("viSvAsakAraRAdeva", "viSvAsa kAraRAt eva")
 
     assert result.text == "viSvAsa kAraRAt eva"
+
+
+# ------------------------------------- attached punctuation is preserved (final review)
+
+
+def test_a_suffix_fused_to_a_word_survives_its_replacement() -> None:
+    """The failure the final review found: `reconcile` protected punctuation only when it
+    stood as its own whitespace unit. `karoti.` aligns to the segment `karoti` above
+    threshold, so the unit was replaced and the danda went with it — on 79% of such units
+    on Sāmayik test, which turned out to be most of the headline effect
+    (docs/decisions.md, "Reconciliation must preserve every non-letter character")."""
+    result = reconcile("tadapi karoti.", "tad api karoti")
+
+    assert result.text == "tad api karoti."
+
+
+def test_a_prefix_and_a_suffix_are_both_re_attached() -> None:
+    result = reconcile('"tadA,', "tadA")
+
+    assert result.text == '"tadA,'
+
+
+def test_a_prefix_is_re_attached_to_the_first_segment_of_a_split() -> None:
+    """Prefix goes on the first output segment, suffix on the last, no added whitespace —
+    restoring them as separate units would manufacture boundary tokens for free."""
+    result = reconcile('"tadapi."', "tad api")
+
+    assert result.text == '"tad api."'
+    assert result.n_units_out == 2
+
+
+def test_a_mid_unit_hyphen_stays_inside_its_unit() -> None:
+    """Only the outermost non-letter runs are peeled: a hyphen between two letters is part
+    of the core and is the splitter's business, not this function's."""
+    result = reconcile("parAmarSa-dUraBAzA", "parAmarSa-dUra BAzA")
+
+    assert result.text == "parAmarSa-dUra BAzA"
+
+
+def test_a_suffix_survives_when_the_core_is_kept_verbatim() -> None:
+    result = reconcile("eklips, iti", "iti")
+
+    assert result.text == "eklips, iti"
+    assert result.n_units_kept_verbatim == 1
+
+
+def test_the_core_is_what_is_aligned_not_the_decorated_unit() -> None:
+    """`tadapi.` against `tad api` scores 0.923 as written but 1.000 on its core, so
+    peeling makes the alignment strictly better as well as lossless."""
+    decorated = reconcile("tadapi.", "tad api")
+    bare = reconcile("tadapi", "tad api")
+
+    assert decorated.text == "tad api."
+    assert bare.text == "tad api"
+    assert decorated.n_units_replaced_inexact == bare.n_units_replaced_inexact == 0
+
+
+def test_non_letter_characters_are_preserved_over_many_synthetic_cases() -> None:
+    """The invariant, not one example: whatever reconciliation does to a sentence, the
+    multiset of its non-letter characters comes out unchanged. This is what
+    `experiment.text_invariants` checks corpus-wide, pinned here on 480 constructed cases
+    that exercise prefixes, suffixes, both, standalone punctuation, dropped words,
+    compounds and empty model output."""
+    import itertools
+    import random
+    from collections import Counter
+
+    rng = random.Random(0)
+    words = ["tadapi", "karoti", "rAmaH", "viSvAsakAraRAdeva", "gacCati", "2020", "eklips"]
+    prefixes = ["", '"', "'", "(", "‘"]
+    suffixes = ["", ".", "..", ",", '?"', "-"]
+
+    cases = 0
+    for prefix, suffix in itertools.product(prefixes, suffixes):
+        for _ in range(16):
+            units = [
+                f"{prefix if rng.random() < 0.5 else ''}{rng.choice(words)}"
+                f"{suffix if rng.random() < 0.5 else ''}"
+                for _ in range(rng.randint(1, 5))
+            ]
+            raw = " ".join(units)
+            # Model output: some units split, some dropped, sometimes nothing at all.
+            segments: list[str] = []
+            for unit in units:
+                core = unit.strip("\"'(‘.,?-")
+                if rng.random() < 0.2:
+                    continue
+                if core == "tadapi":
+                    segments += ["tad", "api"]
+                elif core == "viSvAsakAraRAdeva":
+                    segments += ["viSvAsa", "kAraRAt", "eva"]
+                elif core:
+                    segments.append(core)
+            out = reconcile(raw, " ".join(segments)).text
+
+            raw_nonletters = Counter(c for c in raw if not c.isalpha() and not c.isspace())
+            out_nonletters = Counter(c for c in out if not c.isalpha() and not c.isspace())
+            assert out_nonletters == raw_nonletters, (raw, out)
+            cases += 1
+
+    assert cases == 480

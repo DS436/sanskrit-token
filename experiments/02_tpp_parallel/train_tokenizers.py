@@ -417,16 +417,6 @@ def train_arm(arm: Mapping[str, Any], corpus_path: Path, seed: int) -> dict[str,
     }
 
 
-def write_arm_outputs(name: str, results: Mapping[str, Any], config_path: Path) -> Path:
-    """Write `results.json` and a copy of the config beside the trained tokenizer.
-
-    Both land in `trained_tokenizer_path(name).parent` (CLAUDE.md §2.9: every experiment
-    writes a `results.json` and a `config.yaml` to its output dir). Returns the
-    `results.json` path.
-    """
-    return write_results(results, trained_tokenizer_path(name).parent, config_path)
-
-
 # -------------------------------------------------------------------------------- main
 
 
@@ -577,7 +567,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         payload["timestamp"] = datetime.now(UTC).isoformat(timespec="seconds")
         payload["config"] = config
         payload["manifest"] = manifests[side]
-        write_arm_outputs(name, payload, args.config)
+        # Beside the tokenizer it describes (CLAUDE.md §2.9): `results.json` and a copy of
+        # the config land in the same directory `train_arm` just wrote `tokenizer.json` to.
+        write_results(payload, trained_tokenizer_path(name).parent, args.config)
 
     return 0
 

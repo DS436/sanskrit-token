@@ -263,6 +263,22 @@ def test_split_corpus_reports_pooled_character_retention(tmp_path: Path) -> None
     assert report.char_retention_reconciled == pytest.approx(1.0)
 
 
+def test_split_corpus_records_the_text_invariants(tmp_path: Path) -> None:
+    """Every corpus carries the pass/fail non-letter check, computed over what was actually
+    written (docs/decisions.md, "Reconciliation must preserve every non-letter character")."""
+    texts = ["तदपि करोति ।", "प्राणिन आगत्य"]
+    splitter = FakeSplitter(
+        {"तदपि करोति ।": "tad api karoti", "प्राणिन आगत्य": "prARinaH Agatya"}
+    )
+
+    report = split_corpora.split_corpus("mini", texts, splitter, tmp_path / "mini.jsonl")
+
+    assert report.invariants["nonletter_multiset_preserved"] is True
+    assert report.invariants["nonletter_chars_raw"] == 1  # the danda
+    assert report.invariants["nonletter_chars_out"] == 1
+    assert report.invariants["letter_chars_out"] > report.invariants["letter_chars_raw"]
+
+
 def test_split_corpus_reports_the_verbatim_and_inexact_unit_counters(tmp_path: Path) -> None:
     """Retention alone can read 1.000 while the model dropped a word and rewrote another,
     so both counters are pooled per corpus (review item 3)."""
@@ -325,6 +341,14 @@ def _report(name: str) -> object:
         chars_out=31,
         char_retention_model=0.9,
         char_retention_reconciled=31 / 30,
+        invariants={
+            "nonletter_chars_raw": 2,
+            "nonletter_chars_out": 2,
+            "nonletter_multiset_preserved": True,
+            "letter_chars_raw": 28,
+            "letter_chars_out": 29,
+            "letter_retention": 29 / 28,
+        },
         seconds=1.5,
     )
 
@@ -401,6 +425,7 @@ def test_manifest_records_retention_before_and_after_reconciliation(tmp_path: Pa
     assert corpus["n_units_out"] == 32
     assert corpus["n_units_kept_verbatim"] == 2
     assert corpus["n_units_replaced_inexact"] == 3
+    assert corpus["invariants"]["nonletter_multiset_preserved"] is True
 
 
 def test_manifest_is_strict_json_serialisable(tmp_path: Path) -> None:
