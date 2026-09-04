@@ -23,7 +23,6 @@ computed hashes. Run with:
 """
 
 import logging
-from pathlib import Path
 
 from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
@@ -35,11 +34,12 @@ from sanskrit_tok.data.exclusion import (
 from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
+from sanskrit_tok.experiment import repo_root
 
 logger = logging.getLogger("build_exclusion")
 
-#: `experiments/02_tpp_parallel/build_exclusion.py` -> repo root.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+#: This repository's root, from which the data paths below are resolved.
+REPO_ROOT = repo_root()
 
 #: Order matches the `exclusion.py` header contract: `flores_devtest`, `samayik_dev`,
 #: `samayik_test`, `samayik_test_ood`, `itihasa_dev`, `itihasa_test`. Both lists use it,

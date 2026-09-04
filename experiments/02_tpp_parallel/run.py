@@ -35,31 +35,36 @@ without touching the network, a real corpus, or the Hugging Face cache.
 
 import argparse
 import hashlib
-import json
 import logging
 import math
 import random
-import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
 from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl, save_jsonl
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
 from sanskrit_tok.encoding import to_slp1
+from sanskrit_tok.experiment import (
+    load_config,
+    provenance,
+    repo_root,
+    resolve_path,
+    select_aligned_indices,
+    summarise_tpp,
+    take_indices,
+    write_results,
+)
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.metrics.tpp import tpp
-from sanskrit_tok.provenance import git_commit, git_dirty
 from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable, load_tokenizer
 
 logger = logging.getLogger("exp02")
@@ -120,87 +125,7 @@ FIGURE_CAPTION_PROVISIONAL = "* provisional: trained on parallel-corpus training
 FIGURE_Y_PAD_FRACTION = 0.15
 FIGURE_CLIP_INSET_FRACTION = 0.04
 
-#: `DetailedMetricResult` keys `summarise_metric` drops (it keeps only value/n/unit/
-#: distribution/mean/std); the brief requires them copied from the raw `tpp` result into
-#: the stored summary by hand. `ci` (the nominal confidence level, e.g. 0.95) is not
-#: itself a key `tpp()` returns — only `ci_low`/`ci_high` are — so it is not in this
-#: tuple; `_enrich_summary` sets it explicitly from the value the caller used.
-_TPP_EXTRA_KEYS: tuple[str, ...] = (
-    "ci_low",
-    "ci_high",
-    "n_undefined",
-    "n_bootstrap",
-    "seed",
-    "source_tokens",
-    "pivot_tokens",
-)
-
-
-# ------------------------------------------------------------------- paths and config
-
-
-def repo_root() -> Path:
-    """The repository root, i.e. the parent of `experiments/`."""
-    return Path(__file__).resolve().parents[2]
-
-
-def resolve_path(value: str, root: Path) -> Path:
-    """Resolve a config path: absolute ones as given, relative ones against `root`."""
-    path = Path(value)
-    return path if path.is_absolute() else root / path
-
-
-def load_config(path: Path) -> dict[str, Any]:
-    """Read the experiment's YAML config (`yaml.safe_load` only)."""
-    with path.open(encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-    if not isinstance(config, dict):
-        raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
-    return config
-
-
-def sanitize_json(value: Any) -> Any:
-    """Recursively replace `nan`/`inf` floats with `None`, so `results.json` is strict.
-
-    `json.dump(..., allow_nan=False)` raises on a non-finite float rather than emitting
-    the non-standard `NaN`/`Infinity` tokens JSON forbids; several metrics in this
-    experiment produce `nan` on purpose (an undefined per-pair ratio, a bootstrap CI over
-    zero draws), so the tree is sanitised once, here, before it is ever written.
-    """
-    if isinstance(value, float):
-        return None if (math.isnan(value) or math.isinf(value)) else value
-    if isinstance(value, dict):
-        return {key: sanitize_json(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [sanitize_json(item) for item in value]
-    return value
-
-
 # ---------------------------------------------------------------------- corpus wrangling
-
-
-def select_aligned_indices(sentences: Mapping[str, Sequence[str]]) -> list[int]:
-    """Indices whose sentence is non-blank in *every* language (exp01's helper, copied:
-    each experiment script is self-contained, per its existing convention)."""
-    per_language = {language: len(values) for language, values in sentences.items()}
-    lengths = set(per_language.values())
-    if len(lengths) > 1:
-        raise ValueError(f"languages differ in length: {per_language}")
-    total = lengths.pop() if lengths else 0
-    return [
-        index
-        for index in range(total)
-        if all(sentences[language][index].strip() for language in sentences)
-    ]
-
-
-def take_indices(
-    sentences: Mapping[str, Sequence[str]], indices: Sequence[int]
-) -> dict[str, list[str]]:
-    """Keep `indices`, in order, from every language at once."""
-    return {
-        language: [values[index] for index in indices] for language, values in sentences.items()
-    }
 
 
 def load_corpus_entry(entry: Mapping[str, Any], root: Path) -> ParallelCorpus:
@@ -394,25 +319,6 @@ def tokenizer_sources(arms: Mapping[str, LoadedTokenizer]) -> dict[str, dict[str
 # ------------------------------------------------------------------------- TPP / metrics
 
 
-def _enrich_summary(raw: Mapping[str, Any], ci: float) -> dict[str, Any]:
-    """`summarise_metric(raw)` plus the bootstrap/undefined-count keys it drops.
-
-    `summarise_metric` (CLAUDE.md §7 contract) keeps only `value`/`n`/`unit`/
-    `distribution`/`mean`/`std`; `tpp`'s `ci_low`, `ci_high`, `n_undefined`,
-    `n_bootstrap`, `seed`, `source_tokens` and `pivot_tokens` are the caller's to record
-    alongside it (`summary.py`'s own docstring says as much), which is what this does.
-    `ci` (the nominal confidence level the caller passed to `tpp()`, e.g. `0.95`) is not
-    part of `tpp()`'s own return value — only the resulting `ci_low`/`ci_high` bounds are
-    — so it is set here from the argument, next to the bounds it produced, rather than
-    copied from `raw`.
-    """
-    summary = dict(summarise_metric(raw))
-    for key in _TPP_EXTRA_KEYS:
-        summary[key] = raw[key]
-    summary["ci"] = ci
-    return summary
-
-
 def compute_tpp(
     corpora: Sequence[CorpusData],
     arms: Mapping[str, LoadedTokenizer],
@@ -464,7 +370,7 @@ def compute_tpp(
                         seed=seed,
                         ci=ci,
                     )
-                    pivot_result[pivot_name] = _enrich_summary(raw, ci)
+                    pivot_result[pivot_name] = summarise_tpp(raw, ci=ci)
                     logger.info(
                         "%s / %s / %s / vs %s: TPP %.3f [%.3f, %.3f]",
                         corpus.name,
@@ -555,7 +461,7 @@ def compute_tpp_controlled(
                 ci=ci,
             )
             key = controlled_pair_key(sanskrit_arm, english_arm)
-            pair_results[key] = _enrich_summary(raw, ci)
+            pair_results[key] = summarise_tpp(raw, ci=ci)
             logger.info(
                 "%s / controlled %s: TPP %.3f [%.3f, %.3f]",
                 corpus.name,
@@ -597,7 +503,7 @@ def compute_tpp_hindi(
                 seed=seed,
                 ci=ci,
             )
-            variant_result[variant] = _enrich_summary(raw, ci)
+            variant_result[variant] = summarise_tpp(raw, ci=ci)
             logger.info(
                 "%s / %s / %s vs Hindi: TPP %.3f [%.3f, %.3f]",
                 corpus.name,
@@ -1117,18 +1023,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpora, arms, sanskrit_arm_names, script_variants
     )
 
-    dirty = git_dirty(root)
-    if dirty:
-        logger.warning(
-            "the working tree has uncommitted changes; git_commit names the parent "
-            "commit, not the code that ran (recording git_dirty=true)"
-        )
-
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
-        "git_commit": git_commit(root),
-        "git_dirty": dirty,
-        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        **provenance(root),
         "config": config,
         "tokenizer_sources": tokenizer_sources(arms),
         "unavailable_arms": unavailable_arms,
@@ -1145,15 +1042,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "compression": compression_results,
     }
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results_path = out_dir / "results.json"
-    with results_path.open("w", encoding="utf-8") as handle:
-        json.dump(sanitize_json(results), handle, ensure_ascii=False, indent=2, allow_nan=False)
-        handle.write("\n")
-    logger.info("wrote %s", results_path)
-
-    shutil.copyfile(args.config, out_dir / "config.yaml")
-    logger.info("copied %s to %s", args.config, out_dir / "config.yaml")
+    write_results(results, out_dir, args.config)
 
     make_figure(results, out_dir)
     return 0

@@ -41,7 +41,6 @@ import argparse
 import hashlib
 import json
 import logging
-import shutil
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -50,13 +49,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
 from tokenizers import Tokenizer as RawTokenizer
 
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
-from sanskrit_tok.provenance import git_commit, git_dirty
+from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, write_results
 from sanskrit_tok.tokenizers.corpus import build_training_corpus, identity_transform, slp1_transform
 from sanskrit_tok.tokenizers.registry import trained_tokenizer_path
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
@@ -110,26 +108,6 @@ class SideSpec:
     source_names: list[str]
     transform: Callable[[str], str]
     hash_fn: Callable[[str], str]
-
-
-def repo_root() -> Path:
-    """The repository root, i.e. the parent of `experiments/`."""
-    return Path(__file__).resolve().parents[2]
-
-
-def resolve_path(value: str, root: Path) -> Path:
-    """Resolve a config path: absolute ones as given, relative ones against `root`."""
-    path = Path(value)
-    return path if path.is_absolute() else root / path
-
-
-def load_config(path: Path) -> dict[str, Any]:
-    """Read the training config (`yaml.safe_load` only)."""
-    with path.open(encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-    if not isinstance(config, dict):
-        raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
-    return config
 
 
 # --------------------------------------------------------------------------- corpus
@@ -353,18 +331,7 @@ def write_arm_outputs(name: str, results: Mapping[str, Any], config_path: Path) 
     writes a `results.json` and a `config.yaml` to its output dir). Returns the
     `results.json` path.
     """
-    out_dir = trained_tokenizer_path(name).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    results_path = out_dir / "results.json"
-    with results_path.open("w", encoding="utf-8") as handle:
-        json.dump(results, handle, ensure_ascii=False, indent=2, sort_keys=False)
-        handle.write("\n")
-    logger.info("wrote %s", results_path)
-
-    shutil.copyfile(config_path, out_dir / "config.yaml")
-    logger.info("copied %s to %s", config_path, out_dir / "config.yaml")
-    return results_path
+    return write_results(results, trained_tokenizer_path(name).parent, config_path)
 
 
 # -------------------------------------------------------------------------------- main
@@ -482,21 +449,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         if any(arm_side(arm) == side for arm in to_train):
             manifests[side] = build_side_corpus(side_spec(side, config, root))
 
-    commit = git_commit(root)
-    dirty = git_dirty(root)
-    if dirty:
-        logger.warning(
-            "the working tree has uncommitted changes; git_commit names the parent "
-            "commit, not the code that ran (recording git_dirty=true)"
-        )
+    # One provenance reading for the whole run (one `git` call, one WARNING if the tree
+    # is dirty), but a per-arm timestamp: the arms are written minutes apart and each
+    # `results.json` records when its own tokenizer was produced.
+    run_provenance = provenance(root)
     for arm in to_train:
         name = str(arm["name"])
         side = arm_side(arm)
         spec = side_spec(side, config, root)
         logger.info("training %s (side=%s) ...", name, side)
         payload = train_arm(arm, spec.corpus_path, seed)
-        payload["git_commit"] = commit
-        payload["git_dirty"] = dirty
+        payload.update(run_provenance)
         payload["timestamp"] = datetime.now(UTC).isoformat(timespec="seconds")
         payload["config"] = config
         payload["manifest"] = manifests[side]

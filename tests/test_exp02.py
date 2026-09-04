@@ -9,12 +9,14 @@ experiment, per the task brief).
 
 `run.py` is not importable as a package module (`experiments/` holds scripts, not a
 package), so it is loaded by path, exactly as `tests/test_exp01.py` does.
+
+The JSON sanitiser and the TPP summary enricher this script used to define are now
+`sanskrit_tok.experiment`'s `sanitize_json` and `summarise_tpp`, and their tests moved
+with them to `tests/test_experiment.py`.
 """
 
 import hashlib
 import importlib.util
-import json
-import math
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -191,26 +193,6 @@ def test_arm_label_t3_carries_no_star() -> None:
     assert run.arm_label("T3_sarvam", 68096) == "T3_sarvam (68k)"
 
 
-# --- JSON NaN sanitiser (strict-JSON resolution) ------------------------------------
-
-
-def test_sanitize_json_turns_nan_and_inf_into_none() -> None:
-    sanitized = run.sanitize_json({"a": math.nan, "b": math.inf, "c": [1.0, math.nan]})
-    assert sanitized == {"a": None, "b": None, "c": [1.0, None]}
-    # Must survive a strict json.dump (allow_nan=False) with no exception.
-    text = json.dumps(sanitized, allow_nan=False)
-    assert json.loads(text) == sanitized
-
-
-def test_sanitize_json_leaves_ordinary_values_alone() -> None:
-    assert run.sanitize_json({"value": 1.5, "n": 3, "unit": "x", "nested": {"y": [1, 2]}}) == {
-        "value": 1.5,
-        "n": 3,
-        "unit": "x",
-        "nested": {"y": [1, 2]},
-    }
-
-
 # --- the central figure --------------------------------------------------------------
 
 
@@ -307,44 +289,6 @@ def test_unavailable_caption_lists_every_omitted_arm() -> None:
 
 def test_unavailable_caption_is_empty_when_nothing_is_unavailable() -> None:
     assert run._unavailable_caption({}) == ""
-
-
-# --- TPP summary enrichment ----------------------------------------------------------
-
-
-def test_enrich_summary_copies_bootstrap_keys_and_sets_ci() -> None:
-    raw = {
-        "value": 1.5,
-        "n": 2,
-        "unit": "tokens/proposition ratio",
-        "per_pair": [1.0, 2.0],
-        "n_undefined": 0,
-        "source_tokens": 3,
-        "pivot_tokens": 2,
-        "ci_low": 1.2,
-        "ci_high": 1.8,
-        "n_bootstrap": 1000,
-        "seed": 0,
-    }
-    summary = run._enrich_summary(raw, ci=0.95)
-    for key in (
-        "ci_low",
-        "ci_high",
-        "n_undefined",
-        "n_bootstrap",
-        "seed",
-        "source_tokens",
-        "pivot_tokens",
-    ):
-        assert summary[key] == raw[key]
-    assert summary["ci"] == 0.95
-    # summarise_metric's own contract still holds: value/n/unit passed through, and the
-    # per_pair distribution is reduced to distribution/mean/std rather than kept whole.
-    assert summary["value"] == 1.5
-    assert summary["n"] == 2
-    assert summary["unit"] == "tokens/proposition ratio"
-    assert summary["distribution"] == "per_pair"
-    assert "per_pair" not in summary
 
 
 # --- unavailable English pivot -------------------------------------------------------

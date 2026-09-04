@@ -7,6 +7,10 @@ than the experiment's numbers.
 
 `run.py` is not importable as a package module (`experiments/` holds scripts, not a
 package), so it is loaded by path.
+
+The config-path, blank-index and results-writing helpers this script used to define are
+now `sanskrit_tok.experiment`'s, and their tests moved with them to
+`tests/test_experiment.py`.
 """
 
 import importlib.util
@@ -53,28 +57,6 @@ class WordTokenizer:
 
 CHAR = CharTokenizer()
 WORD = WordTokenizer()
-
-
-# --- blank-line filtering --------------------------------------------------------
-
-
-def test_select_aligned_indices_drops_every_index_blank_in_any_language() -> None:
-    sentences = {
-        "a": ["one", "", "three", "four"],
-        "b": ["uno", "dos", "   ", "cuatro"],
-    }
-    assert run.select_aligned_indices(sentences) == [0, 3]
-
-
-def test_select_aligned_indices_keeps_everything_when_nothing_is_blank() -> None:
-    sentences = {"a": ["x", "y"], "b": ["p", "q"]}
-    assert run.select_aligned_indices(sentences) == [0, 1]
-
-
-def test_take_indices_preserves_alignment() -> None:
-    sentences = {"a": ["one", "", "three"], "b": ["uno", "dos", "tres"]}
-    taken = run.take_indices(sentences, [0, 2])
-    assert taken == {"a": ["one", "three"], "b": ["uno", "tres"]}
 
 
 # --- roundtrip reporting ---------------------------------------------------------
@@ -297,19 +279,3 @@ def test_make_figure_needs_at_least_one_tokenizer(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no tokenizers"):
         run.make_figure({"metrics": {}}, tmp_path)
 
-
-# --- config resolution -----------------------------------------------------------
-
-
-def test_resolve_path_makes_relative_config_paths_repo_relative(tmp_path: Path) -> None:
-    assert run.resolve_path("a/b.json", tmp_path) == tmp_path / "a" / "b.json"
-
-
-def test_resolve_path_leaves_absolute_paths_alone(tmp_path: Path) -> None:
-    absolute = tmp_path / "already" / "absolute.json"
-    assert run.resolve_path(str(absolute), tmp_path / "elsewhere") == absolute
-
-
-def test_repo_root_is_the_parent_of_the_experiments_directory() -> None:
-    assert run.repo_root() == REPO_ROOT
-    assert (run.repo_root() / "experiments").is_dir()

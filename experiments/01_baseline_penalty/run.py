@@ -25,27 +25,31 @@ the network, the corpus, or the Hugging Face cache.
 """
 
 import argparse
-import json
 import logging
 import random
 import re
-import shutil
 import sys
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import yaml
 
 from sanskrit_tok.data.flores import ParallelCorpus, load_flores, load_jsonl, save_jsonl
 from sanskrit_tok.encoding import roundtrip_ok, to_slp1
+from sanskrit_tok.experiment import (
+    load_config,
+    provenance,
+    repo_root,
+    resolve_path,
+    select_aligned_indices,
+    take_indices,
+    write_results,
+)
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.parity import parity
 from sanskrit_tok.metrics.summary import MetricSummary, summarise_metric
-from sanskrit_tok.provenance import git_commit, git_dirty
 from sanskrit_tok.tokenizers.base import Tokenizer
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 
@@ -84,34 +88,6 @@ NUKTA_CHARACTERS: frozenset[str] = frozenset({"़"}) | frozenset(
 )
 
 
-# ------------------------------------------------------------------- paths and config
-
-
-def repo_root() -> Path:
-    """The repository root, i.e. the parent of `experiments/`.
-
-    Derived from this file's location rather than from the working directory, so
-    `uv run python experiments/01_baseline_penalty/run.py` behaves identically from
-    anywhere in the repo.
-    """
-    return Path(__file__).resolve().parents[2]
-
-
-def resolve_path(value: str, root: Path) -> Path:
-    """Resolve a config path: absolute ones as given, relative ones against `root`."""
-    path = Path(value)
-    return path if path.is_absolute() else root / path
-
-
-def load_config(path: Path) -> dict[str, Any]:
-    """Read the experiment's YAML config (`yaml.safe_load` only)."""
-    with path.open(encoding="utf-8") as handle:
-        config = yaml.safe_load(handle)
-    if not isinstance(config, dict):
-        raise ValueError(f"{path}: expected a YAML mapping, got {type(config).__name__}")
-    return config
-
-
 # ---------------------------------------------------------------------- corpus wrangling
 
 
@@ -143,33 +119,6 @@ def select_languages(corpus: ParallelCorpus, languages: Sequence[str]) -> dict[s
             f"it holds {list(corpus.languages)}"
         )
     return {language: list(corpus.sentences[language]) for language in languages}
-
-
-def select_aligned_indices(sentences: Mapping[str, Sequence[str]]) -> list[int]:
-    """Indices whose sentence is non-blank in *every* language.
-
-    Filtering the shared index rather than each language separately is what keeps the
-    languages aligned; parity and TPP are meaningless the moment they are not.
-    """
-    per_language = {language: len(values) for language, values in sentences.items()}
-    lengths = set(per_language.values())
-    if len(lengths) > 1:
-        raise ValueError(f"languages differ in length: {per_language}")
-    total = lengths.pop() if lengths else 0
-    return [
-        index
-        for index in range(total)
-        if all(sentences[language][index].strip() for language in sentences)
-    ]
-
-
-def take_indices(
-    sentences: Mapping[str, Sequence[str]], indices: Sequence[int]
-) -> dict[str, list[str]]:
-    """Keep `indices`, in order, from every language at once."""
-    return {
-        language: [values[index] for index in indices] for language, values in sentences.items()
-    }
 
 
 def roundtrip_report(sentences: Sequence[str], max_examples: int = 5) -> dict[str, Any]:
@@ -564,18 +513,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     metrics = compute_metrics(tokenizers, variants)
     parity_rows = compute_parity(tokenizers, variants, pivots, parity_source)
 
-    dirty = git_dirty(root)
-    if dirty:
-        logger.warning(
-            "the working tree has uncommitted changes; git_commit names the parent "
-            "commit, not the code that ran (recording git_dirty=true)"
-        )
-
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
-        "git_commit": git_commit(root),
-        "git_dirty": dirty,
-        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        **provenance(root),
         "config": config,
         "corpus": {
             "name": corpus.name,
@@ -607,15 +547,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "parity": parity_rows,
     }
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    results_path = out_dir / "results.json"
-    with results_path.open("w", encoding="utf-8") as handle:
-        json.dump(results, handle, ensure_ascii=False, indent=2, sort_keys=False)
-        handle.write("\n")
-    logger.info("wrote %s", results_path)
-
-    shutil.copyfile(args.config, out_dir / "config.yaml")
-    logger.info("copied %s to %s", args.config, out_dir / "config.yaml")
+    write_results(results, out_dir, args.config)
 
     make_figure(results, out_dir)
     return 0
