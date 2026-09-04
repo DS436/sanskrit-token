@@ -25,7 +25,11 @@ this project at matched vocabulary sizes (CLAUDE.md §5), so they are read from 
 is the matched *English* control family (CLAUDE.md §6): the same two algorithms at the
 same two vocabulary sizes, trained on the English side of the same corpus, so a TPP ratio
 against an E1 arm holds algorithm, vocabulary size and training domain constant on both
-sides. It is file-backed for exactly the same reason as T1/T2 and loads the same way.
+sides. It is file-backed for exactly the same reason as T1/T2 and loads the same way. `T4_*` is
+the sandhi-split family (Experiment 03): the same two algorithms at the same two
+vocabulary sizes as T1/T2, trained on the sandhi-split SLP1 corpus, and file-backed for
+the same reason again. The throughput rule selected the full training corpus
+(docs/decisions.md, "Splitter throughput measured"), so no matched `_sub` arms exist.
 
 **Gated repositories.** `meta-llama/*` and `google/*` need an accepted licence and an
 `HF_TOKEN`. Each HF arm therefore declares a list of candidate ids, tried in order, first
@@ -156,7 +160,7 @@ class TokenizerUnavailable(RuntimeError):
     """A registered arm exists but could not be loaded this run.
 
     Two causes: every candidate in an HF arm's candidate list failed (`_load_hf_arm`,
-    `_load_brahmic131k_arm`), or a file-backed arm's `tokenizer.json` (T1/T2/E1, written
+    `_load_brahmic131k_arm`), or a file-backed arm's `tokenizer.json` (T1/T2/E1/T4, written
     by `tokenizers/train_*.py`) does not exist yet at `trained_tokenizer_path(name)`.
     Distinct from `KeyError`, which means the arm is not registered at all.
 
@@ -455,7 +459,7 @@ def _repo_root() -> Path:
 
 
 def _tokenizer_dir(root: Path) -> Path:
-    """Where trained (T1/T2/E1) tokenizers live: `$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to
+    """Where trained (T1/T2/E1/T4) tokenizers live: `$SANSKRIT_TOK_TOKENIZER_DIR`, defaulting to
     `outputs/tokenizers`, resolved against `root` when relative."""
     value = os.environ.get("SANSKRIT_TOK_TOKENIZER_DIR", "outputs/tokenizers")
     path = Path(value)
@@ -474,7 +478,7 @@ def trained_tokenizer_path(name: str) -> Path:
 
 
 def _load_trained_arm(name: str) -> LoadedTokenizer:
-    """Load a file-backed T1/T2/E1 arm from its trained `tokenizer.json`.
+    """Load a file-backed T1/T2/E1/T4 arm from its trained `tokenizer.json`.
 
     Raises `TokenizerUnavailable` naming the expected path if the file does not exist —
     the arm is registered (it is a known name) but has not been trained yet, which is
@@ -520,6 +524,10 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "E1_bpe_64k": functools.partial(_load_trained_arm, "E1_bpe_64k"),
     "E1_unigram_32k": functools.partial(_load_trained_arm, "E1_unigram_32k"),
     "E1_unigram_64k": functools.partial(_load_trained_arm, "E1_unigram_64k"),
+    "T4_bpe_split_32k": functools.partial(_load_trained_arm, "T4_bpe_split_32k"),
+    "T4_bpe_split_64k": functools.partial(_load_trained_arm, "T4_bpe_split_64k"),
+    "T4_unigram_split_32k": functools.partial(_load_trained_arm, "T4_unigram_split_32k"),
+    "T4_unigram_split_64k": functools.partial(_load_trained_arm, "T4_unigram_split_64k"),
 }
 
 

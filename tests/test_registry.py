@@ -51,9 +51,24 @@ ALL_ARMS = (
     "T3_indicsuper",
     "T3_sarvam",
     "T3_sutra",
+    "T4_bpe_split_32k",
+    "T4_bpe_split_64k",
+    "T4_unigram_split_32k",
+    "T4_unigram_split_64k",
 )
 
 T3_ARMS = ("T3_brahmic131k", "T3_indicsuper", "T3_sarvam", "T3_sutra")
+
+#: The sandhi-split family (CLAUDE.md §6, exp03 plan Task 3): the same two algorithms at
+#: the same two vocabulary sizes as T1/T2, trained on the sandhi-split SLP1 corpus. The
+#: throughput rule selected the FULL training corpus (docs/decisions.md, "Splitter
+#: throughput measured"), so there are no `_sub` arms.
+T4_ARMS = (
+    "T4_bpe_split_32k",
+    "T4_bpe_split_64k",
+    "T4_unigram_split_32k",
+    "T4_unigram_split_64k",
+)
 
 #: The matched English control family (CLAUDE.md §6, docs/decisions.md "Add a matched
 #: English control family E1 for TPP"): same algorithms and vocabulary sizes as T1/T2,
@@ -66,6 +81,7 @@ TRAINED_ARMS = (
     "T2_unigram_raw_32k",
     "T2_unigram_raw_64k",
     *E1_ARMS,
+    *T4_ARMS,
 )
 
 NETWORK_TESTS = pytest.mark.skipif(
@@ -150,12 +166,22 @@ def test_list_tokenizers_filters_by_family() -> None:
     assert list_tokenizers(family="T3") == sorted(T3_ARMS)
 
 
-def test_registry_carries_sixteen_arms() -> None:
-    assert len(list_tokenizers()) == 16
+def test_registry_carries_twenty_arms() -> None:
+    assert len(list_tokenizers()) == 20
 
 
 def test_list_tokenizers_filters_the_english_control_family() -> None:
     assert list_tokenizers(family="E1") == sorted(E1_ARMS)
+
+
+def test_list_tokenizers_filters_the_sandhi_split_family() -> None:
+    assert list_tokenizers(family="T4") == sorted(T4_ARMS)
+
+
+def test_no_subset_arms_are_registered() -> None:
+    """The throughput rule selected the full training corpus, so the matched-subset arms
+    it would otherwise have required (`T1_bpe_raw_32k_sub` and friends) do not exist."""
+    assert not [name for name in REGISTRY if name.endswith("_sub")]
 
 
 def test_registry_keys_are_exactly_the_listed_arms() -> None:
@@ -421,6 +447,35 @@ def test_english_control_arm_loads_from_tokenizer_json(
     assert tok.vocab_size == 50
     assert tok.source_id == str(path)
     assert tok.encode("Rama goes")
+
+
+@pytest.mark.parametrize("arm", T4_ARMS)
+def test_sandhi_split_arm_loads_from_tokenizer_json_with_family_t4(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arm: str
+) -> None:
+    """T4 is file-backed exactly like T1/T2/E1: same loader, same directory layout, so it
+    is absent until `train_tokenizers.py` has written its `tokenizer.json`."""
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    path = tmp_path / arm / "tokenizer.json"
+    _write_tiny_bpe_tokenizer(path, vocab_size=50)
+
+    tok = load_tokenizer(arm)
+
+    assert tok.family == "T4"
+    assert tok.vocab_size == 50
+    assert tok.source_id == str(path)
+    assert tok.attempted == (str(path),)
+    assert tok.encode("tad api")
+
+
+@pytest.mark.parametrize("arm", T4_ARMS)
+def test_untrained_sandhi_split_arm_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arm: str
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    with pytest.raises(TokenizerUnavailable) as excinfo:
+        load_tokenizer(arm)
+    assert str(trained_tokenizer_path(arm)) in str(excinfo.value)
 
 
 @pytest.mark.parametrize("arm", E1_ARMS)

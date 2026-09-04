@@ -38,6 +38,7 @@ does not matter.
 """
 
 import argparse
+import functools
 import hashlib
 import json
 import logging
@@ -54,7 +55,10 @@ from tokenizers import Tokenizer as RawTokenizer
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
 from sanskrit_tok.data.itihasa import load_itihasa
 from sanskrit_tok.data.samayik import load_samayik
+from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, write_results
+from sanskrit_tok.sandhi.cache import SplitCache
+from sanskrit_tok.sandhi.reconcile import DEFAULT_THRESHOLD, reconcile
 from sanskrit_tok.tokenizers.corpus import build_training_corpus, identity_transform, slp1_transform
 from sanskrit_tok.tokenizers.registry import trained_tokenizer_path
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
@@ -62,13 +66,20 @@ from sanskrit_tok.tokenizers.train_unigram import train_unigram
 
 logger = logging.getLogger("train_tokenizers")
 
-#: The two sides of the parallel corpora an arm can be trained on: `sa` (Sanskrit, the
-#: T1/T2 arms) and `en` (English, the E1 control arms). `tokenizers.yaml` names one per
-#: arm under `side`; an arm without one is Sanskrit, which is what every arm was before
-#: the E1 family existed.
+#: The sides of the parallel corpora an arm can be trained on: `sa` (raw Sanskrit, the
+#: T1/T2 arms), `en` (English, the E1 control arms) and `sa_split` (sandhi-split Sanskrit,
+#: the T4 arms). `tokenizers.yaml` names one per arm under `side`; an arm without one is
+#: Sanskrit, which is what every arm was before the E1 family existed.
 SANSKRIT_SIDE = "sa"
 ENGLISH_SIDE = "en"
-SIDES = (SANSKRIT_SIDE, ENGLISH_SIDE)
+
+#: The sandhi-split Sanskrit side (Experiment 03): the same Devanagari sentences as `sa`,
+#: written to the corpus as the *split* SLP1 text rather than the raw SLP1 text. It is a
+#: third side rather than a flag on `sa` because it has its own corpus file, its own
+#: manifest and its own precondition (a populated split cache); the exclusion list, the
+#: sources and the hash function are `sa`'s.
+SPLIT_SIDE = "sa_split"
+SIDES = (SANSKRIT_SIDE, ENGLISH_SIDE, SPLIT_SIDE)
 
 #: `tokenizers.yaml`'s `sources`/`english_sources` entries -> a loader for that split's
 #: sentences on that side. Prose before verse (CLAUDE.md §7): Sāmayik listed first. The
@@ -96,9 +107,17 @@ ALGO_TRAINERS: dict[str, Callable[..., Path]] = {
 class SideSpec:
     """The corpus recipe for one side of the parallel corpora (`side_spec`).
 
-    Everything that differs between training a Sanskrit arm and an English control arm:
-    where the corpus and its manifest go, which exclusion list guards it, which sources
-    feed it, and the transform/hash pair the text is written and checked with.
+    Everything that differs between training a raw Sanskrit arm, an English control arm
+    and a sandhi-split arm: where the corpus and its manifest go, which exclusion list
+    guards it, which sources feed it, and the transform/hash pair the text is written and
+    checked with.
+
+    `precheck` is the one side-specific *precondition*, run on the filtered sources just
+    before a rebuild (and only then — a corpus that is already current is not rebuilt, so
+    its precondition is not re-imposed). Only `sa_split` has one: it verifies that every
+    sentence about to be transformed is in the split cache, so a missing split is one
+    error naming the count rather than a `MissingSplitError` on the first of 117,720
+    sentences.
     """
 
     side: str
@@ -108,6 +127,84 @@ class SideSpec:
     source_names: list[str]
     transform: Callable[[str], str]
     hash_fn: Callable[[str], str]
+    precheck: Callable[[Mapping[str, Sequence[str]]], None] | None = None
+
+
+# ------------------------------------------------------------------ the sandhi-split side
+
+
+class MissingSplitError(RuntimeError):
+    """A sentence the `sa_split` corpus needs has not been sandhi-split yet.
+
+    Splitting is a five-hour job against a 2.3 GB model and belongs to
+    `experiments/03_sandhi_split/split_corpora.py`, never to this script: loading the
+    model here would turn "train four tokenizers" into an overnight run nobody asked for,
+    and would do it silently. So the split text is read from the cache only, and a gap is
+    this error — which is also why it names how many sentences are missing rather than
+    just the first one.
+    """
+
+
+@functools.cache
+def _split_cache(path: Path) -> SplitCache:
+    """The split cache at `path`, loaded once per process.
+
+    `side_spec` is called once per arm, and the cache file is ~137k lines; without this the
+    four T4 arms would re-read and re-parse the whole thing four times over.
+    """
+    return SplitCache(path)
+
+
+class SplitTransform:
+    """Devanagari -> reconciled split SLP1, read from the split cache. Never loads a model.
+
+    The cache holds what the splitter's model actually emitted (SLP1, one whitespace unit
+    per segment). What the T4 corpus is trained on is that output *reconciled* against the
+    raw sentence — the model drops punctuation and the occasional loanword, and training on
+    text with content deleted would bias every T4 number in the experiment's favour
+    (docs/decisions.md, "T4 text is the model's segmentation reconciled against the raw
+    sentence"). Reconciliation is pure and cheap, so it is recomputed here rather than
+    cached, and `threshold` can change without re-splitting anything.
+    """
+
+    def __init__(self, cache_path: Path, threshold: float = DEFAULT_THRESHOLD) -> None:
+        self.cache_path = cache_path
+        self.threshold = threshold
+
+    def __call__(self, text: str) -> str:
+        cached = _split_cache(self.cache_path).get(text)
+        if cached is None:
+            raise MissingSplitError(
+                f"sentence not in the sandhi split cache {self.cache_path}: {text[:60]!r}. "
+                "Run experiments/03_sandhi_split/split_corpora.py first; this script never "
+                "loads the splitter model."
+            )
+        return reconcile(to_slp1(text, "devanagari"), cached, threshold=self.threshold).text
+
+
+def split_cache_precheck(cache_path: Path) -> Callable[[Mapping[str, Sequence[str]]], None]:
+    """A `SideSpec.precheck` asserting every sentence in `sources` is in the split cache.
+
+    Raises `MissingSplitError` naming how many of how many sentences are missing and which
+    cache file was consulted, so the fix ("finish the split run") is obvious from the one
+    line and does not require re-running the build to discover a second missing sentence.
+    """
+
+    def check(sources: Mapping[str, Sequence[str]]) -> None:
+        cache = _split_cache(cache_path)
+        texts = [text for source in sources.values() for text in source if text.strip()]
+        missing = sum(1 for text in texts if cache.get(text) is None)
+        if missing:
+            raise MissingSplitError(
+                f"{missing} of {len(texts)} training sentence(s) are not in the sandhi "
+                f"split cache {cache_path} ({len(cache)} entry/entries). Run "
+                "experiments/03_sandhi_split/split_corpora.py to completion first."
+            )
+        logger.info(
+            "split cache %s covers all %d training sentence(s)", cache_path, len(texts)
+        )
+
+    return check
 
 
 # --------------------------------------------------------------------------- corpus
@@ -126,7 +223,7 @@ def collect_sources(names: Sequence[str]) -> dict[str, list[str]]:
 
 
 def arm_side(arm: Mapping[str, Any]) -> str:
-    """Which side of the parallel corpora an arm trains on: `"sa"` (default) or `"en"`.
+    """Which side an arm trains on: `"sa"` (default), `"en"` or `"sa_split"`.
 
     Defaults to Sanskrit for an arm with no `side` key — every arm predating the E1
     family is Sanskrit, and defaulting keeps an older `tokenizers.yaml` working. An
@@ -213,6 +310,7 @@ def ensure_training_corpus(
     manifest_path: Path | None = None,
     transform: Callable[[str], str] | None = None,
     hash_fn: Callable[[str], str] = sentence_hash,
+    precheck: Callable[[Mapping[str, Sequence[str]]], None] | None = None,
 ) -> dict[str, object]:
     """Build the training corpus, or reuse it if it is already current.
 
@@ -228,6 +326,9 @@ def ensure_training_corpus(
     `transform`/`hash_fn` are passed straight through to `build_training_corpus`
     (`identity_transform` + `sentence_hash_en` for English) and `hash_fn` is also used for
     the leakage filter below, so both must match the list `exclusion` came from.
+    `precheck`, when given, runs on the *filtered* sources on a rebuild only, immediately
+    before the build — the `sa_split` side uses it to fail once, with a count, if the
+    sandhi split cache does not cover the corpus.
 
     On a rebuild, `sources` (the *raw*, unfiltered sentences from `collect_sources`) is
     first run through `filter_leaked_sentences`, and the manifest `build_training_corpus`
@@ -252,6 +353,8 @@ def ensure_training_corpus(
 
     n_in_raw = {name: len(texts) for name, texts in sources.items()}
     filtered, dropped_counts = filter_leaked_sentences(sources, exclusion, hash_fn)
+    if precheck is not None:
+        precheck(filtered)
 
     manifest = build_training_corpus(
         filtered, corpus_path, exclusion, transform=transform, hash_fn=hash_fn
@@ -344,7 +447,10 @@ def side_spec(side: str, config: Mapping[str, Any], root: Path) -> SideSpec:
     beside its corpus, transliterating to SLP1 and hashing with `sentence_hash`. English
     reads `english_corpus_path`/`english_sources`/`english_exclusion_path`, writes
     `manifest_en.json`, keeps its text as written (`identity_transform`) and hashes with
-    `sentence_hash_en`.
+    `sentence_hash_en`. The sandhi-split side reads the *same* sources, exclusion list and
+    hash function as Sanskrit — the sentences must be identical for the T1/T4 comparison to
+    be matched — but writes `split_corpus_path` and `manifest_split.json` and transforms
+    through the split cache (`SplitTransform`) instead of transliterating.
     """
     if side == SANSKRIT_SIDE:
         corpus_path = resolve_path(str(config["corpus_path"]), root)
@@ -356,6 +462,20 @@ def side_spec(side: str, config: Mapping[str, Any], root: Path) -> SideSpec:
             source_names=list(config["sources"]),
             transform=slp1_transform,
             hash_fn=sentence_hash,
+        )
+    if side == SPLIT_SIDE:
+        corpus_path = resolve_path(str(config["split_corpus_path"]), root)
+        cache_path = resolve_path(str(config["split_cache_path"]), root)
+        threshold = float(config.get("split_reconcile_threshold", DEFAULT_THRESHOLD))
+        return SideSpec(
+            side=side,
+            corpus_path=corpus_path,
+            manifest_path=corpus_path.parent / "manifest_split.json",
+            exclusion_path=resolve_path(str(config["exclusion_path"]), root),
+            source_names=list(config["sources"]),
+            transform=SplitTransform(cache_path, threshold),
+            hash_fn=sentence_hash,
+            precheck=split_cache_precheck(cache_path),
         )
     corpus_path = resolve_path(str(config["english_corpus_path"]), root)
     return SideSpec(
@@ -390,6 +510,7 @@ def build_side_corpus(spec: SideSpec) -> dict[str, object]:
         manifest_path=spec.manifest_path,
         transform=spec.transform,
         hash_fn=spec.hash_fn,
+        precheck=spec.precheck,
     )
     logger.info(
         "%s training corpus: n_in_raw=%s n_leaked_dropped=%s n_in=%s n_out=%d n_dedup_removed=%d",

@@ -1,0 +1,45 @@
+# Experiment 03 — sandhi-splitting the evaluation corpora and the tokenizer training corpus.
+#
+# Consumed by `experiments/03_sandhi_split/split_corpora.py`, which is a multi-hour
+# background job (≈5.4 h on MPS at the measured 7.09 sentences/s; docs/decisions.md,
+# "Splitter throughput measured"). Every result goes into the append-only `cache_path`, so
+# a re-run skips everything already done and the job is resumable by construction.
+#
+# Relative paths are resolved against the repository root, not the working directory.
+
+model_id: chronbmm/sanskrit5-multitask
+device: auto                 # pick_device(): mps > cuda > cpu
+batch_size: 16               # what the throughput benchmark measured
+
+cache_path: data/processed/split/cache.jsonl
+manifest_path: data/processed/split/manifest.json
+split_dir: data/processed/split          # one <corpus>.jsonl per corpus lands here
+
+# The four Experiment 02 evaluation corpora, in the same order (prose before verse,
+# CLAUDE.md §7). Only the Sanskrit side is split.
+eval_corpora:
+  - {name: samayik_test, loader: samayik, split: test}
+  - {name: samayik_test_ood, loader: samayik, split: test_ood}
+  - {name: itihasa_test, loader: itihasa, split: test}
+  - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
+
+# The tokenizer training corpus, split *after* the exclusion filter and the exact dedup,
+# so leaked sentences are never even handed to the model and the sentence set is exactly
+# the one behind `data/processed/tok_train_slp1.txt` (117,720 sentences).
+train_sources:
+  - samayik_train
+  - itihasa_train
+
+exclusion_path: data/exclusion_hashes.txt
+
+# The throughput rule (docs/decisions.md, "Splitter throughput rule") measured 4.6 h for
+# the full training corpus, inside the 8 h budget, so the applied choice is FULL: no
+# subset, and therefore no matched `T1_*_sub`/`T2_*_sub` arms. Set to {n: ..., seed: 0} to
+# split a deterministic uniform subset instead.
+subset: null
+
+# Similarity threshold `sandhi.reconcile` requires before model segments may replace a raw
+# whitespace unit (docs/decisions.md, "T4 text is the model's segmentation reconciled...").
+reconcile_threshold: 0.6
+
+progress_every: 500          # sentences between progress lines in the log

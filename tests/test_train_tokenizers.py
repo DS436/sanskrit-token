@@ -449,3 +449,131 @@ def test_slp1_corpus_mini_fixture_is_not_in_the_exclusion_list() -> None:
     devanagari = [from_slp1(line, "devanagari") for line in lines]
 
     assert_not_excluded(devanagari, hashes, label="slp1_corpus_mini fixture")
+
+
+# ------------------------------------------------------- the sandhi-split side (exp03)
+
+
+def _split_config(tmp_path: Path) -> dict[str, object]:
+    """A minimal `tokenizers.yaml`-shaped mapping for the `sa_split` side."""
+    return {
+        "corpus_path": "data/processed/tok_train_slp1.txt",
+        "split_corpus_path": "data/processed/tok_train_slp1_split.txt",
+        "split_cache_path": "data/processed/split/cache.jsonl",
+        "sources": ["samayik_train", "itihasa_train"],
+        "exclusion_path": "data/exclusion_hashes.txt",
+    }
+
+
+def test_arm_side_accepts_the_sandhi_split_side() -> None:
+    assert train_tokenizers.arm_side({"name": "T4_bpe_split_32k", "side": "sa_split"}) == "sa_split"
+
+
+def test_side_spec_for_the_split_side_points_at_the_split_corpus(tmp_path: Path) -> None:
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+
+    assert spec.side == "sa_split"
+    assert spec.corpus_path == tmp_path / "data" / "processed" / "tok_train_slp1_split.txt"
+    assert spec.manifest_path == tmp_path / "data" / "processed" / "manifest_split.json"
+    assert spec.exclusion_path == tmp_path / "data" / "exclusion_hashes.txt"
+    assert spec.source_names == ["samayik_train", "itihasa_train"]
+    assert spec.hash_fn is sentence_hash
+
+
+def test_split_side_transform_reconciles_the_cached_model_output(tmp_path: Path) -> None:
+    """The transform is cache-only: it never constructs a splitter, never imports torch,
+    and returns the *reconciled* text, not the raw model output."""
+    from sanskrit_tok.sandhi.cache import SplitCache
+
+    cache_path = tmp_path / "data" / "processed" / "split" / "cache.jsonl"
+    cache_path.parent.mkdir(parents=True)
+    cache = SplitCache(cache_path)
+    cache.put("तदपि ।", "tad api")  # the model drops the danda
+    cache.close()
+
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+
+    assert spec.transform("तदपि ।") == "tad api ."
+
+
+def test_split_side_transform_raises_naming_the_sentence_when_the_cache_misses(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "data" / "processed" / "split").mkdir(parents=True)
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+
+    with pytest.raises(train_tokenizers.MissingSplitError) as excinfo:
+        spec.transform("तदपि ।")
+    assert "split_corpora.py" in str(excinfo.value)
+
+
+def test_split_side_precheck_names_the_number_of_uncached_sentences(tmp_path: Path) -> None:
+    from sanskrit_tok.sandhi.cache import SplitCache
+
+    cache_path = tmp_path / "data" / "processed" / "split" / "cache.jsonl"
+    cache_path.parent.mkdir(parents=True)
+    cache = SplitCache(cache_path)
+    cache.put("तदपि", "tad api")
+    cache.close()
+
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+    assert spec.precheck is not None
+
+    spec.precheck({"a": ["तदपि"]})  # fully cached: no error
+
+    with pytest.raises(train_tokenizers.MissingSplitError) as excinfo:
+        spec.precheck({"a": ["तदपि", "रामः गच्छति", "सीता वदति"]})
+    message = str(excinfo.value)
+    assert "2" in message and "3" in message
+    assert str(cache_path) in message
+
+
+def test_sanskrit_and_english_sides_have_no_precheck(tmp_path: Path) -> None:
+    config = dict(_split_config(tmp_path))
+    config.update(
+        {
+            "english_corpus_path": "data/processed/tok_train_en.txt",
+            "english_sources": ["samayik_train_en"],
+            "english_exclusion_path": "data/exclusion_hashes_en.txt",
+        }
+    )
+
+    assert train_tokenizers.side_spec("sa", config, tmp_path).precheck is None
+    assert train_tokenizers.side_spec("en", config, tmp_path).precheck is None
+
+
+def test_ensure_training_corpus_runs_the_precheck_before_building(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def precheck(sources: object) -> None:
+        calls.append(1)
+
+    train_tokenizers.ensure_training_corpus(
+        {"a": ["रामः गच्छति"]},
+        tmp_path / "corpus.txt",
+        frozenset(),
+        manifest_path=tmp_path / "manifest.json",
+        precheck=precheck,
+    )
+
+    assert calls == [1]
+
+
+def test_tokenizers_yaml_declares_the_four_split_arms() -> None:
+    config = yaml.safe_load(TOKENIZERS_YAML.read_text(encoding="utf-8"))
+
+    assert config["split_corpus_path"] == "data/processed/tok_train_slp1_split.txt"
+    assert config["split_cache_path"] == "data/processed/split/cache.jsonl"
+
+    by_name = {arm["name"]: arm for arm in config["arms"]}
+    assert by_name["T4_bpe_split_32k"] == {
+        "name": "T4_bpe_split_32k",
+        "algo": "bpe",
+        "vocab_size": 32000,
+        "side": "sa_split",
+    }
+    assert by_name["T4_bpe_split_64k"]["vocab_size"] == 64000
+    assert by_name["T4_unigram_split_32k"]["algo"] == "unigram"
+    assert by_name["T4_unigram_split_64k"]["vocab_size"] == 64000
+    assert all(by_name[name]["side"] == "sa_split" for name in by_name if name.startswith("T4_"))
+    assert not [name for name in by_name if name.endswith("_sub")]

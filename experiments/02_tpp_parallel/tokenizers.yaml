@@ -10,10 +10,23 @@
 # training splits (docs/decisions.md, "Add a matched English control family E1 for TPP").
 # The English corpus is not transliterated and is asserted against its own exclusion list.
 #
+# The `T4_*` arms (`side: sa_split`, Experiment 03) are the same again one transform over:
+# the same Devanagari sentences as `T1`/`T2`, written to the corpus as ByT5-Sanskrit's
+# segmentation *reconciled* against the raw sentence (docs/decisions.md, "T4 text is the
+# model's segmentation reconciled against the raw sentence"). The split text is read from
+# `split_cache_path`, which `experiments/03_sandhi_split/split_corpora.py` fills; this
+# script never loads the splitter model and fails with a count if the cache is short.
+# The throughput rule selected the full corpus, so there are no matched `_sub` arms.
+#
 # Relative paths are resolved against the repository root, not the working directory.
 
 corpus_path: data/processed/tok_train_slp1.txt
 english_corpus_path: data/processed/tok_train_en.txt
+split_corpus_path: data/processed/tok_train_slp1_split.txt
+
+# Written by experiments/03_sandhi_split/split_corpora.py; read-only here.
+split_cache_path: data/processed/split/cache.jsonl
+split_reconcile_threshold: 0.6
 
 # Prose before verse (CLAUDE.md §7): Sāmayik precedes Itihāsa in every table and config.
 sources:
@@ -60,6 +73,22 @@ arms:
     algo: unigram
     vocab_size: 64000
     side: en
+  - name: T4_bpe_split_32k
+    algo: bpe
+    vocab_size: 32000
+    side: sa_split
+  - name: T4_bpe_split_64k
+    algo: bpe
+    vocab_size: 64000
+    side: sa_split
+  - name: T4_unigram_split_32k
+    algo: unigram
+    vocab_size: 32000
+    side: sa_split
+  - name: T4_unigram_split_64k
+    algo: unigram
+    vocab_size: 64000
+    side: sa_split
 
 seed: 0
 
