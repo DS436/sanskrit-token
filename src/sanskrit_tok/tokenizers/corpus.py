@@ -17,6 +17,22 @@ Two knobs make one builder serve both sides of the parallel corpora:
   pure ASCII but not on a sentence carrying any Devanagari, so an English corpus checked
   with the Sanskrit hash can pass while leaking; the caller must pass the function its
   exclusion list was built with.
+
+**Two deduplications, and why neither is redundant.** `select_training_sentences` (and the
+`deduplicate_sources` it is built on) drops repeats of the **original** text;
+`build_training_corpus` drops repeats of the **transformed** text. They differ because
+transliteration is many-to-one: `जयमुदीरयेत्॥` (one U+0965 double danda) and
+`जयमुदीरयेत्।।` (two U+0964 single dandas) are two distinct sentences and one SLP1 string.
+
+Experiment 03 is where that stops being pedantry. Its sandhi splitter is fed Devanagari and
+its cache is keyed on Devanagari, so the two spellings are two sentences to split; the
+corpus is written in SLP1, so they are one line to train on. Selecting on the SLP1 form
+would split only one of them and leave the other missing from the cache when the corpus was
+built — a `MissingSplitError` five hours after the mistake, which is exactly what happened
+in review. So the *selection* — the set that gets split, shared by
+`experiments/03_sandhi_split/split_corpora.py` and `train_tokenizers.py` so the two can
+never disagree — deduplicates on the original, and the corpus keeps its own deduplication
+on the transformed text on top.
 """
 
 import hashlib

@@ -46,13 +46,18 @@ __all__ = ["DEFAULT_THRESHOLD", "MAX_WINDOW_SEGMENTS", "ReconcileResult", "recon
 #: manifest.
 DEFAULT_THRESHOLD = 0.6
 
-#: The most model segments one raw whitespace unit may absorb. The scan inside that bound
-#: is exhaustive — every window size is scored and the best-scoring eligible one wins —
-#: rather than a monotone extension that stops at the first dip, because similarity is not
-#: monotone in window size: a compound's ratio can fall as a partly-matching segment is
-#: added and rise again when the segment completing it arrives. The bound keeps the scan
-#: O(8) per unit and stops a degenerate model output from letting one unit swallow a
-#: sentence; eight is far above the longest real samāsa this splitter produces.
+#: Where the window scan starts giving up. The scan inside it is exhaustive — every window
+#: size is scored and the best-scoring eligible one wins — rather than a monotone extension
+#: that stops at the first dip, because similarity is not monotone in window size: a
+#: compound's ratio can fall as a partly-matching segment is added and rise again when the
+#: segment completing it arrives.
+#:
+#: It is a *starting* bound, not a hard one. `_best_window` raises it while the window at
+#: the bound is still the best match tried, so a long compound is followed to its end, and
+#: refuses the unit outright if the best window still ends at the bound with segments to
+#: spare. A hard cap would quietly delete the tail of any compound longer than it — the
+#: precise failure this module exists to prevent — while the soft one still stops a
+#: degenerate output, whose ratio stops improving immediately, in O(cap) per unit.
 MAX_WINDOW_SEGMENTS = 8
 
 
@@ -115,35 +120,61 @@ def _best_window(
     """The best window of segments from `start` for `unit`, as `(size, ratio)`; `(0, 0.0)`
     when none is eligible.
 
-    Every window size from 1 to `MAX_WINDOW_SEGMENTS` is scored with
-    `SequenceMatcher(...).ratio()` on the concatenated segments, and the highest-scoring
-    *eligible* one wins (ties go to the shorter window). A window is eligible when:
+    Window sizes are scored with `SequenceMatcher(...).ratio()` on the concatenated
+    segments and the highest-scoring *eligible* one wins (ties go to the shorter window).
+    A window is eligible when:
 
     * its similarity to `unit` is at least `threshold` — the threshold gates eligibility,
       it does not stop the scan. A compound scores 0.58 against its first segment alone
       and only clears 0.6 at two segments, so a scan that stopped at the first
       sub-threshold ratio would lose every compound split; and
-    * it resembles `unit` **more** than it resembles `next_unit`, the next letter-bearing
-      raw unit. Without that lookahead a dropped word is "repaired" by stealing the
-      following word's segments and the sentence acquires a duplicate: `rAmaH rAmam
-      vadati` with `rAmaH` dropped becomes `rAmam rAmam vadati`, a case error introduced
-      by this pipeline, with character retention reading a reassuring 1.000. The guard
-      makes the greedy walk yield the window to whichever unit has the better claim on it,
-      leaving the unmatched one verbatim — which is the correct outcome, since the model
-      dropped it.
+    * it resembles `unit` at least as much as it resembles `next_unit`, the next
+      letter-bearing raw unit. Without that lookahead a dropped word is "repaired" by
+      stealing the following word's segments and the sentence acquires a duplicate:
+      `rAmaH rAmam vadati` with `rAmaH` dropped becomes `rAmam rAmam vadati`, a case error
+      introduced by this pipeline, with character retention reading a reassuring 1.000.
+      The comparison is `>=`, not `>`: an exact tie means the two raw units are the same
+      word (`tacca tacca` against `tat ca tat ca`), and the walk should give the window to
+      the one that comes first and let the next unit take the next window, not refuse both.
+
+    **The cap protects, it never truncates.** `MAX_WINDOW_SEGMENTS` exists so a degenerate
+    model output cannot make one raw unit swallow a sentence, but a fixed cap silently
+    *creates* the deletion this module exists to undo: a ten-member compound whose ratio is
+    still climbing at eight segments would be replaced by its first eight and the last two
+    dropped, with retention showing nothing wrong. So the cap is raised whenever the window
+    at the cap is the best-scoring one tried so far and segments remain — the scan follows a
+    genuinely improving match as far as it goes — and if the best eligible window still ends
+    exactly at the cap with segments left over, the unit is kept **verbatim** rather than
+    replaced by a truncated window. Refusing to reconcile is always safe; truncating is not.
     """
     best_size = 0
     best_ratio = 0.0
-    limit = min(MAX_WINDOW_SEGMENTS, len(segments) - start)
-    for size in range(1, limit + 1):
+    best_any_ratio = 0.0
+    available = len(segments) - start
+    cap = min(MAX_WINDOW_SEGMENTS, available)
+
+    size = 0
+    while size < cap:
+        size += 1
         window = "".join(segments[start : start + size])
         ratio = SequenceMatcher(None, unit, window).ratio()
-        if ratio < threshold or ratio <= best_ratio:
-            continue
-        if next_unit is not None and ratio <= SequenceMatcher(None, next_unit, window).ratio():
-            continue
-        best_size = size
-        best_ratio = ratio
+        if (
+            ratio >= threshold
+            and ratio > best_ratio
+            and (
+                next_unit is None
+                or ratio >= SequenceMatcher(None, next_unit, window).ratio()
+            )
+        ):
+            best_size = size
+            best_ratio = ratio
+        if ratio > best_any_ratio:
+            best_any_ratio = ratio
+            if size == cap and cap < available:
+                cap += 1
+
+    if best_size and best_size == cap and cap < available:
+        return 0, 0.0
     return best_size, best_ratio
 
 

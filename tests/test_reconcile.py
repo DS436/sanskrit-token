@@ -12,7 +12,16 @@ verbatim.
 Everything here is a hand-computed example in SLP1; no model, no network, no fixtures.
 """
 
+import importlib
+
+import pytest
+
 from sanskrit_tok.sandhi.reconcile import ReconcileResult, reconcile
+
+#: The module object, fetched through `import_module` because `sanskrit_tok.sandhi`
+#: re-exports the `reconcile` *function* under that name and so shadows the submodule
+#: attribute. Only needed to monkeypatch `MAX_WINDOW_SEGMENTS`.
+reconcile_module = importlib.import_module("sanskrit_tok.sandhi.reconcile")
 
 
 def test_pure_sandhi_reversal_takes_the_models_segments() -> None:
@@ -229,12 +238,91 @@ def test_result_fields_include_the_inexact_counter() -> None:
 # ------------------------------------------------------- bounded exhaustive scan (minor)
 
 
-def test_the_window_scan_is_bounded() -> None:
-    """A unit may absorb at most `MAX_WINDOW_SEGMENTS` segments, so a pathological model
-    output cannot make one raw unit swallow the whole sentence."""
-    from sanskrit_tok.sandhi.reconcile import MAX_WINDOW_SEGMENTS
+#: A ten-member compound: longer than `MAX_WINDOW_SEGMENTS`, which is the point.
+LONG_COMPOUND_SEGMENTS = (
+    "deva rAja putra mitra sena pati vaMSa kula dIpa tejas"
+)
 
-    assert MAX_WINDOW_SEGMENTS == 8
+
+def test_a_compound_longer_than_the_window_bound_is_not_truncated() -> None:
+    """The bound must protect, never truncate (re-review, item 1).
+
+    With a hard cap of eight the best eligible window for this unit is its first eight
+    segments — similarity 0.886, comfortably over threshold — so `dIpa tejas` was replaced
+    by nothing and the sentence lost two members of a compound. Character retention would
+    have shown 0.80 for the sentence and nothing at all would have named the cause. The
+    scan now follows the improving match to ten segments (0.886 -> 0.940 -> 1.000).
+    """
+    unit = LONG_COMPOUND_SEGMENTS.replace(" ", "")
+    result = reconcile(unit, LONG_COMPOUND_SEGMENTS)
+
+    assert result.text == LONG_COMPOUND_SEGMENTS
+    assert result.n_units_out == 10
+    assert result.chars_out == result.chars_raw  # nothing lost
+    assert result.n_units_kept_verbatim == 0
+
+
+def test_the_window_bound_is_a_starting_point_not_a_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Behavioural replacement for the old `MAX_WINDOW_SEGMENTS == 8` assertion.
+
+    The guarantee is not the number, it is that lowering the number cannot cost a
+    character: the scan raises the bound for as long as the window at it is still the best
+    match tried. Pinned at a bound of two against a three-segment compound.
+    """
+    monkeypatch.setattr(reconcile_module, "MAX_WINDOW_SEGMENTS", 2)
+
+    result = reconcile("viSvAsakAraRAdeva", "viSvAsa kAraRAt eva")
+
+    assert result.text == "viSvAsa kAraRAt eva"
+
+
+def test_a_unit_does_not_swallow_a_tail_it_does_not_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the guarantee: a window that stops improving stops the scan, so a
+    degenerate model output cannot make one raw unit absorb a whole sentence."""
+    monkeypatch.setattr(reconcile_module, "MAX_WINDOW_SEGMENTS", 8)
+
+    result = reconcile("rAma vanam", "rAma ca tu hi vE sma nu Kalu aTa api iti vanam")
+
+    assert result.text.split()[0] == "rAma"
+    assert result.n_units_out == 2
+
+
+def test_a_window_whose_similarity_dips_and_recovers_is_still_found() -> None:
+    """The scan is exhaustive within the bound, not a monotone walk (re-review, item 2).
+
+    Ratios across window sizes here are 0.667, 0.476, 0.769: the two-segment window falls
+    *below* the threshold and the three-segment one is the best of the three. A monotone
+    extension stops at the dip and returns the one-segment window, dropping `fghij`.
+    """
+    result = reconcile("abcdefghij", "abcde xyzxyz fghij")
+
+    assert result.text == "abcde xyzxyz fghij"
+    assert result.n_units_out == 3
+
+
+def test_two_identical_words_each_take_their_own_window() -> None:
+    """The neighbour guard is `>=`, not `>` (re-review, item 3).
+
+    A genuine repetition scores exactly the same against both units, and a strict `>` read
+    that tie as "this window belongs to the next one" and refused both, leaving `tacca
+    tacca` unsplit. A tie means the two units are the same word, so the first takes the
+    first window and the second takes the next.
+    """
+    result = reconcile("tacca tacca", "tat ca tat ca")
+
+    assert result.text == "tat ca tat ca"
+    assert result.n_units_kept_verbatim == 0
+
+
+def test_the_tie_break_does_not_weaken_the_dropped_word_guard() -> None:
+    """0.80 against `rAmaH` versus 1.00 against `rAmam` is not a tie, so the guard holds."""
+    result = reconcile("rAmaH rAmam vadati", "rAmam vadati")
+
+    assert result.text == "rAmaH rAmam vadati"
 
 
 def test_the_best_window_is_the_highest_ratio_not_the_last_increasing_one() -> None:

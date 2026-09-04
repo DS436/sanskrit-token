@@ -311,8 +311,9 @@ def ensure_training_corpus(
     On a rebuild, `sources` (the *raw*, unfiltered sentences from `collect_sources`) goes
     through `filter_leaked_sentences` and then `deduplicate_sources` — the same selection
     `experiments/03_sandhi_split/split_corpora.py` splits, so the split side can never be
-    asked to transform a sentence the split run did not split (see `corpus.py`'s docstring:
-    two Devanagari spellings can share one SLP1 form). The written corpus is unaffected:
+    asked to transform a sentence the split run did not split (`sanskrit_tok.tokenizers
+    .corpus`'s module docstring, "Two deduplications, and why neither is redundant": two
+    Devanagari spellings can share one SLP1 form). The written corpus is unaffected:
     `build_training_corpus` still deduplicates on the *transformed* text, so those two
     spellings still collapse to one line.
 
