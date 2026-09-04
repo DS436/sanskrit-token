@@ -23,8 +23,17 @@ timestamp, in the key order `results.json` stores them in.
 scripts (exp02's `run.py` and `train_tokenizers.py`, exp03's `split_corpora.py`) name the
 same corpora in the same YAML shape, and a fourth copy of the dispatch is a fourth chance
 for two of them to end up measuring and training on different text.
+
+The arm helpers (`load_arms`, `tokenizer_sources`, `tokenizer_file_sha256`,
+`unavailable_caption`) and the leakage check (`exclusion_check_for`) arrived the same way,
+one experiment later: Experiment 03 needed all five verbatim from Experiment 02, and two
+copies of "what counts as a leaked sentence" or "which arms get a sha256" is exactly the
+drift this module was created to stop. `tokenizer_sources` gained one optional argument in
+the move — `splitter_source_id`, for the `T4` arms whose training text a sandhi splitter
+produced — rather than a second implementation.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -36,8 +45,10 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from sanskrit_tok.data.exclusion import sentence_hash
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.provenance import git_commit, git_dirty
+from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable, load_tokenizer
 
 if TYPE_CHECKING:
     from sanskrit_tok.data.parallel import ParallelCorpus
@@ -45,12 +56,16 @@ if TYPE_CHECKING:
 __all__ = [
     "ENGLISH_LANGUAGE",
     "ENGLISH_SOURCE_LOADERS",
+    "FILE_BACKED_FAMILIES",
     "HINDI_LANGUAGE",
     "SANSKRIT_LANGUAGE",
     "SANSKRIT_SOURCE_LOADERS",
     "SOURCE_LOADERS",
+    "SPLIT_TRAINED_FAMILIES",
     "TPP_EXTRA_KEYS",
     "collect_sources",
+    "exclusion_check_for",
+    "load_arms",
     "load_config",
     "load_corpus_entry",
     "provenance",
@@ -60,6 +75,9 @@ __all__ = [
     "select_aligned_indices",
     "summarise_tpp",
     "take_indices",
+    "tokenizer_file_sha256",
+    "tokenizer_sources",
+    "unavailable_caption",
     "write_results",
 ]
 
@@ -269,6 +287,144 @@ def take_indices(
     return {
         language: [values[index] for index in indices] for language, values in sentences.items()
     }
+
+
+# --------------------------------------------------------------------------- leakage
+
+
+def exclusion_check_for(
+    sentences: Sequence[str],
+    hashes: frozenset[str],
+    hash_fn: Callable[[str], str] = sentence_hash,
+) -> dict[str, int]:
+    """`{"n": len(sentences), "n_missing": how many hash to something not in `hashes`}`.
+
+    Every evaluation sentence an experiment measures is expected to be in the exclusion
+    list for its side (CLAUDE.md §2.4): `data/exclusion_hashes.txt` for the Sanskrit side
+    (`sentence_hash`), `data/exclusion_hashes_en.txt` for the English side
+    (`sentence_hash_en`, which is what the `E1_*` control arms were kept away from). A
+    non-zero `n_missing` means that side of that corpus was not included when the list was
+    built, which is worth a WARNING but not an abort — an experiment script reads
+    evaluation text, it does not train anything, so there is nothing here for a missed hash
+    to leak *into*. It matters all the same: a missed English hash means an E1 arm could
+    have been trained on a sentence it is now being evaluated on.
+
+    `hash_fn` must be the function `hashes` was built with; the caller logs the warning,
+    since only it knows which corpus and which side the count belongs to.
+    """
+    n_missing = sum(1 for sentence in sentences if hash_fn(sentence) not in hashes)
+    return {"n": len(sentences), "n_missing": n_missing}
+
+
+# ---------------------------------------------------------------------- tokenizer arms
+
+#: Arm families whose `source_id` is a local `tokenizer.json` path rather than a Hugging
+#: Face / tiktoken id, and whose file is therefore hashed into `tokenizer_sources`: every
+#: family this project trains from scratch. `outputs/` is gitignored and `UnigramTrainer`
+#: is not bit-reproducible (docs/decisions.md), so the sha256 is the only thing tying a
+#: number in a `results.json` to the exact artifact that produced it. A property of the
+#: registry, not of any one experiment, which is why one set serves both.
+FILE_BACKED_FAMILIES = frozenset({"T1", "T2", "T4", "E1"})
+
+#: Families whose training text came out of a sandhi splitter, and which therefore also
+#: carry `splitter_source_id` when one is given: the splitter is as much a part of a `T4`
+#: arm's provenance as its own `tokenizer.json`.
+SPLIT_TRAINED_FAMILIES = frozenset({"T4"})
+
+
+def load_arms(names: Sequence[str]) -> tuple[dict[str, LoadedTokenizer], dict[str, str]]:
+    """Load every arm in `names`, once each; split into loaded and `unavailable_arms`.
+
+    `TokenizerUnavailable` — a gated model, or a trained arm whose `tokenizer.json` does
+    not exist yet — is caught and recorded rather than raised: one missing arm must not
+    cost a run that measures a dozen. Anything else propagates, since it is a defect rather
+    than a missing artifact.
+    """
+    loaded: dict[str, LoadedTokenizer] = {}
+    unavailable: dict[str, str] = {}
+    for name in names:
+        if name in loaded or name in unavailable:
+            continue
+        try:
+            loaded[name] = load_tokenizer(name)
+        except TokenizerUnavailable as error:
+            logger.warning("%s: unavailable this run: %s", name, error)
+            unavailable[name] = str(error)
+    return loaded, unavailable
+
+
+def tokenizer_file_sha256(path: Path) -> str:
+    """sha256 of `path`, hex, read in chunks (a `tokenizer.json` is a few MB)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tokenizer_sources(
+    arms: Mapping[str, LoadedTokenizer],
+    splitter_source_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """`results.json`'s `tokenizer_sources`: what each loaded arm actually is.
+
+    `source_id`, `vocab_size`, `family` and `attempted` come straight off the
+    `LoadedTokenizer`. Arms in `FILE_BACKED_FAMILIES` additionally carry `sha256`, for the
+    reason that constant gives. A file that cannot be read is logged at WARNING and leaves
+    the key absent rather than aborting a run whose numbers are already computed.
+
+    `splitter_source_id` is optional and only reaches the `SPLIT_TRAINED_FAMILIES` arms:
+    pass it from a split manifest (Experiment 03) and each `T4` entry records which model,
+    at which revision, produced the text it was trained on; omit it for an experiment that
+    has no split arms, and nothing changes.
+    """
+    sources: dict[str, dict[str, Any]] = {}
+    for name, tokenizer in arms.items():
+        entry: dict[str, Any] = {
+            "source_id": tokenizer.source_id,
+            "vocab_size": tokenizer.vocab_size,
+            "family": tokenizer.family,
+            "attempted": list(tokenizer.attempted),
+        }
+        if tokenizer.family in FILE_BACKED_FAMILIES:
+            try:
+                entry["sha256"] = tokenizer_file_sha256(Path(tokenizer.source_id))
+            except OSError as error:
+                logger.warning(
+                    "%s: could not hash %s (%s); recording no sha256",
+                    name,
+                    tokenizer.source_id,
+                    error,
+                )
+        if splitter_source_id is not None and tokenizer.family in SPLIT_TRAINED_FAMILIES:
+            entry["splitter_source_id"] = splitter_source_id
+        sources[name] = entry
+    return sources
+
+
+def unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
+    """One short sentence naming every arm omitted this run, for a figure caption.
+
+    `unavailable_arms[name]` is the full exception text (every candidate id tried, one per
+    line); this keeps only the first sentence, with the redundant `"<name>: "` prefix
+    `TokenizerUnavailable` puts on it stripped, so the caption stays one clause per arm
+    instead of reproducing the whole candidate list. Returns `""` when nothing is
+    unavailable, so the caller can omit the sentence entirely rather than print "Omitted:
+    (none)".
+    """
+    if not unavailable_arms:
+        return ""
+    parts: list[str] = []
+    for name in sorted(unavailable_arms):
+        message = unavailable_arms[name]
+        first_line = message.splitlines()[0] if message else ""
+        first_line = first_line.split(" Tried:")[0].strip()
+        prefix = f"{name}:"
+        if first_line.startswith(prefix):
+            first_line = first_line[len(prefix) :].strip()
+        first_line = first_line.rstrip(".")
+        parts.append(f"{name} omitted ({first_line})" if first_line else f"{name} omitted")
+    return "Not shown (unavailable this run): " + "; ".join(parts) + "."
 
 
 # --------------------------------------------------------------------- results writing

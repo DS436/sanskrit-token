@@ -37,24 +37,25 @@ synthetic data without touching the network, a real corpus or the splitter.
 """
 
 import argparse
-import hashlib
 import json
 import logging
 import math
 import random
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
+from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash_en
 from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
     ENGLISH_LANGUAGE,
     SANSKRIT_LANGUAGE,
+    exclusion_check_for,
+    load_arms,
     load_config,
     load_corpus_entry,
     provenance,
@@ -63,6 +64,8 @@ from sanskrit_tok.experiment import (
     select_aligned_indices,
     summarise_tpp,
     take_indices,
+    tokenizer_sources,
+    unavailable_caption,
     write_results,
 )
 from sanskrit_tok.metrics._ratio import token_ratio
@@ -70,7 +73,7 @@ from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility, fertility_against_reference
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.metrics.tpp import tpp, tpp_paired_delta
-from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable, load_tokenizer
+from sanskrit_tok.tokenizers.registry import LoadedTokenizer
 
 logger = logging.getLogger("exp03")
 
@@ -93,17 +96,6 @@ SPLIT_ARM = "split"
 #: file says which of the two questions a number answers without consulting the config.
 ROLE_CONTROLLED = "controlled"
 ROLE_DEPLOYED = "deployed"
-
-#: Arm families whose `source_id` is a local `tokenizer.json` path, and whose file is
-#: therefore hashed into `tokenizer_sources`: `outputs/` is gitignored and Unigram training
-#: is not bit-reproducible (docs/decisions.md), so the sha256 is the only thing tying a
-#: number here to the artifact that produced it. Every arm in this experiment is one.
-FILE_BACKED_FAMILIES = frozenset({"T1", "T2", "T4", "E1"})
-
-#: The family whose training text came out of the splitter, and which therefore carries
-#: `splitter_source_id` in its `tokenizer_sources` entry: the splitter is as much a part of
-#: a `T4` arm's provenance as its own `tokenizer.json`.
-SPLIT_TRAINED_FAMILIES = frozenset({"T4"})
 
 #: Per-corpus manifest keys copied into `splitter_stats`; the run-wide counters
 #: (`n_chunked`, `n_model`, ...) live in the top-level `splitter` block instead.
@@ -270,26 +262,6 @@ def prepare_corpus(entry: Mapping[str, Any], root: Path, split_dir: Path) -> Cor
     )
 
 
-# --------------------------------------------------------------------------- leakage
-
-
-def exclusion_check_for(
-    sentences: Sequence[str],
-    hashes: frozenset[str],
-    hash_fn: Callable[[str], str] = sentence_hash,
-) -> dict[str, int]:
-    """`{"n": len(sentences), "n_missing": how many hash to something not in `hashes`}`.
-
-    Identical to Experiment 02's check and read the same way (CLAUDE.md §2.4): every
-    evaluation sentence should be in the exclusion list for its side, so that no arm
-    measured here was trained on it. A non-zero `n_missing` is a WARNING, not an abort —
-    this script trains nothing — but it does mean a trained arm could have seen this text.
-    `hash_fn` must be the function `hashes` was built with.
-    """
-    n_missing = sum(1 for sentence in sentences if hash_fn(sentence) not in hashes)
-    return {"n": len(sentences), "n_missing": n_missing}
-
-
 # ------------------------------------------------------------------------ tokenizers
 
 
@@ -313,69 +285,6 @@ def arm_specs(arms_raw: Sequence[str], arms_split: Sequence[str]) -> list[ArmSpe
     specs = [ArmSpec(name, RAW_ARM, (RAW,), RAW) for name in arms_raw]
     specs += [ArmSpec(name, SPLIT_ARM, (SPLIT, SPLIT_MODEL), SPLIT) for name in arms_split]
     return specs
-
-
-def load_arms(names: Sequence[str]) -> tuple[dict[str, LoadedTokenizer], dict[str, str]]:
-    """Load every arm in `names`, once each; split into loaded and `unavailable_arms`."""
-    loaded: dict[str, LoadedTokenizer] = {}
-    unavailable: dict[str, str] = {}
-    for name in names:
-        if name in loaded or name in unavailable:
-            continue
-        try:
-            loaded[name] = load_tokenizer(name)
-        except TokenizerUnavailable as error:
-            logger.warning("%s: unavailable this run: %s", name, error)
-            unavailable[name] = str(error)
-    return loaded, unavailable
-
-
-def tokenizer_file_sha256(path: Path) -> str:
-    """sha256 of `path`, hex, read in chunks (a `tokenizer.json` is a few MB)."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def tokenizer_sources(
-    arms: Mapping[str, LoadedTokenizer], splitter_source_id: str
-) -> dict[str, dict[str, Any]]:
-    """`results.json`'s `tokenizer_sources`: what each loaded arm actually is.
-
-    File-backed arms carry the sha256 of their `tokenizer.json`, for the reason
-    `FILE_BACKED_FAMILIES` gives. `T4` arms additionally carry `splitter_source_id`: their
-    training text is the splitter's output, so the model-and-revision that produced it is
-    part of the arm's provenance, not merely of the corpus's. A file that cannot be read is
-    logged at WARNING and leaves the key absent rather than aborting a run whose numbers
-    are already computed.
-    """
-    sources: dict[str, dict[str, Any]] = {}
-    for name, tokenizer in arms.items():
-        entry: dict[str, Any] = {
-            "source_id": tokenizer.source_id,
-            "vocab_size": tokenizer.vocab_size,
-            "family": tokenizer.family,
-            "attempted": list(tokenizer.attempted),
-        }
-        if tokenizer.family in FILE_BACKED_FAMILIES:
-            try:
-                entry["sha256"] = tokenizer_file_sha256(Path(tokenizer.source_id))
-            except OSError as error:
-                logger.warning(
-                    "%s: could not hash %s (%s); recording no sha256",
-                    name,
-                    tokenizer.source_id,
-                    error,
-                )
-        if tokenizer.family in SPLIT_TRAINED_FAMILIES:
-            entry["splitter_source_id"] = splitter_source_id
-        sources[name] = entry
-    return sources
-
-
-# ----------------------------------------------------------------------- matched pairs
 
 
 def arm_algorithm_and_vocab(name: str) -> tuple[str, str]:
@@ -646,6 +555,17 @@ def compute_fertility_compression(
     `n_undefined` counts are deliberately not carried into the summaries: they count
     different things (words that encoded to nothing, versus sentences whose reference had
     no words), and one key with two meanings across a table is worse than no key.
+
+    **`value` is comparable across both; `mean` and `std` are not.** The two metrics
+    attach different distributions, so `summarise_metric` summarises different lists: for a
+    raw arm `mean`/`std` describe the spread of *per-word token counts* (`per_word`, one
+    entry per word), and for a split arm the spread of *per-sentence ratios* (`per_text`,
+    one entry per sentence). Only the pooled `value` — tokens over raw words, both ways —
+    means the same thing in both rows, and it is the only one a table may compare. Each
+    summary therefore records `distribution` (which list was summarised), `n` (the
+    denominator, raw words in both cases) and `n_texts` (how many sentences the arm was
+    measured over, which for a split arm is also the length of the summarised list).
+
     **Secondary** is plain
     `fertility` on the split text, i.e. tokens per *split* word — a different denominator,
     and the reason the primary exists (docs/decisions.md, "Fertility for split arms uses
@@ -673,12 +593,14 @@ def compute_fertility_compression(
                 secondary[corpus.name][spec.name] = {
                     **summarise_metric(fertility(tokenizer, texts)),
                     "variant": spec.primary,
+                    "n_texts": len(texts),
                 }
             else:
                 primary_result = fertility(tokenizer, texts)
             primary[corpus.name][spec.name] = {
                 **summarise_metric(primary_result),
                 "variant": spec.primary,
+                "n_texts": len(texts),
             }
             comp[corpus.name][spec.name] = {
                 **summarise_metric(compression(tokenizer, texts)),
@@ -792,29 +714,6 @@ def splitter_stats(
 # ------------------------------------------------------------------------------ figure
 
 
-def _unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
-    """One short sentence naming every arm omitted this run, built from `unavailable_arms`.
-
-    Keeps only the first sentence of each `TokenizerUnavailable` message, with the
-    redundant `"<name>: "` prefix stripped, so the caption stays one clause per arm instead
-    of reproducing every candidate that was tried. `""` when nothing is unavailable, so the
-    caller can omit the sentence rather than print "Omitted: (none)".
-    """
-    if not unavailable_arms:
-        return ""
-    parts: list[str] = []
-    for name in sorted(unavailable_arms):
-        message = unavailable_arms[name]
-        first_line = message.splitlines()[0] if message else ""
-        first_line = first_line.split(" Tried:")[0].strip()
-        prefix = f"{name}:"
-        if first_line.startswith(prefix):
-            first_line = first_line[len(prefix) :].strip()
-        first_line = first_line.rstrip(".")
-        parts.append(f"{name} omitted ({first_line})" if first_line else f"{name} omitted")
-    return "Not shown (unavailable this run): " + "; ".join(parts) + "."
-
-
 def _series(
     corpus_tpp: Mapping[str, Any],
     arm: str,
@@ -916,13 +815,15 @@ def _build_figure(results: Mapping[str, Any]) -> Any:
         )
         axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
 
-        finite = [
-            bound
-            for values, errors in ((raw_values, raw_err), (split_values, split_err))
-            for value, lower, upper in zip(values, errors[0], errors[1], strict=True)
-            if not math.isnan(value)
-            for bound in (value - lower, value + upper)
-        ]
+        # Every bound that goes into the y-range must be finite, not merely non-`nan`: an
+        # arm whose pivot side tokenized to nothing gives an infinite ratio, and one `inf`
+        # among the bounds makes `set_ylim` either raise or collapse the panel.
+        finite: list[float] = []
+        for values, errors in ((raw_values, raw_err), (split_values, split_err)):
+            for value, lower, upper in zip(values, errors[0], errors[1], strict=True):
+                bounds = (value - lower, value + upper)
+                if math.isfinite(value) and all(math.isfinite(bound) for bound in bounds):
+                    finite.extend(bounds)
         if finite:
             span_low, span_high = min([*finite, 1.0]), max([*finite, 1.0])
             span = span_high - span_low
@@ -940,7 +841,7 @@ def _build_figure(results: Mapping[str, Any]) -> Any:
 
     splitter_id = str(results.get("splitter", {}).get("source_id", "unknown"))
     caption = f"{FIGURE_CAPTION_PROVISIONAL} Splitter: {splitter_id}."
-    omitted = _unavailable_caption(results.get("unavailable_arms", {}))
+    omitted = unavailable_caption(results.get("unavailable_arms", {}))
     if omitted:
         caption = f"{caption}  {omitted}"
 
@@ -991,7 +892,7 @@ def run(config: Mapping[str, Any], config_src: Path | None = None) -> dict[str, 
     english_control = {str(key): str(value) for key, value in config["english_control"].items()}
     deployed_pivot = str(config["deployed_pivot"])
 
-    split_dir = resolve_path(str(config["split_cache_path"]), root)
+    split_dir = resolve_path(str(config["split_dir"]), root)
     manifest_path = resolve_path(
         str(config.get("split_manifest_path", split_dir / "manifest.json")), root
     )

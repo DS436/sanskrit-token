@@ -3,14 +3,17 @@
 These pin the behaviour three scripts previously each carried their own copy of
 (`experiments/01_baseline_penalty/run.py`, `experiments/02_tpp_parallel/run.py`,
 `experiments/02_tpp_parallel/train_tokenizers.py`): config-path resolution against the
-repository root, YAML loading, git provenance, blank-index filtering, JSON sanitising and
-the `results.json`/`config.yaml` writer. Several of them started life in
-`tests/test_exp01.py` and `tests/test_exp02.py` and moved here with the code.
+repository root, YAML loading, git provenance, blank-index filtering, JSON sanitising,
+the `results.json`/`config.yaml` writer, arm loading, the `tokenizer_sources` provenance
+block, and the leakage check and caption that go with them. Several of them started life
+in `tests/test_exp01.py` and `tests/test_exp02.py` and moved here with the code, the last
+five when Experiment 03 turned out to need the same helpers verbatim.
 
 `provenance` runs `git` for real in a throwaway repository, for the reason
 `tests/test_provenance.py` gives: the subprocess call is the thing under test.
 """
 
+import hashlib
 import json
 import math
 import subprocess
@@ -19,7 +22,10 @@ from typing import Any
 
 import pytest
 
+from sanskrit_tok.data.exclusion import sentence_hash, sentence_hash_en
 from sanskrit_tok.experiment import (
+    exclusion_check_for,
+    load_arms,
     load_config,
     provenance,
     repo_root,
@@ -28,8 +34,12 @@ from sanskrit_tok.experiment import (
     select_aligned_indices,
     summarise_tpp,
     take_indices,
+    tokenizer_file_sha256,
+    tokenizer_sources,
+    unavailable_caption,
     write_results,
 )
+from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -294,3 +304,195 @@ def test_summarise_tpp_key_set_is_exactly_what_results_json_stores() -> None:
         "pivot_tokens",
         "ci",
     }
+
+
+# --- arm loading ------------------------------------------------------------------
+
+
+def _fake_arm(name: str, source_id: str, family: str) -> LoadedTokenizer:
+    """A `LoadedTokenizer` whose `encode` is never called; only its provenance is read."""
+    return LoadedTokenizer(
+        name=name,
+        source_id=source_id,
+        vocab_size=32000,
+        _encode=lambda text: [len(text)],
+        family=family,
+        attempted=(source_id,),
+    )
+
+
+def test_load_arms_returns_what_loaded_and_why_the_rest_did_not(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """One unavailable arm must not cost a run that measures a dozen: it is recorded, with
+    a WARNING, and every other arm still loads."""
+    import sanskrit_tok.experiment as experiment
+
+    def load(name: str) -> LoadedTokenizer:
+        if name == "T4_bpe_split_32k":
+            raise TokenizerUnavailable(f"{name}: trained tokenizer file not found")
+        return _fake_arm(name, f"{name}.json", name.split("_", 1)[0])
+
+    monkeypatch.setattr(experiment, "load_tokenizer", load)
+    with caplog.at_level("WARNING", logger="sanskrit_tok.experiment"):
+        loaded, unavailable = load_arms(["T1_bpe_raw_32k", "T4_bpe_split_32k", "T1_bpe_raw_32k"])
+    assert set(loaded) == {"T1_bpe_raw_32k"}
+    assert "trained tokenizer file not found" in unavailable["T4_bpe_split_32k"]
+    assert "T4_bpe_split_32k" in " ".join(record.getMessage() for record in caplog.records)
+
+
+def test_load_arms_loads_each_name_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name repeated across an experiment's arm and pivot lists must not be downloaded
+    (or read off disk) twice."""
+    import sanskrit_tok.experiment as experiment
+
+    calls: list[str] = []
+
+    def load(name: str) -> LoadedTokenizer:
+        calls.append(name)
+        return _fake_arm(name, f"{name}.json", "T1")
+
+    monkeypatch.setattr(experiment, "load_tokenizer", load)
+    load_arms(["T1_bpe_raw_32k", "T1_bpe_raw_32k"])
+    assert calls == ["T1_bpe_raw_32k"]
+
+
+def test_load_arms_does_not_swallow_a_defect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`TokenizerUnavailable` means a missing artifact; anything else is a bug here and
+    must propagate rather than be reported as an unavailable arm."""
+    import sanskrit_tok.experiment as experiment
+
+    def load(name: str) -> LoadedTokenizer:
+        raise TypeError("signature changed upstream")
+
+    monkeypatch.setattr(experiment, "load_tokenizer", load)
+    with pytest.raises(TypeError):
+        load_arms(["T1_bpe_raw_32k"])
+
+
+# --- tokenizer_sources: provenance of each loaded arm -----------------------------
+
+
+def test_tokenizer_sources_hashes_file_backed_arms(tmp_path: Path) -> None:
+    """T1/T2/T4/E1 arms live in gitignored `outputs/` and Unigram training is not
+    bit-reproducible, so the sha256 of the exact `tokenizer.json` is the only tie between
+    a number in `results.json` and the artifact behind it."""
+    path = tmp_path / "tokenizer.json"
+    path.write_bytes(b'{"model": "fake"}')
+    expected = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    sources = tokenizer_sources({"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(path), "T1")})
+    assert sources["T1_bpe_raw_32k"]["sha256"] == expected
+    assert sources["T1_bpe_raw_32k"]["source_id"] == str(path)
+    assert sources["T1_bpe_raw_32k"]["vocab_size"] == 32000
+    assert sources["T1_bpe_raw_32k"]["family"] == "T1"
+    assert sources["T1_bpe_raw_32k"]["attempted"] == [str(path)]
+
+
+def test_tokenizer_sources_hashes_t2_arms_too(tmp_path: Path) -> None:
+    path = tmp_path / "tokenizer.json"
+    path.write_bytes(b'{"model": "unigram"}')
+    sources = tokenizer_sources(
+        {"T2_unigram_raw_64k": _fake_arm("T2_unigram_raw_64k", str(path), "T2")}
+    )
+    assert sources["T2_unigram_raw_64k"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_tokenizer_sources_omits_sha256_for_hub_backed_arms() -> None:
+    """A T0/T3 `source_id` is a model id, not a path; there is no file here to hash."""
+    sources = tokenizer_sources({"T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0")})
+    assert "sha256" not in sources["T0_o200k"]
+
+
+def test_tokenizer_sources_survives_an_unreadable_file(tmp_path: Path) -> None:
+    """The numbers are already computed by then; a missing file must not abort the write."""
+    sources = tokenizer_sources(
+        {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(tmp_path / "gone.json"), "T1")}
+    )
+    assert "sha256" not in sources["T1_bpe_raw_32k"]
+    assert sources["T1_bpe_raw_32k"]["source_id"].endswith("gone.json")
+
+
+def test_tokenizer_sources_names_the_splitter_for_split_trained_arms(tmp_path: Path) -> None:
+    """A T4 arm's training text is a splitter's output, so the model and revision that
+    produced it are part of that arm's provenance (Experiment 03)."""
+    path = tmp_path / "tokenizer.json"
+    path.write_bytes(b'{"model": "fake"}')
+    sources = tokenizer_sources(
+        {
+            "T4_bpe_split_32k": _fake_arm("T4_bpe_split_32k", str(path), "T4"),
+            "T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(path), "T1"),
+        },
+        "chronbmm/sanskrit5-multitask@c0d2ada5",
+    )
+    assert sources["T4_bpe_split_32k"]["splitter_source_id"] == (
+        "chronbmm/sanskrit5-multitask@c0d2ada5"
+    )
+    # a raw arm was trained on unsplit text: the key would be a false provenance claim
+    assert "splitter_source_id" not in sources["T1_bpe_raw_32k"]
+
+
+def test_tokenizer_sources_without_a_splitter_id_adds_no_key(tmp_path: Path) -> None:
+    """Experiment 02 has no split arms and passes nothing; nothing changes."""
+    sources = tokenizer_sources(
+        {"T4_bpe_split_32k": _fake_arm("T4_bpe_split_32k", str(tmp_path / "t.json"), "T4")}
+    )
+    assert "splitter_source_id" not in sources["T4_bpe_split_32k"]
+
+
+def test_tokenizer_file_sha256_matches_hashlib(tmp_path: Path) -> None:
+    path = tmp_path / "big.json"
+    path.write_bytes(b"x" * (3 * (1 << 20) + 7))  # spans several read chunks
+    assert tokenizer_file_sha256(path) == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# --- the leakage check ------------------------------------------------------------
+
+
+def test_exclusion_check_counts_missing_hashes() -> None:
+    sentences = ["रामः", "सीता", "लक्ष्मणः"]
+    hashes = frozenset({sentence_hash("रामः"), sentence_hash("सीता")})
+    assert exclusion_check_for(sentences, hashes) == {"n": 3, "n_missing": 1}
+
+
+def test_exclusion_check_all_present_is_zero_missing() -> None:
+    sentences = ["रामः", "सीता"]
+    hashes = frozenset({sentence_hash(text) for text in sentences})
+    assert exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 0}
+
+
+def test_exclusion_check_none_present_is_all_missing() -> None:
+    assert exclusion_check_for(["रामः", "सीता"], frozenset()) == {"n": 2, "n_missing": 2}
+
+
+def test_exclusion_check_uses_the_english_hash_for_the_english_side() -> None:
+    """`exclusion_check_en` verifies the list that kept the E1 control arms away from the
+    evaluation text, so it must hash the way that list was built (`sentence_hash_en`)."""
+    sentences = ["Rama goes", "The verse रामः गच्छति opens the chapter"]
+    hashes = frozenset({sentence_hash_en(text) for text in sentences})
+    assert exclusion_check_for(sentences, hashes, sentence_hash_en) == {"n": 2, "n_missing": 0}
+    # the Sanskrit hash transliterates first, so the Devanagari-bearing sentence misses
+    assert exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 1}
+
+
+# --- the unavailable-arm caption --------------------------------------------------
+
+
+def test_unavailable_caption_lists_every_omitted_arm() -> None:
+    caption = unavailable_caption(
+        {"T3_indicsuper": "T3_indicsuper: no candidate tokenizer could be loaded. Tried:\n  a\n  b"}
+    )
+    assert "T3_indicsuper" in caption
+    assert "omitted" in caption
+    # the redundant "T3_indicsuper: " prefix and the per-candidate "Tried:" list are
+    # trimmed, so the per-candidate detail does not leak into the one-line caption.
+    assert "Tried" not in caption
+
+
+def test_unavailable_caption_names_every_arm_in_sorted_order() -> None:
+    caption = unavailable_caption({"T4_z": "T4_z: gone", "T1_a": "T1_a: gone"})
+    assert caption.index("T1_a") < caption.index("T4_z")
+
+
+def test_unavailable_caption_is_empty_when_nothing_is_unavailable() -> None:
+    assert unavailable_caption({}) == ""

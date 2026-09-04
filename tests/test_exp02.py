@@ -11,11 +11,13 @@ experiment, per the task brief).
 package), so it is loaded by path, exactly as `tests/test_exp01.py` does.
 
 The JSON sanitiser and the TPP summary enricher this script used to define are now
-`sanskrit_tok.experiment`'s `sanitize_json` and `summarise_tpp`, and their tests moved
-with them to `tests/test_experiment.py`.
+`sanskrit_tok.experiment`'s `sanitize_json` and `summarise_tpp`; the arm loader, the
+`tokenizer_sources` provenance block, the file hash, the leakage check and the
+unavailable-arm caption followed them there when Experiment 03 needed the same five. All
+of their tests live in `tests/test_experiment.py`; what remains here is this script's own
+wiring.
 """
 
-import hashlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -78,7 +80,7 @@ def test_variants_for_family_unknown_family_names_itself_and_the_config_keys() -
         assert family in message
 
 
-# --- tokenizer_sources: provenance of each loaded arm --------------------------------
+# --- a fake arm, shared by the tests below -------------------------------------------
 
 
 def _fake_arm(name: str, source_id: str, family: str) -> object:
@@ -91,87 +93,6 @@ def _fake_arm(name: str, source_id: str, family: str) -> object:
         family=family,
         attempted=(source_id,),
     )
-
-
-def test_tokenizer_sources_hashes_file_backed_arms(tmp_path: Path) -> None:
-    """T1/T2 arms live in gitignored `outputs/` and Unigram training is not
-    bit-reproducible, so the sha256 of the exact `tokenizer.json` is the only tie between
-    a number in `results.json` and the artifact behind it."""
-    path = tmp_path / "tokenizer.json"
-    path.write_bytes(b'{"model": "fake"}')
-    expected = hashlib.sha256(path.read_bytes()).hexdigest()
-
-    arms = {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(path), "T1")}
-    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
-    assert sources["T1_bpe_raw_32k"]["sha256"] == expected
-    assert sources["T1_bpe_raw_32k"]["source_id"] == str(path)
-    assert sources["T1_bpe_raw_32k"]["vocab_size"] == 32000
-    assert sources["T1_bpe_raw_32k"]["family"] == "T1"
-    assert sources["T1_bpe_raw_32k"]["attempted"] == [str(path)]
-
-
-def test_tokenizer_sources_hashes_t2_arms_too(tmp_path: Path) -> None:
-    path = tmp_path / "tokenizer.json"
-    path.write_bytes(b'{"model": "unigram"}')
-    arms = {"T2_unigram_raw_64k": _fake_arm("T2_unigram_raw_64k", str(path), "T2")}
-    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
-    assert sources["T2_unigram_raw_64k"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def test_tokenizer_sources_omits_sha256_for_hub_backed_arms() -> None:
-    """A T0/T3 `source_id` is a model id, not a path; there is no file here to hash."""
-    arms = {"T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0")}
-    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
-    assert "sha256" not in sources["T0_o200k"]
-
-
-def test_tokenizer_sources_survives_an_unreadable_file(tmp_path: Path) -> None:
-    """The numbers are already computed by then; a missing file must not abort the write."""
-    arms = {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", str(tmp_path / "gone.json"), "T1")}
-    sources = run.tokenizer_sources(arms)  # type: ignore[arg-type]
-    assert "sha256" not in sources["T1_bpe_raw_32k"]
-    assert sources["T1_bpe_raw_32k"]["source_id"].endswith("gone.json")
-
-
-def test_tokenizer_file_sha256_matches_hashlib(tmp_path: Path) -> None:
-    path = tmp_path / "big.json"
-    path.write_bytes(b"x" * (3 * (1 << 20) + 7))  # spans several read chunks
-    assert run.tokenizer_file_sha256(path) == hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-# --- exclusion-check helper ---------------------------------------------------------
-
-
-def test_exclusion_check_counts_missing_hashes() -> None:
-    sentences = ["रामः", "सीता", "लक्ष्मणः"]
-    hashes = frozenset({run.sentence_hash("रामः"), run.sentence_hash("सीता")})
-    report = run.exclusion_check_for(sentences, hashes)
-    assert report == {"n": 3, "n_missing": 1}
-
-
-def test_exclusion_check_all_present_is_zero_missing() -> None:
-    sentences = ["रामः", "सीता"]
-    hashes = frozenset({run.sentence_hash("रामः"), run.sentence_hash("सीता")})
-    assert run.exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 0}
-
-
-def test_exclusion_check_none_present_is_all_missing() -> None:
-    sentences = ["रामः", "सीता"]
-    hashes: frozenset[str] = frozenset()
-    assert run.exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 2}
-
-
-def test_exclusion_check_uses_the_english_hash_for_the_english_side() -> None:
-    """`exclusion_check_en` verifies the list that kept the E1 control arms away from this
-    evaluation text, so it must hash the way that list was built (`sentence_hash_en`)."""
-    sentences = ["Rama goes", "The verse रामः गच्छति opens the chapter"]
-    hashes = frozenset({run.sentence_hash_en(text) for text in sentences})
-    assert run.exclusion_check_for(sentences, hashes, run.sentence_hash_en) == {
-        "n": 2,
-        "n_missing": 0,
-    }
-    # the Sanskrit hash transliterates first, so the Devanagari-bearing sentence misses
-    assert run.exclusion_check_for(sentences, hashes) == {"n": 2, "n_missing": 1}
 
 
 # --- arm-label helper (figure x-tick labels) ----------------------------------------
@@ -274,21 +195,6 @@ def test_build_tpp_figure_omits_unavailable_arm_and_captions_it() -> None:
         assert any("provisional" in text for text in caption_texts)
     finally:
         plt.close(figure)
-
-
-def test_unavailable_caption_lists_every_omitted_arm() -> None:
-    caption = run._unavailable_caption(
-        {"T3_indicsuper": "T3_indicsuper: no candidate tokenizer could be loaded. Tried:\n  a\n  b"}
-    )
-    assert "T3_indicsuper" in caption
-    assert "omitted" in caption
-    # the redundant "T3_indicsuper: " prefix and the per-candidate "Tried:" list are
-    # trimmed, so the per-candidate detail does not leak into the one-line caption.
-    assert "Tried" not in caption
-
-
-def test_unavailable_caption_is_empty_when_nothing_is_unavailable() -> None:
-    assert run._unavailable_caption({}) == ""
 
 
 # --- unavailable English pivot -------------------------------------------------------

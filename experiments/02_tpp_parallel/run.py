@@ -34,24 +34,25 @@ without touching the network, a real corpus, or the Hugging Face cache.
 """
 
 import argparse
-import hashlib
 import logging
 import math
 import random
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
+from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash_en
 from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
     ENGLISH_LANGUAGE,
     HINDI_LANGUAGE,
     SANSKRIT_LANGUAGE,
+    exclusion_check_for,
+    load_arms,
     load_config,
     load_corpus_entry,
     provenance,
@@ -60,13 +61,15 @@ from sanskrit_tok.experiment import (
     select_aligned_indices,
     summarise_tpp,
     take_indices,
+    tokenizer_sources,
+    unavailable_caption,
     write_results,
 )
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.metrics.tpp import tpp
-from sanskrit_tok.tokenizers.registry import LoadedTokenizer, TokenizerUnavailable, load_tokenizer
+from sanskrit_tok.tokenizers.registry import LoadedTokenizer
 
 logger = logging.getLogger("exp02")
 
@@ -82,16 +85,6 @@ PROVISIONAL_FAMILIES = frozenset({"T1", "T2"})
 #: Tokenizer-arm families eligible for the Hindi pivot (CLAUDE.md §7 resolution 4:
 #: T0/T3 arms only, same tokenizer both sides).
 HINDI_PIVOT_FAMILIES = frozenset({"T0", "T3"})
-
-#: Tokenizer-arm families whose `source_id` is a local `tokenizer.json` path rather than a
-#: Hugging Face/tiktoken id, and whose file is therefore hashed into `tokenizer_sources`.
-#: `outputs/` is gitignored and `UnigramTrainer` is not bit-reproducible
-#: (docs/decisions.md), so the sha256 is the only thing tying a number in `results.json`
-#: to the exact artifact that produced it. A superset of `PROVISIONAL_FAMILIES`, and for
-#: an unrelated reason: these are file-backed (E1, the matched English control, included),
-#: those are trained on the interim Sanskrit corpus, and either could change without the
-#: other.
-FILE_BACKED_FAMILIES = frozenset({"T1", "T2", "E1"})
 
 #: The script variant the controlled (T1/T2 vs E1) comparison reads. T1/T2 have no other
 #: variant, and the English side is always the text as written.
@@ -114,7 +107,7 @@ FIGURE_CONTROLLED_TITLE = (
     "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab, training corpus)"
 )
 #: Static half of the caption; the omitted-arms half is built at plot time from
-#: `results["unavailable_arms"]` (`_unavailable_caption`) since it depends on the run.
+#: `results["unavailable_arms"]` (`unavailable_caption`) since it depends on the run.
 FIGURE_CAPTION_PROVISIONAL = "* provisional: trained on parallel-corpus training splits"
 #: Fraction of the SLP1-series y-range added above and below as headroom, and how far
 #: inside the top/bottom edge an off-scale (clipped) secondary marker is drawn.
@@ -188,47 +181,7 @@ def prepare_corpus(entry: Mapping[str, Any], root: Path) -> CorpusData:
 # --------------------------------------------------------------------------- leakage
 
 
-def exclusion_check_for(
-    sentences: Sequence[str],
-    hashes: frozenset[str],
-    hash_fn: Callable[[str], str] = sentence_hash,
-) -> dict[str, int]:
-    """`{"n": len(sentences), "n_missing": how many hash to something not in `hashes`}`.
-
-    Every evaluation sentence used by this experiment is expected to be in the exclusion
-    list for its side (CLAUDE.md §2.4): `data/exclusion_hashes.txt` for the Sanskrit side
-    (`sentence_hash`), `data/exclusion_hashes_en.txt` for the English side
-    (`sentence_hash_en`, which is what the `E1_*` control arms were kept away from). A
-    non-zero `n_missing` means that side of this corpus (or some of it) was not included
-    when the list was built, which is worth a WARNING but not an abort — this experiment
-    reads evaluation text, it does not train anything, so there is nothing here for a
-    missed hash to leak into. It matters all the same: a missed English hash means an E1
-    arm could have been trained on a sentence it is now being evaluated on.
-
-    `hash_fn` must be the function `hashes` was built with.
-    """
-    n_missing = sum(1 for sentence in sentences if hash_fn(sentence) not in hashes)
-    return {"n": len(sentences), "n_missing": n_missing}
-
-
 # ------------------------------------------------------------------------ tokenizers
-
-
-def load_arms(
-    names: Sequence[str],
-) -> tuple[dict[str, LoadedTokenizer], dict[str, str]]:
-    """Load every arm in `names`, once each; split into loaded and `unavailable_arms`."""
-    loaded: dict[str, LoadedTokenizer] = {}
-    unavailable: dict[str, str] = {}
-    for name in names:
-        if name in loaded or name in unavailable:
-            continue
-        try:
-            loaded[name] = load_tokenizer(name)
-        except TokenizerUnavailable as error:
-            logger.warning("%s: unavailable this run: %s", name, error)
-            unavailable[name] = str(error)
-    return loaded, unavailable
 
 
 def variants_for_family(family: str, script_variants: Mapping[str, Sequence[str]]) -> list[str]:
@@ -247,48 +200,6 @@ def variants_for_family(family: str, script_variants: Mapping[str, Sequence[str]
             f"{sorted(script_variants)}"
         ) from None
     return list(variants)
-
-
-def tokenizer_file_sha256(path: Path) -> str:
-    """sha256 of `path`, hex, read in chunks (a `tokenizer.json` is a few MB)."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def tokenizer_sources(arms: Mapping[str, LoadedTokenizer]) -> dict[str, dict[str, Any]]:
-    """`results.json`'s `tokenizer_sources`: what each loaded arm actually is.
-
-    `source_id`, `vocab_size`, `family` and `attempted` come straight off the
-    `LoadedTokenizer`. Arms in `FILE_BACKED_FAMILIES` additionally carry `sha256`, the
-    hash of the `tokenizer.json` their `source_id` names: those files live in gitignored
-    `outputs/` and a T2 (Unigram) file is not reproducible byte-for-byte from its recipe
-    (docs/decisions.md), so without the hash there is nothing to check a rerun against. A
-    file that cannot be read is logged at WARNING and leaves the key absent rather than
-    aborting a run whose numbers are already computed.
-    """
-    sources: dict[str, dict[str, Any]] = {}
-    for name, tokenizer in arms.items():
-        entry: dict[str, Any] = {
-            "source_id": tokenizer.source_id,
-            "vocab_size": tokenizer.vocab_size,
-            "family": tokenizer.family,
-            "attempted": list(tokenizer.attempted),
-        }
-        if tokenizer.family in FILE_BACKED_FAMILIES:
-            try:
-                entry["sha256"] = tokenizer_file_sha256(Path(tokenizer.source_id))
-            except OSError as error:
-                logger.warning(
-                    "%s: could not hash %s (%s); recording no sha256",
-                    name,
-                    tokenizer.source_id,
-                    error,
-                )
-        sources[name] = entry
-    return sources
 
 
 # ------------------------------------------------------------------------- TPP / metrics
@@ -543,31 +454,6 @@ def arm_label(name: str, vocab_size: int) -> str:
     return f"{name}{star} ({thousands}k)"
 
 
-def _unavailable_caption(unavailable_arms: Mapping[str, str]) -> str:
-    """One short sentence naming every arm omitted this run, built from `unavailable_arms`.
-
-    `unavailable_arms[name]` is the full exception text (every candidate id tried, one
-    per line); this keeps only the first sentence, with the redundant `"<name>: "` prefix
-    `TokenizerUnavailable` puts on it stripped, so the caption stays one line per arm
-    instead of reproducing the whole candidate list. Returns `""` when nothing is
-    unavailable, so the caller can omit the sentence entirely rather than print "Omitted:
-    (none)".
-    """
-    if not unavailable_arms:
-        return ""
-    parts: list[str] = []
-    for name in sorted(unavailable_arms):
-        message = unavailable_arms[name]
-        first_line = message.splitlines()[0] if message else ""
-        first_line = first_line.split(" Tried:")[0].strip()
-        prefix = f"{name}:"
-        if first_line.startswith(prefix):
-            first_line = first_line[len(prefix) :].strip()
-        first_line = first_line.rstrip(".")
-        parts.append(f"{name} omitted ({first_line})" if first_line else f"{name} omitted")
-    return "Not shown (unavailable this run): " + "; ".join(parts) + "."
-
-
 def controlled_pair_label(sanskrit_arm: str, english_arm: str) -> str:
     """X-tick label for one controlled pair: `"T1_bpe_raw_32k* / E1_bpe_32k"`.
 
@@ -688,7 +574,7 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
 
     Provisional (T1/T2) arms carry a `*` in their tick label; the caption explains it,
     together with one sentence naming any arm omitted for being unavailable this run
-    (`results["unavailable_arms"]`, `_unavailable_caption`).
+    (`results["unavailable_arms"]`, `unavailable_caption`).
     """
     import matplotlib
 
@@ -855,7 +741,7 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
             axes.legend(fontsize=7, loc="best")
 
     caption = FIGURE_CAPTION_PROVISIONAL
-    omitted = _unavailable_caption(results.get("unavailable_arms", {}))
+    omitted = unavailable_caption(results.get("unavailable_arms", {}))
     if omitted:
         caption = f"{caption}  {omitted}"
 

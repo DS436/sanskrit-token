@@ -19,6 +19,16 @@ twice — primary over the **raw** sentence's word count (the same denominator f
 arm) and secondary over the split text's own words (`docs/decisions.md`, "Fertility for
 split arms uses the raw word count as the primary denominator").
 
+Within the primary table, **only `value` is comparable between a raw arm and a split
+arm.** The two are computed by different metrics attaching different distributions, so
+`results.json`'s `mean`/`std` summarise different lists: per-*word* token counts for a raw
+arm (`distribution: per_word`, one entry per word) and per-*sentence* ratios for a split
+arm (`distribution: per_text`, one entry per sentence). `value` is tokens over raw words
+in both cases and is the number the tables show; `n` is that shared denominator (raw
+words) and `n_texts` the number of sentences measured, so the summarised list's length is
+recorded either way. Read a `mean` column across the two families and it is comparing a
+mean over words with a mean over sentences.
+
 **Success (pre-registered).** On Sāmayik test — prose first (CLAUDE.md §2.7) — each split
 arm's controlled TPP is **below** its matched raw arm's, and the paired-bootstrap CI on
 the difference **excludes 0**. The difference is the claim, not the level: an arm sitting
@@ -102,10 +112,10 @@ columns are the primary form — tokens over the **raw** sentence's word count f
 | unigram 32k | `<pending run>` | `<pending run>` | `<pending run>` | `<pending run>` | `<pending run>` |
 | unigram 64k | `<pending run>` | `<pending run>` | `<pending run>` | `<pending run>` | `<pending run>` |
 
-**Deployed practice.** Every arm is also measured against `T0_o200k` (200k, general
-domain) and stored under the same `tpp` key. That is a description of what today's
-tokenizers charge for Sanskrit, never a controlled comparison (CLAUDE.md §2.5), and the
-delta above is not read from it. `<pending run>`.
+**Deployed practice.** Every arm is also measured against a deployed general-domain
+English pivot (`T0_o200k`, 200k vocabulary) and stored under the same `tpp` key. That is a
+description of what today's tokenizers charge for Sanskrit, never a controlled comparison
+(CLAUDE.md §2.5), and the delta above is not read from it. `<pending run>`.
 
 **Secondary variant.** Every `T4` number above is measured on the **reconciled** split
 text. The splitter's unreconciled output is measured too, under `model_raw`, and reported

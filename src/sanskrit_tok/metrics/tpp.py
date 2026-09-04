@@ -51,6 +51,40 @@ def _require_ci(ci: float) -> None:
         raise ValueError(f"ci must be a confidence level strictly between 0 and 1, got {ci!r}")
 
 
+def _resampled_ratios(parts: RatioParts, indices: np.ndarray, n_bootstrap: int) -> np.ndarray:
+    """Ratio of sums for each row of `indices`, `nan` where the pivot side sums to zero.
+
+    The one place a bootstrap draw is turned into a ratio, shared by the single-ratio CI
+    (`_bootstrap_ci`) and the paired-difference CI (`_bootstrap_delta_ci`) so the two
+    cannot drift in how they pool a resample or what they do with an undefined one.
+    """
+    source = np.asarray(parts.source_counts, dtype=float)
+    pivot = np.asarray(parts.pivot_counts, dtype=float)
+    source_sums = source[indices].sum(axis=1)
+    pivot_sums = pivot[indices].sum(axis=1)
+    ratios: np.ndarray = np.divide(
+        source_sums,
+        pivot_sums,
+        out=np.full(n_bootstrap, math.nan),
+        where=pivot_sums != 0.0,
+    )
+    return ratios
+
+
+def _percentile_ci(draws: np.ndarray, ci: float) -> tuple[float, float]:
+    """Two-sided percentile interval of `draws`, `(nan, nan)` if no draw is defined.
+
+    Also shared by both bootstraps, for the same reason: `ci` is a confidence *level*, and
+    turning it into a pair of percentiles in two places is two chances to get the tails
+    wrong in one of them.
+    """
+    if not bool(np.isfinite(draws).any()):
+        return math.nan, math.nan
+    tail = (1.0 - ci) / 2.0
+    low, high = np.nanpercentile(draws, [100.0 * tail, 100.0 * (1.0 - tail)])
+    return float(low), float(high)
+
+
 def _bootstrap_ci(
     parts: RatioParts,
     n_bootstrap: int,
@@ -68,22 +102,8 @@ def _bootstrap_ci(
     if n == 0 or n_bootstrap <= 0:
         return math.nan, math.nan
     rng = np.random.default_rng(seed)
-    source = np.asarray(parts.source_counts, dtype=float)
-    pivot = np.asarray(parts.pivot_counts, dtype=float)
     indices = rng.integers(0, n, size=(n_bootstrap, n))
-    source_sums = source[indices].sum(axis=1)
-    pivot_sums = pivot[indices].sum(axis=1)
-    draws = np.divide(
-        source_sums,
-        pivot_sums,
-        out=np.full(n_bootstrap, math.nan),
-        where=pivot_sums != 0.0,
-    )
-    if not bool(np.isfinite(draws).any()):
-        return math.nan, math.nan
-    tail = (1.0 - ci) / 2.0
-    low, high = np.nanpercentile(draws, [100.0 * tail, 100.0 * (1.0 - tail)])
-    return float(low), float(high)
+    return _percentile_ci(_resampled_ratios(parts, indices, n_bootstrap), ci)
 
 
 def tpp(
@@ -163,27 +183,7 @@ def _bootstrap_delta_ci(
     indices = rng.integers(0, n, size=(n_bootstrap, n))
     draws_a = _resampled_ratios(counts_a, indices, n_bootstrap)
     draws_b = _resampled_ratios(counts_b, indices, n_bootstrap)
-    draws = draws_a - draws_b
-    if not bool(np.isfinite(draws).any()):
-        return math.nan, math.nan
-    tail = (1.0 - ci) / 2.0
-    low, high = np.nanpercentile(draws, [100.0 * tail, 100.0 * (1.0 - tail)])
-    return float(low), float(high)
-
-
-def _resampled_ratios(parts: RatioParts, indices: np.ndarray, n_bootstrap: int) -> np.ndarray:
-    """Ratio of sums for each row of `indices`, `nan` where the pivot side sums to zero."""
-    source = np.asarray(parts.source_counts, dtype=float)
-    pivot = np.asarray(parts.pivot_counts, dtype=float)
-    source_sums = source[indices].sum(axis=1)
-    pivot_sums = pivot[indices].sum(axis=1)
-    ratios: np.ndarray = np.divide(
-        source_sums,
-        pivot_sums,
-        out=np.full(n_bootstrap, math.nan),
-        where=pivot_sums != 0.0,
-    )
-    return ratios
+    return _percentile_ci(draws_a - draws_b, ci)
 
 
 def tpp_paired_delta(

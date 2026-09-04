@@ -9,6 +9,9 @@ end-to-end wiring, not the experiment's numbers (those come from actually runnin
 
 `run.py` is not importable as a package module (`experiments/` holds scripts, not a
 package), so it is loaded by path, exactly as `tests/test_exp01.py` and `test_exp02.py` do.
+The helpers it shares with Experiment 02 — arm loading, `tokenizer_sources`, the leakage
+check, the unavailable-arm caption — are tested in `tests/test_experiment.py`, where they
+live.
 """
 
 import importlib.util
@@ -23,9 +26,11 @@ from typing import Any
 import pytest
 import yaml
 
+from sanskrit_tok import experiment as experiment_module
 from sanskrit_tok.data.exclusion import build_exclusion_list, sentence_hash_en
 from sanskrit_tok.data.parallel import ParallelCorpus
 from sanskrit_tok.experiment import ENGLISH_LANGUAGE, SANSKRIT_LANGUAGE
+from sanskrit_tok.tokenizers.registry import TokenizerUnavailable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_PY = REPO_ROOT / "experiments" / "03_sandhi_split" / "run.py"
@@ -507,45 +512,6 @@ def test_compression_is_measured_on_the_text_the_arm_tokenizes() -> None:
     assert comp["corpus_a"]["T1_bpe_raw_32k"]["value"] == pytest.approx(raw_bytes / raw_tokens)
 
 
-def test_tokenizer_sources_hashes_files_and_names_the_splitter_for_t4(tmp_path: Path) -> None:
-    import hashlib
-
-    path = tmp_path / "tokenizer.json"
-    path.write_bytes(b'{"model": "fake"}')
-    arms = {
-        "T4_bpe_split_32k": run.LoadedTokenizer(
-            name="T4_bpe_split_32k",
-            source_id=str(path),
-            vocab_size=32000,
-            _encode=lambda text: [0],
-            family="T4",
-            attempted=(str(path),),
-        ),
-        "T0_o200k": _char_arm("T0_o200k"),
-    }
-    sources = run.tokenizer_sources(arms, "fake/splitter@deadbeef")
-    assert sources["T4_bpe_split_32k"]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
-    # the splitter is as much a part of a T4 arm's provenance as its own tokenizer.json
-    assert sources["T4_bpe_split_32k"]["splitter_source_id"] == "fake/splitter@deadbeef"
-    assert "sha256" not in sources["T0_o200k"]
-    assert "splitter_source_id" not in sources["T0_o200k"]
-
-
-# --- leakage check --------------------------------------------------------------------
-
-
-def test_exclusion_check_counts_missing_hashes() -> None:
-    from sanskrit_tok.data.exclusion import sentence_hash
-
-    hashes = frozenset({sentence_hash(SANSKRIT[0]), sentence_hash(SANSKRIT[1])})
-    assert run.exclusion_check_for(SANSKRIT, hashes) == {"n": 4, "n_missing": 2}
-
-
-def test_exclusion_check_uses_the_english_hash_for_the_english_side() -> None:
-    hashes = frozenset({sentence_hash_en(text) for text in ENGLISH})
-    assert run.exclusion_check_for(ENGLISH, hashes, sentence_hash_en) == {"n": 4, "n_missing": 0}
-
-
 # --- the figure -----------------------------------------------------------------------
 
 
@@ -664,7 +630,7 @@ def experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
         "corpora": [
             {"name": name, "loader": "samayik", "split": "test"} for name in corpus_names
         ],
-        "split_cache_path": str(split_dir),
+        "split_dir": str(split_dir),
         "split_manifest_path": str(split_dir / "manifest.json"),
         "arms_raw": ["T1_bpe_raw_32k"],
         "arms_split": ["T4_bpe_split_32k"],
@@ -693,7 +659,9 @@ def experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
         )
 
     monkeypatch.setattr(run, "load_corpus_entry", fake_corpus)
-    monkeypatch.setattr(run, "load_tokenizer", lambda name: _char_arm(name))
+    # `load_arms` is `sanskrit_tok.experiment`'s, so the registry is patched where that
+    # helper looks it up rather than where the runner calls it from
+    monkeypatch.setattr(experiment_module, "load_tokenizer", lambda name: _char_arm(name))
     yield {"config": config, "config_path": config_path, "out_dir": tmp_path / "out"}
 
 
@@ -772,10 +740,10 @@ def test_run_records_an_untrained_arm_as_unavailable_rather_than_aborting(
 
     def load(name: str) -> Any:
         if name == "T4_bpe_split_32k":
-            raise run.TokenizerUnavailable(f"{name}: trained tokenizer file not found")
+            raise TokenizerUnavailable(f"{name}: trained tokenizer file not found")
         return _char_arm(name)
 
-    monkeypatch.setattr(run, "load_tokenizer", load)
+    monkeypatch.setattr(experiment_module, "load_tokenizer", load)
     results = run.run(experiment["config"], experiment["config_path"])
     assert "T4_bpe_split_32k" in results["unavailable_arms"]
     assert "T4_bpe_split_32k" not in results["tpp"]["corpus_a"]

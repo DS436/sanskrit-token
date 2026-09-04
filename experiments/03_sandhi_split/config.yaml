@@ -10,10 +10,12 @@ corpora:               # prose before verse; order is binding for tables and fig
   - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
 
 # Where `split_corpora.py` wrote one `<corpus>.jsonl` per corpus (`{index, raw_deva,
-# raw_slp1, output_model, output}`) and its manifest. The runner never loads the splitter
+# raw_slp1, output_model, output}`) and its manifest. The name matches `split.yaml`'s
+# `split_dir`; `split.yaml`'s `cache_path` is a different thing (the splitter's own
+# append-only `cache.jsonl`), which this runner never reads. The runner never loads the splitter
 # model: a sentence missing from these files aborts the run rather than falling back to
 # raw text, which would silently measure T4 on unsplit sentences.
-split_cache_path: data/processed/split
+split_dir: data/processed/split
 split_manifest_path: data/processed/split/manifest.json
 
 # The matched comparison. Both families are trained from scratch by this project at the
