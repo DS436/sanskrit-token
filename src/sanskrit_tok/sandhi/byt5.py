@@ -42,7 +42,9 @@ from sanskrit_tok.encoding import from_slp1, to_slp1
 from sanskrit_tok.sandhi.cache import SplitCache
 
 __all__ = [
+    "CHUNK_MAX_BYTES",
     "MAX_BYTES",
+    "MAX_OUTPUT_TOKENS",
     "SEGMENTATION_PREFIX",
     "SEGMENT_SEPARATOR",
     "SPLITTER_CANDIDATES",
@@ -77,10 +79,29 @@ SEGMENT_SEPARATOR = "_"
 #: longer than this are chunked rather than truncated.
 MAX_BYTES = 512
 
-#: Characters a chunk may end on, in preference order over a bare space: Devanagari danda
-#: and double danda, SLP1's `|`, and IAST's `.` — sentence boundaries, so a chunk seam
-#: falls where a sandhi boundary would not have crossed anyway.
-_BOUNDARY_CHARS = ("।", "॥", "|", ".")
+#: The budget a *chunk* is cut to. What the model tokenises is the chunk plus
+#: `SEGMENTATION_PREFIX` plus an EOS token, so chunking to `MAX_BYTES` would hand the
+#: tokeniser `MAX_BYTES + 3` bytes and `truncation=True` would silently drop the last
+#: three — precisely the sentence-final material a segmenter is worst at recovering.
+CHUNK_MAX_BYTES = MAX_BYTES - len(SEGMENTATION_PREFIX) - 1
+
+#: Characters a chunk may end on, in preference over a bare space. Chunking runs on the
+#: **IAST** form, where `from_slp1` has already rendered the Devanagari danda as `|`; `.`
+#: is the SLP1 danda, kept because a caller may hand `chunk_text` SLP1 directly. Both are
+#: sentence boundaries, so a chunk seam falls where a sandhi boundary would not have
+#: crossed anyway. (Devanagari `।`/`॥` never reach this function and are not listed.)
+_BOUNDARY_CHARS = ("|", ".")
+
+#: Output cap, in generated tokens (= bytes). Segmentation output is *longer* than its
+#: input — every restored boundary adds a separator byte and undone sandhi restores
+#: elided phonemes — so capping generation at the input budget would truncate exactly the
+#: longest sentences. The cap is therefore sized from the batch's own longest input:
+#: `min(OUTPUT_TOKENS_FACTOR * longest_input_bytes + OUTPUT_TOKENS_SLACK,
+#: MAX_OUTPUT_TOKENS)`, generous enough never to bind in practice and bounded so a
+#: degenerate repeat loop cannot run forever.
+OUTPUT_TOKENS_FACTOR = 2
+OUTPUT_TOKENS_SLACK = 32
+MAX_OUTPUT_TOKENS = 1024
 
 
 def pick_device() -> str:
@@ -114,16 +135,24 @@ def _byte_prefix(text: str, limit: int) -> str:
     return encoded[:limit].decode("utf-8", errors="ignore")
 
 
-def chunk_text(text: str, limit: int = MAX_BYTES) -> list[str]:
+def chunk_text(text: str, limit: int = CHUNK_MAX_BYTES) -> list[str]:
     """Cut `text` into pieces of at most `limit` UTF-8 bytes, preferring sentence seams.
 
-    Each piece is the longest prefix that fits, ending at the last danda/`|`/`.` inside
-    it; failing that at the last space; failing that at the byte limit itself (a word so
-    long it cannot be broken cleanly — in practice only degenerate input). Returns
-    `[text]` unchanged when it already fits, so the common case allocates nothing.
+    Each piece is the longest prefix that fits, ending at the last `|`/`.` inside it;
+    failing that at the last space; failing that at the byte limit itself (a word so long
+    it cannot be broken cleanly — in practice only degenerate input). Returns `[text]`
+    unchanged when it already fits, so the common case allocates nothing.
+
+    The default `limit` is `CHUNK_MAX_BYTES`, not `MAX_BYTES`: what the model tokenises is
+    the chunk plus its task prefix plus EOS.
     """
     if len(text.encode("utf-8")) <= limit:
         return [text]
+    if not _byte_prefix(text, limit):
+        raise ValueError(
+            f"limit={limit} is smaller than the first character of the text "
+            f"({len(text[0].encode('utf-8'))} bytes); no chunking is possible"
+        )
 
     chunks: list[str] = []
     rest = text
@@ -186,13 +215,36 @@ class SandhiSplitter:
         self._model: Any | None = None
         self._tokenizer: Any | None = None
         self._revision: str | None = None
-        self.stats: dict[str, float] = {
+        self._stats: dict[str, int | float] = {
             "n_calls": 0,
             "n_cache_hits": 0,
             "n_model": 0,
+            "n_blank": 0,
+            "n_duplicate": 0,
             "n_chunked": 0,
             "seconds_model": 0.0,
         }
+
+    @property
+    def stats(self) -> dict[str, int | float]:
+        """Running counters, for a manifest or a benchmark. Live: mutated as work happens.
+
+        * `n_calls` — input texts passed to `split`, summed over calls.
+        * `n_cache_hits` — texts answered from the `SplitCache` (first occurrence only).
+        * `n_model` — texts that required at least one generation.
+        * `n_blank` — texts that were empty or whitespace and returned `""` untouched.
+        * `n_duplicate` — texts identical to an earlier one *in the same call*, answered
+          from that one's result rather than split twice.
+        * `n_chunked` — texts whose IAST form exceeded `CHUNK_MAX_BYTES` and were cut into
+          pieces (counted once per text, not once per piece).
+        * `seconds_model` — wall time inside `_generate_iast`, excluding the one-off model
+          load.
+
+        The first five partition the input exactly:
+        `n_calls == n_cache_hits + n_model + n_blank + n_duplicate`, which is what makes
+        a manifest's "how much of this run was actually computed" line trustworthy.
+        """
+        return self._stats
 
     # -- identity -----------------------------------------------------------------
 
@@ -265,6 +317,10 @@ class SandhiSplitter:
     def _generate_iast(self, batch: list[str]) -> list[str]:
         """Run the model over already-prefixed IAST strings, returning decoded IAST.
 
+        The output length is capped per batch rather than at `MAX_BYTES`: segmentation
+        output is longer than its input (see `OUTPUT_TOKENS_FACTOR`), so the input budget
+        is the wrong cap for it and would truncate the longest sentences.
+
         This is the seam the tests replace wholesale, and the only step of `split` that
         is not exercised offline. On
         MPS a generation failure is retried once on the CPU — an MPS kernel gap should
@@ -277,7 +333,7 @@ class SandhiSplitter:
 
         try:
             return self._decode(batch, torch)
-        except RuntimeError as error:
+        except (RuntimeError, NotImplementedError) as error:
             if self.device != "mps":
                 raise
             logger.warning("MPS generation failed (%s); falling back to the CPU", error)
@@ -296,8 +352,14 @@ class SandhiSplitter:
             max_length=MAX_BYTES,
         )
         inputs = {key: value.to(torch.device(str(self.device))) for key, value in inputs.items()}
+        longest = max(len(text.encode("utf-8")) for text in batch)
+        max_new_tokens = min(
+            OUTPUT_TOKENS_FACTOR * longest + OUTPUT_TOKENS_SLACK, MAX_OUTPUT_TOKENS
+        )
         with torch.inference_mode():
-            generated = self._model.generate(**inputs, max_length=MAX_BYTES, num_beams=1)
+            generated = self._model.generate(
+                **inputs, max_new_tokens=max_new_tokens, num_beams=1
+            )
         decoded = self._tokenizer.batch_decode(generated, skip_special_tokens=True)
         return [str(text) for text in decoded]
 
@@ -306,78 +368,109 @@ class SandhiSplitter:
     def split(self, texts: Sequence[str]) -> list[str]:
         """Split `texts` (Devanagari) and return SLP1 with spaces at segment boundaries.
 
-        Blank inputs return `""` without a model call or a cache entry. Cached inputs skip
-        the model entirely, which is why a fully cached corpus never loads the weights.
+        Every input is classified exactly once — blank, duplicate-within-this-call, cache
+        hit, or model work — which is the partition `stats` documents. Blank inputs return
+        `""` without a model call or a cache entry; cached inputs skip the model entirely,
+        which is why a fully cached corpus never loads the weights.
         """
-        self.stats["n_calls"] += len(texts)
+        self._stats["n_calls"] += len(texts)
 
         outputs: list[str | None] = [None] * len(texts)
-        # Distinct cache-missing inputs -> the positions in `outputs` awaiting them.
-        pending: dict[str, list[int]] = {}
+        resolved: dict[str, str] = {}  # texts already answered from the cache
+        pending: dict[str, list[int]] = {}  # cache-missing texts -> awaiting positions
         for index, text in enumerate(texts):
             if not text.strip():
                 outputs[index] = ""
+                self._stats["n_blank"] += 1
                 continue
-            if self.cache is not None:
-                cached = self.cache.get(text)
-                if cached is not None:
-                    outputs[index] = cached
-                    self.stats["n_cache_hits"] += 1
-                    continue
-            pending.setdefault(text, []).append(index)
+            if text in resolved:
+                outputs[index] = resolved[text]
+                self._stats["n_duplicate"] += 1
+                continue
+            if text in pending:
+                pending[text].append(index)
+                self._stats["n_duplicate"] += 1
+                continue
+            cached = None if self.cache is None else self.cache.get(text)
+            if cached is not None:
+                outputs[index] = cached
+                resolved[text] = cached
+                self._stats["n_cache_hits"] += 1
+                continue
+            pending[text] = [index]
 
         if pending:
-            for text, split_text in zip(pending, self._split_uncached(list(pending)), strict=True):
+            distinct = list(pending)
+            for text, split_text in zip(distinct, self._split_uncached(distinct), strict=True):
                 for index in pending[text]:
                     outputs[index] = split_text
-                if self.cache is not None:
-                    self.cache.put(text, split_text)
-            if self.cache is not None:
-                self.cache.flush()
 
         return [output if output is not None else "" for output in outputs]
 
     def _split_uncached(self, texts: list[str]) -> list[str]:
-        """Transliterate, chunk, batch and generate for inputs the cache did not have."""
-        self.stats["n_model"] += len(texts)
+        """Transliterate, chunk, batch and generate for inputs the cache did not have.
 
-        # Flatten to (owner index, chunk) pairs so one batch can span several sentences.
-        owners: list[int] = []
-        chunks: list[str] = []
+        Cache writes happen **inside** the batch loop: as soon as the last chunk of a
+        sentence comes back, that sentence is assembled, `put` and `flush`ed. A run killed
+        after an hour therefore keeps its hour of work, minus at most the in-flight batch
+        — the whole reason the cache is append-only jsonl rather than a dict dumped at the
+        end (docs/decisions.md, "Splitter throughput rule": the split is a multi-hour
+        background job).
+        """
+        self._stats["n_model"] += len(texts)
+
+        # Flatten to chunks, remembering which chunk positions each sentence owns, so a
+        # batch can span several sentences and a sentence can span several batches.
+        owner_chunks: list[list[int]] = []
+        prefixed: list[str] = []
+        owner_of: list[int] = []
         for index, text in enumerate(texts):
             iast = from_slp1(to_slp1(text, "devanagari"), "iast")
             pieces = chunk_text(iast)
             if len(pieces) > 1:
-                self.stats["n_chunked"] += 1
-                logger.debug("chunked a %d-byte input into %d pieces", len(iast), len(pieces))
-            owners.extend([index] * len(pieces))
-            chunks.extend(pieces)
+                self._stats["n_chunked"] += 1
+                logger.debug(
+                    "chunked a %d-byte input into %d pieces",
+                    len(iast.encode("utf-8")),
+                    len(pieces),
+                )
+            owner_chunks.append(list(range(len(prefixed), len(prefixed) + len(pieces))))
+            prefixed.extend(SEGMENTATION_PREFIX + piece for piece in pieces)
+            owner_of.extend([index] * len(pieces))
 
-        generated = self._generate_sorted([SEGMENTATION_PREFIX + chunk for chunk in chunks])
+        # Longest first: padding is per batch, so grouping similar lengths keeps a batch
+        # from being padded out to the corpus's longest sentence. The order is an
+        # efficiency detail and must not be observable, hence the scatter back below.
+        order = sorted(range(len(prefixed)), key=lambda position: -len(prefixed[position]))
+        decoded: list[str | None] = [None] * len(prefixed)
+        outstanding = [len(chunks) for chunks in owner_chunks]
+        outputs: list[str] = [""] * len(texts)
 
-        per_text: list[list[str]] = [[] for _ in texts]
-        for owner, piece in zip(owners, generated, strict=True):
-            per_text[owner].append(piece)
-        return [to_slp1(normalise_segments(" ".join(pieces)), "iast") for pieces in per_text]
-
-    def _generate_sorted(self, prefixed: list[str]) -> list[str]:
-        """Generate for `prefixed` in longest-first batches, restoring the input order.
-
-        Padding is per batch, so grouping similar lengths together keeps a batch from
-        being padded out to the corpus's longest sentence. The order is an efficiency
-        detail and must not be observable: results are scattered back to their input
-        positions before returning.
-        """
-        order = sorted(range(len(prefixed)), key=lambda index: -len(prefixed[index]))
-        results: list[str | None] = [None] * len(prefixed)
-        started = time.perf_counter()
         for start in range(0, len(order), self.batch_size):
             positions = order[start : start + self.batch_size]
             batch = [prefixed[position] for position in positions]
-            for position, output in zip(positions, self._generate_iast(batch), strict=True):
-                results[position] = output
-        self.stats["seconds_model"] += time.perf_counter() - started
-        return [result if result is not None else "" for result in results]
+
+            started = time.perf_counter()
+            generated = self._generate_iast(batch)
+            self._stats["seconds_model"] += time.perf_counter() - started
+
+            finished: list[int] = []
+            for position, output in zip(positions, generated, strict=True):
+                decoded[position] = output
+                owner = owner_of[position]
+                outstanding[owner] -= 1
+                if outstanding[owner] == 0:
+                    finished.append(owner)
+
+            for owner in finished:
+                pieces = [decoded[position] or "" for position in owner_chunks[owner]]
+                outputs[owner] = to_slp1(normalise_segments(" ".join(pieces)), "iast")
+                if self.cache is not None:
+                    self.cache.put(texts[owner], outputs[owner])
+            if finished and self.cache is not None:
+                self.cache.flush()
+
+        return outputs
 
     def __repr__(self) -> str:
         return (

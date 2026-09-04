@@ -45,14 +45,16 @@ Three empirical facts from the Task 2 benchmark, all recorded in `docs/decisions
   `dvitīya mudrāyām`). The `T4` arms therefore measure "sandhi *and* samāsa splitting",
   which the write-up must say wherever it names them.
 * Its output is **not a pure re-segmentation**: it normalises, drops sentence punctuation
-  and occasionally drops a transliterated loanword, keeping 88.5% of the raw SLP1
-  non-space characters over the 200 benchmarked sentences (9.06 → 9.64 whitespace units;
-  97 gained, 54 lost, 49 unchanged). Task 4 reports this per corpus.
+  and occasionally drops a transliterated loanword, keeping **87.3%** of the raw SLP1
+  non-space characters over the 200 benchmarked sentences (pooled;
+  `segmentation.char_retention_nonspace` in `benchmark_mps.json`, which carries the
+  definition). Whitespace units go 9.06 → 9.64 (97 sentences gained, 54 lost, 49
+  unchanged). Task 4 reports both per corpus.
 
 **Throughput** (200 Sāmayik-test sentences, batch 16, M3 Pro, torch 2.14.0):
-7.12 sentences/s on `mps`, 2.52 on `cpu`, **byte-identical output on both**. Projected on
-`mps`: 4.59 h for the 117,720-sentence training corpus and 0.75 h for the 19,197
-evaluation sentences. 4.59 h is inside the rule's 8 h budget, so **the full training
+7.09 sentences/s on `mps`, 2.52 on `cpu`, **byte-identical output on both**. Projected on
+`mps`: 4.61 h for the 117,720-sentence training corpus and 0.75 h for the 19,197
+evaluation sentences. 4.61 h is inside the rule's 8 h budget, so **the full training
 corpus is split** and no `_sub` arms are needed (`docs/decisions.md`, "Splitter throughput
 measured"; `outputs/03_sandhi_split/benchmark_{mps,cpu}.json`).
 

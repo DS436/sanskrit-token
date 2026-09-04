@@ -21,10 +21,12 @@ import pytest
 from sanskrit_tok.encoding import from_slp1, to_slp1
 from sanskrit_tok.sandhi import SandhiSplitter
 from sanskrit_tok.sandhi.byt5 import (
+    CHUNK_MAX_BYTES,
     MAX_BYTES,
     SEGMENT_SEPARATOR,
     SEGMENTATION_PREFIX,
     SPLITTER_CANDIDATES,
+    chunk_text,
 )
 from sanskrit_tok.sandhi.cache import SplitCache
 
@@ -253,7 +255,9 @@ def test_split_chunks_an_over_long_input(monkeypatch: pytest.MonkeyPatch) -> Non
     assert splitter.stats["n_chunked"] == 1
     assert len(fake.seen) > 1
     for prefixed in fake.seen:
-        assert len(prefixed[len(SEGMENTATION_PREFIX) :].encode("utf-8")) <= MAX_BYTES
+        # What the model tokenises is the prefixed chunk plus an EOS token; it must fit
+        # inside MAX_BYTES with room for that EOS, or `truncation=True` eats the tail.
+        assert len(prefixed.encode("utf-8")) <= MAX_BYTES - 1
     # Every chunk's output is present, joined by spaces, in the original order.
     assert output.count("iti") == len(fake.seen)
     assert output.startswith(to_slp1(_iast(LONG_DEVA).split(" ")[0], "iast"))
@@ -269,7 +273,16 @@ def test_split_hard_splits_an_unbreakable_over_long_input(
     assert splitter.stats["n_chunked"] == 1
     assert len(fake.seen) > 1
     for prefixed in fake.seen:
-        assert len(prefixed[len(SEGMENTATION_PREFIX) :].encode("utf-8")) <= MAX_BYTES
+        assert len(prefixed.encode("utf-8")) <= MAX_BYTES - 1
+
+
+def test_chunk_text_budget_leaves_room_for_the_prefix_and_eos() -> None:
+    assert CHUNK_MAX_BYTES == MAX_BYTES - len(SEGMENTATION_PREFIX) - 1
+
+
+def test_chunk_text_rejects_a_limit_smaller_than_one_character() -> None:
+    with pytest.raises(ValueError, match="smaller than the first character"):
+        chunk_text("क" * 10, limit=1)
 
 
 def test_split_leaves_short_inputs_unchunked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -291,6 +304,8 @@ def test_stats_start_at_zero_and_record_model_time(monkeypatch: pytest.MonkeyPat
         "n_calls": 0,
         "n_cache_hits": 0,
         "n_model": 0,
+        "n_blank": 0,
+        "n_duplicate": 0,
         "n_chunked": 0,
         "seconds_model": 0.0,
     }
@@ -328,6 +343,57 @@ def test_source_id_is_resolved_once(monkeypatch: pytest.MonkeyPatch) -> None:
     assert splitter.source_id == "some/model@deadbeef"
     assert splitter.source_id == "some/model@deadbeef"
     assert calls == ["some/model"]
+
+
+def test_stats_partition_the_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """`n_calls == n_cache_hits + n_model + n_blank + n_duplicate`, exactly."""
+    cache = SplitCache(tmp_path / "cache.jsonl")
+    splitter, _ = _splitter(monkeypatch, cache=cache)
+    splitter.split([DEVA])  # warms the cache for DEVA
+
+    splitter.split([DEVA, "", DEVA, "रामः", "रामः", "   ", "वनम्"])
+
+    stats = splitter.stats
+    assert stats["n_calls"] == 8
+    assert stats["n_blank"] == 2
+    assert stats["n_duplicate"] == 2  # the second DEVA and the second रामः
+    assert stats["n_cache_hits"] == 1  # DEVA, from the first call
+    assert stats["n_model"] == 3  # DEVA (first call), रामः, वनम्
+    assert stats["n_calls"] == (
+        stats["n_cache_hits"] + stats["n_model"] + stats["n_blank"] + stats["n_duplicate"]
+    )
+
+
+def test_cache_is_flushed_after_every_batch_not_at_the_end_of_the_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A run killed mid-call keeps every batch that completed before the failure.
+
+    The split of a full corpus is a multi-hour background job; if the cache were written
+    only when `split` returned, a crash in hour four would cost all four hours.
+    """
+    path = tmp_path / "cache.jsonl"
+    cache = SplitCache(path)
+    splitter = SandhiSplitter(cache=cache, batch_size=1)
+
+    calls: list[list[str]] = []
+
+    def explode_on_the_second_batch(batch: list[str]) -> list[str]:
+        calls.append(list(batch))
+        if len(calls) == 2:
+            raise RuntimeError("simulated generation failure")
+        return [text[len(SEGMENTATION_PREFIX) :] for text in batch]
+
+    monkeypatch.setattr(splitter, "_generate_iast", explode_on_the_second_batch)
+
+    with pytest.raises(RuntimeError, match="simulated generation failure"):
+        splitter.split(["रामः", "रामः वनम् गच्छति एव"])
+
+    assert len(calls) == 2
+    # The first batch is on disk already — readable by a fresh cache, not merely buffered.
+    reopened = SplitCache(path)
+    assert len(reopened) == 1
+    assert reopened.get("रामः वनम् गच्छति एव") == "rAmaH vanam gacCati eva"
 
 
 # --- the real checkpoint (network-gated) ------------------------------------------
