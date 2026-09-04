@@ -41,10 +41,10 @@ model is never loaded — the 9.4 h of model time is Task 3's, spent once).
 | 1. Shared experiment helpers | done |
 | 2. `SandhiSplitter` + cache + throughput benchmark | done |
 | 3. Split the corpora, train the `T4` arms | done |
-| 4. Runner, `results.json`, figure, this file | done — **re-run twice after review** |
+| 4. Runner, `results.json`, figure, this file | done — **re-run three times after review** |
 
-Every number here is from the run of 2026-09-05 at commit `6c3be51`, clean tree
-(`results.json` records `git_dirty: false`). Two earlier versions of this file are
+Every number here is from the run of 2026-09-05 at commit `1c0f7d8`, clean tree
+(`results.json` records `git_dirty: false`). Three earlier versions of this file are
 superseded; see **What changed, and why**.
 
 ---
@@ -72,8 +72,15 @@ well as non-letters, so it measured garbling by removed anusvāras rather than d
 now prices non-letters only, and its share is undefined when the saving is not positive.
 
 The corrected effect on Sāmayik test_ood is roughly **half** what the previous version
-reported (−0.025 to −0.069, against −0.057 to −0.105), almost all of the difference being
+reported (−0.026 to −0.069, against −0.057 to −0.105), almost all of the difference being
 hyphens that are no longer credited.
+
+**3. The rejoin duplicated letters when the model kept a hyphenated compound whole.** `log-in`
+came back as `login-in` (27 records: `plag-ins` → `plagins-ins`, `Super-G` → `SuperG-G`). The
+model's segments are now split on hyphens too. The bug deleted nothing and preserved every
+non-letter, so both existing invariants passed it; a third, letter containment, was added, and
+the exact hyphen-count invariant is what actually pins the class. Effect on the results: none
+visible beyond the fourth decimal — no row changed direction or CI-vs-zero status.
 
 ---
 
@@ -98,37 +105,37 @@ a number.
 
 | matched pair (raw → split) | control | TPP raw | TPP split | Δ | 95% CI | non-letter deletion cost | Sanskrit tokens saved | share |
 |---|---|---:|---:|---:|---|---:|---:|---:|
-| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.077 | 1.065 | **-0.0119** | [-0.0158, -0.0074] | +32 | +439 | +7% |
-| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.027 | 1.021 | **-0.0053** | [-0.0096, -0.0006] | +29 | +183 | +16% |
-| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.148 | 1.101 | **-0.0470** | [-0.0524, -0.0417] | +20 | +1724 | +1% |
-| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.096 | 1.056 | **-0.0401** | [-0.0455, -0.0347] | +19 | +1437 | +1% |
+| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.077 | 1.065 | **-0.0123** | [-0.0161, -0.0078] | +32 | +453 | +7% |
+| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.027 | 1.021 | **-0.0053** | [-0.0097, -0.0006] | +29 | +183 | +16% |
+| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.148 | 1.101 | **-0.0472** | [-0.0526, -0.0420] | +20 | +1730 | +1% |
+| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.096 | 1.056 | **-0.0402** | [-0.0456, -0.0349] | +19 | +1442 | +1% |
 
 #### samayik_test_ood
 
 | matched pair (raw → split) | control | TPP raw | TPP split | Δ | 95% CI | non-letter deletion cost | Sanskrit tokens saved | share |
 |---|---|---:|---:|---:|---|---:|---:|---:|
-| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.091 | 1.061 | **-0.0302** | [-0.0328, -0.0273] | +185 | +3095 | +6% |
-| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.067 | 1.041 | **-0.0254** | [-0.0278, -0.0226] | +167 | +2454 | +7% |
-| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.161 | 1.099 | **-0.0616** | [-0.0649, -0.0584] | +159 | +6431 | +2% |
-| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.146 | 1.077 | **-0.0690** | [-0.0719, -0.0658] | +165 | +6876 | +2% |
+| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.091 | 1.061 | **-0.0304** | [-0.0330, -0.0275] | +185 | +3116 | +6% |
+| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.067 | 1.041 | **-0.0256** | [-0.0280, -0.0228] | +167 | +2472 | +7% |
+| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.161 | 1.100 | **-0.0611** | [-0.0642, -0.0579] | +159 | +6371 | +2% |
+| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.146 | 1.078 | **-0.0688** | [-0.0717, -0.0656] | +165 | +6854 | +2% |
 
 #### itihasa_test
 
 | matched pair (raw → split) | control | TPP raw | TPP split | Δ | 95% CI | non-letter deletion cost | Sanskrit tokens saved | share |
 |---|---|---:|---:|---:|---|---:|---:|---:|
-| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 0.653 | 0.661 | **+0.0081** | [+0.0069, +0.0093] | +222 | -3139 | — |
-| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 0.607 | 0.624 | **+0.0171** | [+0.0160, +0.0183] | +99 | -6451 | — |
-| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 0.663 | 0.669 | **+0.0056** | [+0.0043, +0.0068] | -107 | -2241 | — |
-| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 0.626 | 0.637 | **+0.0114** | [+0.0101, +0.0125] | -176 | -4466 | — |
+| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 0.653 | 0.662 | **+0.0081** | [+0.0070, +0.0093] | +222 | -3156 | — |
+| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 0.607 | 0.624 | **+0.0171** | [+0.0160, +0.0183] | +99 | -6446 | — |
+| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 0.663 | 0.669 | **+0.0057** | [+0.0044, +0.0069] | -107 | -2275 | — |
+| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 0.626 | 0.637 | **+0.0114** | [+0.0101, +0.0126] | -176 | -4476 | — |
 
 #### flores_devtest
 
 | matched pair (raw → split) | control | TPP raw | TPP split | Δ | 95% CI | non-letter deletion cost | Sanskrit tokens saved | share |
 |---|---|---:|---:|---:|---|---:|---:|---:|
-| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.139 | 1.103 | **-0.0366** | [-0.0411, -0.0320] | +78 | +1140 | +7% |
-| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.138 | 1.102 | **-0.0356** | [-0.0401, -0.0313] | +79 | +1031 | +8% |
-| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.207 | 1.132 | **-0.0751** | [-0.0805, -0.0700] | +81 | +2415 | +3% |
-| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.219 | 1.144 | **-0.0753** | [-0.0819, -0.0695] | +82 | +2263 | +4% |
+| T1_bpe_raw_32k* → T4_bpe_split_32k* | E1_bpe_32k* | 1.139 | 1.102 | **-0.0370** | [-0.0415, -0.0323] | +78 | +1151 | +7% |
+| T1_bpe_raw_64k* → T4_bpe_split_64k* | E1_bpe_64k* | 1.138 | 1.102 | **-0.0359** | [-0.0406, -0.0315] | +79 | +1040 | +8% |
+| T2_unigram_raw_32k* → T4_unigram_split_32k* | E1_unigram_32k* | 1.207 | 1.132 | **-0.0749** | [-0.0801, -0.0698] | +81 | +2409 | +3% |
+| T2_unigram_raw_64k* → T4_unigram_split_64k* | E1_unigram_64k* | 1.219 | 1.144 | **-0.0755** | [-0.0820, -0.0698] | +82 | +2269 | +4% |
 
 ### Fertility — never the headline (CLAUDE.md §2.1)
 
@@ -138,22 +145,22 @@ count and is not comparable with any raw arm.
 
 | corpus | matched pair | fertility raw → split (raw-word denom.) | split arm, secondary (split-word denom.) |
 |---|---|---:|---:|
-| samayik_test | T1_bpe_raw_32k* → T4_bpe_split_32k* | 1.696 → 1.694 | 1.459 |
+| samayik_test | T1_bpe_raw_32k* → T4_bpe_split_32k* | 1.696 → 1.693 | 1.458 |
 | samayik_test | T1_bpe_raw_64k* → T4_bpe_split_64k* | 1.525 → 1.533 | 1.320 |
 | samayik_test | T2_unigram_raw_32k* → T4_unigram_split_32k* | 1.801 → 1.742 | 1.500 |
 | samayik_test | T2_unigram_raw_64k* → T4_unigram_split_64k* | 1.680 → 1.633 | 1.406 |
-| samayik_test_ood | T1_bpe_raw_32k* → T4_bpe_split_32k* | 2.340 → 2.275 | 1.859 |
-| samayik_test_ood | T1_bpe_raw_64k* → T4_bpe_split_64k* | 2.156 → 2.105 | 1.720 |
-| samayik_test_ood | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.532 → 2.397 | 1.959 |
-| samayik_test_ood | T2_unigram_raw_64k* → T4_unigram_split_64k* | 2.388 → 2.244 | 1.834 |
+| samayik_test_ood | T1_bpe_raw_32k* → T4_bpe_split_32k* | 2.340 → 2.274 | 1.858 |
+| samayik_test_ood | T1_bpe_raw_64k* → T4_bpe_split_64k* | 2.156 → 2.104 | 1.719 |
+| samayik_test_ood | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.532 → 2.398 | 1.959 |
+| samayik_test_ood | T2_unigram_raw_64k* → T4_unigram_split_64k* | 2.388 → 2.245 | 1.834 |
 | itihasa_test | T1_bpe_raw_32k* → T4_bpe_split_32k* | 1.941 → 1.965 | 1.448 |
 | itihasa_test | T1_bpe_raw_64k* → T4_bpe_split_64k* | 1.748 → 1.797 | 1.325 |
-| itihasa_test | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.022 → 2.039 | 1.503 |
-| itihasa_test | T2_unigram_raw_64k* → T4_unigram_split_64k* | 1.877 → 1.911 | 1.408 |
-| flores_devtest | T1_bpe_raw_32k* → T4_bpe_split_32k* | 2.082 → 2.023 | 1.773 |
+| itihasa_test | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.022 → 2.040 | 1.503 |
+| itihasa_test | T2_unigram_raw_64k* → T4_unigram_split_64k* | 1.877 → 1.911 | 1.409 |
+| flores_devtest | T1_bpe_raw_32k* → T4_bpe_split_32k* | 2.082 → 2.022 | 1.773 |
 | flores_devtest | T1_bpe_raw_64k* → T4_bpe_split_64k* | 1.935 → 1.882 | 1.650 |
-| flores_devtest | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.280 → 2.146 | 1.881 |
-| flores_devtest | T2_unigram_raw_64k* → T4_unigram_split_64k* | 2.150 → 2.025 | 1.775 |
+| flores_devtest | T2_unigram_raw_32k* → T4_unigram_split_32k* | 2.280 → 2.146 | 1.882 |
+| flores_devtest | T2_unigram_raw_64k* → T4_unigram_split_64k* | 2.150 → 2.024 | 1.775 |
 
 ### Secondary variant: the splitter's raw output (`model_raw`)
 
@@ -168,17 +175,16 @@ deletes words. Reported so the reconciliation's effect is visible, never as a re
 | samayik_test | T4_unigram_split_64k* | 1.056 | 0.849 |
 | samayik_test_ood | T4_bpe_split_32k* | 1.061 | 0.854 |
 | samayik_test_ood | T4_bpe_split_64k* | 1.041 | 0.842 |
-| samayik_test_ood | T4_unigram_split_32k* | 1.099 | 0.885 |
-| samayik_test_ood | T4_unigram_split_64k* | 1.077 | 0.870 |
-| itihasa_test | T4_bpe_split_32k* | 0.661 | 0.552 |
+| samayik_test_ood | T4_unigram_split_32k* | 1.100 | 0.885 |
+| samayik_test_ood | T4_unigram_split_64k* | 1.078 | 0.871 |
+| itihasa_test | T4_bpe_split_32k* | 0.662 | 0.553 |
 | itihasa_test | T4_bpe_split_64k* | 0.624 | 0.529 |
 | itihasa_test | T4_unigram_split_32k* | 0.669 | 0.571 |
 | itihasa_test | T4_unigram_split_64k* | 0.637 | 0.551 |
-| flores_devtest | T4_bpe_split_32k* | 1.103 | 0.965 |
+| flores_devtest | T4_bpe_split_32k* | 1.102 | 0.964 |
 | flores_devtest | T4_bpe_split_64k* | 1.102 | 0.966 |
-| flores_devtest | T4_unigram_split_32k* | 1.132 | 0.988 |
-| flores_devtest | T4_unigram_split_64k* | 1.144 | 1.000 |
-
+| flores_devtest | T4_unigram_split_32k* | 1.132 | 0.989 |
+| flores_devtest | T4_unigram_split_64k* | 1.144 | 1.001 |
 ### Deployed practice (not a controlled comparison)
 
 `results.json`'s `tpp` block also carries every arm against `T0_o200k`. That is a
@@ -196,17 +202,25 @@ MPS. The 9.4-hour run of 2026-09-04/05 is recorded in `data/processed/split/mani
 with the original run's throughput and chunking facts in
 `data/processed/split/manifest_original_run.json`; every run also writes a timestamped copy.
 
-| corpus | mean units raw | mean units split | letter retention | non-letter missing (gross) | added (gross) | of |
-|---|---:|---:|---:|---:|---:|---:|
-| samayik_test | 9.59 | 11.14 | 1.0139 | 134 | 12 | 8,704 |
-| samayik_test_ood | 11.82 | 14.47 | 1.0096 | 397 | 14 | 18,017 |
-| itihasa_test | 11.16 | 15.15 | 1.0207 | 1,806 | 3 | 44,544 |
-| flores_devtest | 16.77 | 19.13 | 1.0059 | 80 | 6 | 3,735 |
+| corpus | mean units raw | mean units split | letter retention | non-letter missing (gross) | added (gross) | of | letters contained |
+|---|---:|---:|---:|---:|---:|---:|---|
+| samayik_test | 9.59 | 11.14 | 1.0138 | 134 | 12 | 8,704 | yes |
+| samayik_test_ood | 11.82 | 14.47 | 1.0096 | 397 | 15 | 18,017 | yes |
+| itihasa_test | 11.16 | 15.15 | 1.0207 | 1,806 | 3 | 44,544 | yes |
+| flores_devtest | 16.77 | 19.13 | 1.0058 | 80 | 5 | 3,735 | yes |
 
 Missing and added are **gross** — per-sentence differences summed, so a danda deleted in one
 sentence and one invented in another count as two faults rather than cancelling to zero.
-Letter retention above 1.0 is expected and is the splitter doing its job: reversing sandhi
-restores elided phonemes (`prARina Agatya` → `prARinaH Agatya`).
+Letter retention above 1.0 has two components, and only one of them is the splitter doing
+its job: reversing sandhi restores elided phonemes (`prARina Agatya` → `prARinaH Agatya`),
+and separately the splitter **normalises orthography** — anusvāra `M` → `m`, `:` → `H`,
+restored visargas — which also changes the letter count without reflecting any segmentation
+work. The ratio cannot separate the two; Limitation 2 is about the second.
+
+**Letters contained** is the third invariant: per sentence, no letter appears in the output
+more often than the raw text and the model output together hold it. It holds on every corpus.
+Read it as a floor, not a certificate — the budget has to be the *sum* of the two sources
+because the output legitimately mixes them, which makes it loose (see `experiment.py`).
 
 **The non-letter multiset is still not preserved, and the runner says so on every corpus.**
 Attached punctuation and hyphens are now safe. What remains, in order of size:
@@ -222,9 +236,12 @@ Attached punctuation and hyphens are now safe. What remains, in order of size:
 - **characters the model *adds*** (3–14 per corpus, chiefly combining marks and `/`). These
   are paid for by the split arm, so they push the comparison against `T4`.
 
-On these corpora the deletion column is 1–8% of the saving wherever a saving exists, so no Δ
-below is materially a deletion artefact — but it is not zero, and it is reported beside every
-delta rather than argued away.
+On these corpora the deletion column is **1–16%** of the saving wherever a saving exists, and
+**≤8% on every pair whose saving exceeds 1,000 tokens**. The 16% is Sāmayik test BPE 64k,
+which is also the pair with the smallest saving (183 tokens) and the Δ closest to zero — the
+two facts belong together and are stated together. No Δ below is materially a deletion
+artefact, but the column is not zero and is reported beside every delta rather than argued
+away.
 
 ---
 
@@ -234,16 +251,17 @@ delta rather than argued away.
 on verse.** Precisely:
 
 - On **Sāmayik test** (primary prose) all four pairs move the predicted way with CIs clear of
-  0, but the effects are small: −0.005 to −0.047, and the BPE 64k pair's CI reaches
-  −0.0006, i.e. it barely clears zero.
-- On **Sāmayik test_ood** and **FLORES**, all eight pairs move the predicted way, Δ −0.025 to
-  −0.075, every CI clear of 0, deletion cost ≤8% of the saving.
+  0, but the effects are small: −0.005 to −0.047, and the BPE 64k pair's CI reaches −0.0006,
+  i.e. it barely clears zero.
+- On **Sāmayik test_ood** and **FLORES**, all eight pairs move the predicted way, Δ −0.026 to
+  −0.076, every CI clear of 0, deletion cost ≤8% of the saving.
 - On **Itihāsa** (verse), all four pairs move the **wrong** way (+0.006 to +0.017, CIs clear
   of 0). Splitting is not free, and on metrical text it does not pay.
 - **No arm is below its matched English control on prose.** The lowest split TPP on prose is
   1.021 (`T4_bpe_split_64k*`, Sāmayik test). Sanskrit still costs more tokens per proposition
   than matched-vocabulary English on every prose corpus here.
-- **Fertility moves with TPP** and never leads: down on prose and FLORES, up on verse.
+- **Fertility moves with TPP** and never leads: down on 11 of the 12 prose/FLORES pairs, up
+  on the Sāmayik-test BPE 64k pair (1.525 → 1.533) and on all four verse pairs.
 
 H3's TPP half is **supported on prose and contradicted on verse**, at an effect size an order
 of magnitude smaller than the first version of this file reported.
@@ -271,8 +289,9 @@ of magnitude smaller than the first version of this file reported.
    corpora whose test splits they are evaluated on (disjoint sentences, exclusion-list
    enforced). Sāmayik test_ood exists because of this.
 6. **Verse is an adverse pair, and it is not just meter.** Itihāsa's positive Δ could be meter
-   constraining word choice, the splitter being weaker on Epic register, or the 1,711 avagraha
-   consumptions. Undiagnosed.
+   constraining word choice or the splitter being weaker on Epic register. It is *not* the
+   avagraha consumptions: their re-tokenised cost pushes the comparison the other way, so if
+   anything they flatter `T4` there. Undiagnosed.
 7. **Avagraha is licensed but not free.** It is the largest remaining non-letter difference and
    is concentrated in exactly the corpus that behaves adversely.
 8. **Provisional arms.** Absolute TPP levels will move when milestone M1 lands; the matched
