@@ -47,12 +47,13 @@ from typing import Any
 import numpy as np
 
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
-from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl, save_jsonl
-from sanskrit_tok.data.itihasa import load_itihasa
-from sanskrit_tok.data.samayik import load_samayik
 from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
+    ENGLISH_LANGUAGE,
+    HINDI_LANGUAGE,
+    SANSKRIT_LANGUAGE,
     load_config,
+    load_corpus_entry,
     provenance,
     repo_root,
     resolve_path,
@@ -72,11 +73,6 @@ logger = logging.getLogger("exp02")
 #: Script variant names, matching exp01's constants.
 ORIGINAL = "original"
 SLP1 = "slp1"
-
-#: Languages every corpus in this experiment carries.
-SANSKRIT_LANGUAGE = "san_Deva"
-ENGLISH_LANGUAGE = "eng_Latn"
-HINDI_LANGUAGE = "hin_Deva"
 
 #: Tokenizer-arm families whose T0/T3-style provisional flag the figure and README mark
 #: with a `*`: trained from scratch on the parallel-corpus training splits, not yet on
@@ -126,27 +122,6 @@ FIGURE_Y_PAD_FRACTION = 0.15
 FIGURE_CLIP_INSET_FRACTION = 0.04
 
 # ---------------------------------------------------------------------- corpus wrangling
-
-
-def load_corpus_entry(entry: Mapping[str, Any], root: Path) -> ParallelCorpus:
-    """Dispatch one `config["corpora"]` entry to its loader, by `entry["loader"]`."""
-    loader = str(entry["loader"])
-    split = str(entry["split"])
-    if loader == "samayik":
-        return load_samayik(split)  # type: ignore[arg-type]
-    if loader == "itihasa":
-        return load_itihasa(split)  # type: ignore[arg-type]
-    if loader == "flores":
-        jsonl_path = resolve_path(str(entry["jsonl"]), root)
-        if jsonl_path.exists():
-            return load_jsonl(jsonl_path, name="flores200", split=split)
-        from sanskrit_tok.data.flores import load_flores
-
-        logger.info("%s not found; downloading FLORES-200 %s", jsonl_path, split)
-        corpus = load_flores((SANSKRIT_LANGUAGE, HINDI_LANGUAGE, ENGLISH_LANGUAGE), split)
-        save_jsonl(corpus, jsonl_path)
-        return corpus
-    raise ValueError(f"corpus {entry.get('name')!r}: unknown loader {loader!r}")
 
 
 @dataclass(frozen=True)

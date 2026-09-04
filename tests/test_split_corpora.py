@@ -159,39 +159,56 @@ def test_subset_larger_than_the_corpus_returns_everything() -> None:
 # ----------------------------------------------------- the training sentence selection
 
 
-def test_training_sentences_match_the_raw_training_corpus_line_for_line(
-    tmp_path: Path,
-) -> None:
-    """The split corpus must cover exactly the sentences the raw corpus was built from.
+def test_the_script_uses_the_shared_training_sentence_selection() -> None:
+    """There is exactly one definition of "the training sentences" (fix 1).
 
-    `build_training_corpus` filters, transliterates, drops blanks and exact-dedups across
-    sources in source order; `training_sentences` has to reproduce that selection on the
-    *Devanagari* side, or the T4 arms would be trained on a different sentence set from
-    T1/T2 and the matched comparison would be broken from the start.
+    The first cut of this script had its own copy that deduplicated on SLP1, while the
+    split cache is keyed on Devanagari and the corpus builder transforms every Devanagari
+    sentence it is given — so a sentence whose SLP1 form collided with an earlier one was
+    never split and turned into a `MissingSplitError` hours later. Both callers now go
+    through `tokenizers.corpus.select_training_sentences`.
     """
+    from sanskrit_tok.tokenizers.corpus import select_training_sentences
+
+    assert split_corpora.select_training_sentences is select_training_sentences
+    assert not hasattr(split_corpora, "training_sentences")
+
+
+def test_the_selection_keeps_two_devanagari_spellings_of_one_slp1_form() -> None:
+    """`॥` and `।।` transliterate identically, so both must reach the splitter."""
+    from sanskrit_tok.tokenizers.corpus import select_training_sentences
+
+    pair = ["जयमुदीरयेत्॥", "जयमुदीरयेत्।।"]
+    assert to_slp1(pair[0], "devanagari") == to_slp1(pair[1], "devanagari")
+
+    assert split_corpora.select_training_sentences({"a": pair}, frozenset()) == pair
+    assert select_training_sentences({"a": pair}, frozenset()) == pair
+
+
+def test_the_selected_sentences_still_build_the_same_corpus(tmp_path: Path) -> None:
+    """The selection is a superset of the corpus lines, never a different set: the corpus
+    builder's own transformed-text dedup collapses what transliteration merges."""
     sources = {
         "a": ["रामः गच्छति", "सीता वदति", "  "],
         "b": ["रामः गच्छति", "बालकः पठति"],  # first duplicates source "a"
     }
-    exclusion = frozenset()
 
-    selected = split_corpora.training_sentences(sources, exclusion)
-    manifest = build_training_corpus(sources, tmp_path / "corpus.txt", exclusion)
+    selected = split_corpora.select_training_sentences(sources, frozenset())
+    build_training_corpus({"all": selected}, tmp_path / "corpus.txt", frozenset())
     lines = (tmp_path / "corpus.txt").read_text(encoding="utf-8").splitlines()
 
+    assert selected == ["रामः गच्छति", "सीता वदति", "बालकः पठति"]
     assert [to_slp1(text, "devanagari").strip() for text in selected] == lines
-    assert len(selected) == manifest["n_out"]
 
 
-def test_training_sentences_drop_sentences_on_the_exclusion_list() -> None:
-    from sanskrit_tok.data.exclusion import sentence_hash
+def test_split_config_rejects_an_english_source_as_a_training_source() -> None:
+    """`train_sources` resolves against the *Sanskrit* loaders only: an English source name
+    here would be hours of a sandhi splitter reading English."""
+    mapping = yaml.safe_load(SPLIT_YAML.read_text(encoding="utf-8"))
+    mapping["train_sources"] = ["samayik_train_en"]
 
-    sources = {"a": ["रामः गच्छति", "सीता वदति"]}
-    exclusion = frozenset({sentence_hash("सीता वदति")})
-
-    selected = split_corpora.training_sentences(sources, exclusion)
-
-    assert selected == ["रामः गच्छति"]
+    with pytest.raises(KeyError, match="samayik_train_en"):
+        split_corpora.SplitConfig.from_mapping(mapping, REPO_ROOT)
 
 
 # ------------------------------------------------------------------------ split_corpus
@@ -246,6 +263,20 @@ def test_split_corpus_reports_pooled_character_retention(tmp_path: Path) -> None
     assert report.char_retention_reconciled == pytest.approx(1.0)
 
 
+def test_split_corpus_reports_the_verbatim_and_inexact_unit_counters(tmp_path: Path) -> None:
+    """Retention alone can read 1.000 while the model dropped a word and rewrote another,
+    so both counters are pooled per corpus (review item 3)."""
+    texts = ["तदपि ।", "प्राणिन आगत्य"]
+    splitter = FakeSplitter({"तदपि ।": "tad api", "प्राणिन आगत्य": "prARinaH Agatya"})
+
+    report = split_corpora.split_corpus("mini", texts, splitter, tmp_path / "mini.jsonl")
+
+    assert report.n_units_kept_verbatim == 1  # the danda the model dropped
+    assert report.n_units_replaced_inexact == 1  # prARina -> prARinaH, a normalisation
+    assert report.n_units_raw == 4
+    assert report.n_units_out == 5
+
+
 def test_split_corpus_reports_the_fraction_of_sentences_whose_unit_count_changed(
     tmp_path: Path,
 ) -> None:
@@ -285,6 +316,10 @@ def _report(name: str) -> object:
         n_out=3,
         n_units_changed=1,
         fraction_units_changed=1 / 3,
+        n_units_raw=30,
+        n_units_out=32,
+        n_units_kept_verbatim=2,
+        n_units_replaced_inexact=3,
         chars_raw=30,
         chars_model=27,
         chars_out=31,
@@ -362,6 +397,10 @@ def test_manifest_records_retention_before_and_after_reconciliation(tmp_path: Pa
     assert corpus["char_retention_model"] == pytest.approx(0.9)
     assert corpus["char_retention_reconciled"] == pytest.approx(31 / 30)
     assert corpus["fraction_units_changed"] == pytest.approx(1 / 3)
+    assert corpus["n_units_raw"] == 30
+    assert corpus["n_units_out"] == 32
+    assert corpus["n_units_kept_verbatim"] == 2
+    assert corpus["n_units_replaced_inexact"] == 3
 
 
 def test_manifest_is_strict_json_serialisable(tmp_path: Path) -> None:

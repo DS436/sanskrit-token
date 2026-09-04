@@ -321,6 +321,13 @@ class SandhiSplitter:
         output is longer than its input (see `OUTPUT_TOKENS_FACTOR`), so the input budget
         is the wrong cap for it and would truncate the longest sentences.
 
+        `max_length=None` is passed alongside it deliberately. The checkpoint's
+        `generation_config` carries `max_length=512`, and `transformers` warns once per
+        `generate` call that the two are both set and `max_new_tokens` wins — thousands of
+        lines in a five-hour run's log, obscuring the progress lines that are the only view
+        onto it. Clearing it says the same thing to the library that the warning says to
+        us, and changes nothing about what is generated.
+
         This is the seam the tests replace wholesale, and the only step of `split` that
         is not exercised offline. On
         MPS a generation failure is retried once on the CPU — an MPS kernel gap should
@@ -358,7 +365,10 @@ class SandhiSplitter:
         )
         with torch.inference_mode():
             generated = self._model.generate(
-                **inputs, max_new_tokens=max_new_tokens, num_beams=1
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                max_length=None,
+                num_beams=1,
             )
         decoded = self._tokenizer.batch_decode(generated, skip_special_tokens=True)
         return [str(text) for text in decoded]

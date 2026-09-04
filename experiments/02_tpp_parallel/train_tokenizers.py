@@ -53,13 +53,24 @@ from typing import Any
 from tokenizers import Tokenizer as RawTokenizer
 
 from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash, sentence_hash_en
-from sanskrit_tok.data.itihasa import load_itihasa
-from sanskrit_tok.data.samayik import load_samayik
 from sanskrit_tok.encoding import to_slp1
-from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, write_results
+from sanskrit_tok.experiment import (
+    collect_sources,
+    load_config,
+    provenance,
+    repo_root,
+    resolve_path,
+    write_results,
+)
 from sanskrit_tok.sandhi.cache import SplitCache
 from sanskrit_tok.sandhi.reconcile import DEFAULT_THRESHOLD, reconcile
-from sanskrit_tok.tokenizers.corpus import build_training_corpus, identity_transform, slp1_transform
+from sanskrit_tok.tokenizers.corpus import (
+    build_training_corpus,
+    deduplicate_sources,
+    filter_leaked_sentences,
+    identity_transform,
+    slp1_transform,
+)
 from sanskrit_tok.tokenizers.registry import trained_tokenizer_path
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
 from sanskrit_tok.tokenizers.train_unigram import train_unigram
@@ -80,17 +91,6 @@ ENGLISH_SIDE = "en"
 #: sources and the hash function are `sa`'s.
 SPLIT_SIDE = "sa_split"
 SIDES = (SANSKRIT_SIDE, ENGLISH_SIDE, SPLIT_SIDE)
-
-#: `tokenizers.yaml`'s `sources`/`english_sources` entries -> a loader for that split's
-#: sentences on that side. Prose before verse (CLAUDE.md §7): Sāmayik listed first. The
-#: `_en` loaders read `eng_Latn` off the very same `ParallelCorpus` the `sa` ones read
-#: `san_Deva` from, so the two corpora are the two sides of exactly the same sentences.
-SOURCE_LOADERS: dict[str, Callable[[], list[str]]] = {
-    "samayik_train": lambda: load_samayik("train").sentences["san_Deva"],
-    "itihasa_train": lambda: load_itihasa("train").sentences["san_Deva"],
-    "samayik_train_en": lambda: load_samayik("train").sentences["eng_Latn"],
-    "itihasa_train_en": lambda: load_itihasa("train").sentences["eng_Latn"],
-}
 
 #: `tokenizers.yaml`'s `arms[].algo` -> the trainer function for that algorithm. Both
 #: sides use the same trainers with the same settings; only the corpus differs.
@@ -182,17 +182,53 @@ class SplitTransform:
         return reconcile(to_slp1(text, "devanagari"), cached, threshold=self.threshold).text
 
 
+def resolve_split_threshold(config: Mapping[str, Any], manifest_path: Path) -> float:
+    """The reconciliation threshold, single-sourced from the split manifest.
+
+    The manifest records what the corpus was actually split and reconciled with, so it
+    wins; `tokenizers.yaml`'s `split_reconcile_threshold` is a declaration of intent and is
+    *checked* against it rather than trusted. A disagreement raises: reconciling the
+    training corpus at a different threshold from the one the manifest and the evaluation
+    jsonls carry would give the T4 arms a training text nothing else in the experiment
+    shares, and the only symptom would be numbers that quietly do not add up.
+
+    Falls back to the config value (then `DEFAULT_THRESHOLD`) when no manifest exists yet —
+    the state the repository is in before the split run has finished.
+    """
+    declared = config.get("split_reconcile_threshold")
+    if not manifest_path.exists():
+        return DEFAULT_THRESHOLD if declared is None else float(declared)
+    recorded = json.loads(manifest_path.read_text(encoding="utf-8")).get("reconcile_threshold")
+    if recorded is None:
+        return DEFAULT_THRESHOLD if declared is None else float(declared)
+    if declared is not None and float(declared) != float(recorded):
+        raise ValueError(
+            f"split_reconcile_threshold in the config is {float(declared)} but "
+            f"{manifest_path} records {float(recorded)}; the corpus was split and "
+            "reconciled at the manifest's value. Fix the config, or re-run "
+            "experiments/03_sandhi_split/split_corpora.py at the intended threshold."
+        )
+    return float(recorded)
+
+
 def split_cache_precheck(cache_path: Path) -> Callable[[Mapping[str, Sequence[str]]], None]:
     """A `SideSpec.precheck` asserting every sentence in `sources` is in the split cache.
 
     Raises `MissingSplitError` naming how many of how many sentences are missing and which
     cache file was consulted, so the fix ("finish the split run") is obvious from the one
     line and does not require re-running the build to discover a second missing sentence.
+
+    The set checked is `deduplicate_sources(sources)` — the same selection
+    `split_corpora.py` splits and `ensure_training_corpus` feeds the builder — so "the
+    cache covers the corpus" means exactly what it says.
     """
 
     def check(sources: Mapping[str, Sequence[str]]) -> None:
         cache = _split_cache(cache_path)
-        texts = [text for source in sources.values() for text in source if text.strip()]
+        # Deduplicated the same way the split run selected its sentences, so the count is
+        # over exactly the set `split_corpora.py` was supposed to have split. Idempotent:
+        # `ensure_training_corpus` has already applied the same selection.
+        texts = [text for source in deduplicate_sources(sources).values() for text in source]
         missing = sum(1 for text in texts if cache.get(text) is None)
         if missing:
             raise MissingSplitError(
@@ -208,18 +244,6 @@ def split_cache_precheck(cache_path: Path) -> Callable[[Mapping[str, Sequence[st
 
 
 # --------------------------------------------------------------------------- corpus
-
-
-def collect_sources(names: Sequence[str]) -> dict[str, list[str]]:
-    """Load the sentences for each named source, in config order.
-
-    Sanskrit sources (`samayik_train`, `itihasa_train`) yield Devanagari; the `_en`
-    sources yield the English side of the same splits, as written.
-    """
-    missing = [name for name in names if name not in SOURCE_LOADERS]
-    if missing:
-        raise KeyError(f"unknown corpus source(s) {missing}; known: {list(SOURCE_LOADERS)}")
-    return {name: SOURCE_LOADERS[name]() for name in names}
 
 
 def arm_side(arm: Mapping[str, Any]) -> str:
@@ -256,52 +280,6 @@ def select_arms_to_train(arms: Sequence[Mapping[str, Any]], retrain: bool) -> li
     return selected
 
 
-def filter_leaked_sentences(
-    sources: Mapping[str, Sequence[str]],
-    exclusion: frozenset[str],
-    hash_fn: Callable[[str], str] = sentence_hash,
-) -> tuple[dict[str, list[str]], dict[str, int]]:
-    """Drop sentences that collide with the evaluation exclusion list before training.
-
-    Real corpora are not perfectly split: a handful of Sāmayik train sentences are
-    formulaic course-material lines ("पाठान्ता: प्रश्ना:", "end-of-lesson questions")
-    that recur verbatim in its own dev/test/test_ood splits, and a handful of Itihāsa
-    train sentences are famous, oft-quoted ślokas that recur verbatim in its dev/test
-    splits — not a split-alignment bug, just how these corpora were assembled upstream
-    (verified by inspection: 2026-09-03 decision log entry "T1/T2 training run: filtered
-    218 leaked sentences before the corpus build; no vocab shortfall").
-
-    `build_training_corpus`'s own `assert_not_excluded` call (CLAUDE.md §2.4) is a hard
-    stop for exactly this condition — a safety net, not the removal mechanism — so this
-    runs first and drops the colliding sentences, logging a WARNING with the count per
-    source. After this filter, that assertion is expected to pass trivially.
-
-    Returns `(filtered_sources, dropped_counts)`: `dropped_counts` names *every* source
-    passed in, including the ones with nothing dropped (value `0`), so a caller building a
-    manifest never has to special-case a source that had no leakage.
-
-    `hash_fn` must be the function `exclusion` was built with — `sentence_hash_en` for the
-    English (E1) side, whose list is `data/exclusion_hashes_en.txt`.
-    """
-    filtered: dict[str, list[str]] = {}
-    dropped_counts: dict[str, int] = {}
-    for name, texts in sources.items():
-        kept = [text for text in texts if hash_fn(text) not in exclusion]
-        dropped = len(texts) - len(kept)
-        dropped_counts[name] = dropped
-        if dropped:
-            logger.warning(
-                "%s: dropped %d/%d sentence(s) that collide with the evaluation "
-                "exclusion list (formulaic/repeated text recurring across splits, not a "
-                "split-alignment bug; see docs/decisions.md)",
-                name,
-                dropped,
-                len(texts),
-            )
-        filtered[name] = kept
-    return filtered, dropped_counts
-
-
 def ensure_training_corpus(
     sources: Mapping[str, Sequence[str]],
     corpus_path: Path,
@@ -330,13 +308,20 @@ def ensure_training_corpus(
     before the build — the `sa_split` side uses it to fail once, with a count, if the
     sandhi split cache does not cover the corpus.
 
-    On a rebuild, `sources` (the *raw*, unfiltered sentences from `collect_sources`) is
-    first run through `filter_leaked_sentences`, and the manifest `build_training_corpus`
-    returns is extended with two keys before being written and returned: `n_in_raw` (the
-    per-source count of `sources` as given, before any filtering) and `n_leaked_dropped`
-    (the per-source count `filter_leaked_sentences` dropped). `n_in` — already in the
-    manifest `build_training_corpus` returns — stays the *post*-filter count, i.e. what was
-    actually fed to `build_training_corpus`.
+    On a rebuild, `sources` (the *raw*, unfiltered sentences from `collect_sources`) goes
+    through `filter_leaked_sentences` and then `deduplicate_sources` — the same selection
+    `experiments/03_sandhi_split/split_corpora.py` splits, so the split side can never be
+    asked to transform a sentence the split run did not split (see `corpus.py`'s docstring:
+    two Devanagari spellings can share one SLP1 form). The written corpus is unaffected:
+    `build_training_corpus` still deduplicates on the *transformed* text, so those two
+    spellings still collapse to one line.
+
+    The manifest `build_training_corpus` returns is extended with three keys before being
+    written and returned: `n_in_raw` (the per-source count of `sources` as given, before
+    any filtering), `n_leaked_dropped` (what `filter_leaked_sentences` dropped) and
+    `n_original_dedup_removed` (what `deduplicate_sources` then dropped). `n_in` — already
+    in the manifest `build_training_corpus` returns — stays the count actually fed to
+    `build_training_corpus`, i.e. post-filter *and* post-selection.
     """
     manifest_path = corpus_path.parent / "manifest.json" if manifest_path is None else manifest_path
     if corpus_path.exists() and manifest_path.exists():
@@ -353,14 +338,18 @@ def ensure_training_corpus(
 
     n_in_raw = {name: len(texts) for name, texts in sources.items()}
     filtered, dropped_counts = filter_leaked_sentences(sources, exclusion, hash_fn)
+    selected = deduplicate_sources(filtered)
     if precheck is not None:
-        precheck(filtered)
+        precheck(selected)
 
     manifest = build_training_corpus(
-        filtered, corpus_path, exclusion, transform=transform, hash_fn=hash_fn
+        selected, corpus_path, exclusion, transform=transform, hash_fn=hash_fn
     )
     manifest["n_in_raw"] = n_in_raw
     manifest["n_leaked_dropped"] = dropped_counts
+    manifest["n_original_dedup_removed"] = {
+        name: len(filtered[name]) - len(selected[name]) for name in filtered
+    }
 
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
@@ -466,7 +455,10 @@ def side_spec(side: str, config: Mapping[str, Any], root: Path) -> SideSpec:
     if side == SPLIT_SIDE:
         corpus_path = resolve_path(str(config["split_corpus_path"]), root)
         cache_path = resolve_path(str(config["split_cache_path"]), root)
-        threshold = float(config.get("split_reconcile_threshold", DEFAULT_THRESHOLD))
+        manifest_path = resolve_path(
+            str(config.get("split_manifest_path", "data/processed/split/manifest.json")), root
+        )
+        threshold = resolve_split_threshold(config, manifest_path)
         return SideSpec(
             side=side,
             corpus_path=corpus_path,

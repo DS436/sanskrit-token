@@ -104,19 +104,10 @@ def test_sandhi_reversal_may_add_characters() -> None:
     assert result.chars_out > result.chars_raw
 
 
-def test_result_is_a_frozen_dataclass_with_the_documented_fields() -> None:
+def test_result_is_a_frozen_dataclass() -> None:
     result = reconcile("tadapi", "tad api")
 
     assert isinstance(result, ReconcileResult)
-    assert set(vars(result)) == {
-        "text",
-        "n_units_raw",
-        "n_units_out",
-        "n_units_kept_verbatim",
-        "chars_raw",
-        "chars_model",
-        "chars_out",
-    }
 
 
 def test_a_digit_unit_is_verbatim_and_does_not_consume_a_segment() -> None:
@@ -141,3 +132,114 @@ def test_units_are_joined_with_single_spaces() -> None:
     result = reconcile("tadapi\t\nca", "tad  api   ca")
 
     assert result.text == "tad api ca"
+
+
+# ------------------------------------------------- the neighbour guard (Part A review)
+
+
+def test_a_window_that_matches_the_next_unit_better_is_refused() -> None:
+    """`rAmaH rAmam vadati` with `rAmaH` dropped must not be repaired by stealing `rAmam`.
+
+    Without a lookahead the greedy walk hands `rAmam` (similarity 0.80) to `rAmaH`, then
+    hands it to `rAmam` as well, and the sentence comes out as `rAmam rAmam vadati`: a
+    *case error introduced by the pipeline*, with character retention reading a reassuring
+    1.000. A window may only be taken by the current unit if it resembles that unit more
+    than it resembles the next letter-bearing one.
+    """
+    result = reconcile("rAmaH rAmam vadati", "rAmam vadati")
+
+    assert result.text == "rAmaH rAmam vadati"
+    assert result.n_units_kept_verbatim == 1
+
+
+def test_the_neighbour_guard_holds_for_a_dropped_nominative() -> None:
+    result = reconcile("devaH devam paSyati", "devam paSyati")
+
+    assert result.text == "devaH devam paSyati"
+    assert result.n_units_kept_verbatim == 1
+
+
+def test_the_neighbour_guard_holds_for_two_forms_of_one_verb() -> None:
+    result = reconcile("gacCati gacCatu ca", "gacCatu ca")
+
+    assert result.text == "gacCati gacCatu ca"
+    assert result.n_units_kept_verbatim == 1
+
+
+def test_a_genuine_repeated_word_survives_a_dropped_copy() -> None:
+    """Both copies of a genuinely repeated word are kept when the model emits only one."""
+    result = reconcile("tataH tataH rAjA", "tataH rAjA")
+
+    assert result.text == "tataH tataH rAjA"
+    assert result.n_units_raw == 3
+    assert result.n_units_out == 3
+
+
+def test_the_guard_does_not_block_an_exact_match_before_a_similar_word() -> None:
+    """The guard is `>`, not `>=` against nothing: an exact match still wins its window."""
+    result = reconcile("rAmaH rAmam", "rAmaH rAmam")
+
+    assert result.text == "rAmaH rAmam"
+    assert result.n_units_kept_verbatim == 0
+
+
+# ------------------------------------------------------ inexact replacements (review 3)
+
+
+def test_an_exact_replacement_is_not_counted_as_inexact() -> None:
+    result = reconcile("tadapi", "tad api")
+
+    assert result.n_units_replaced_inexact == 0
+
+
+def test_a_replacement_below_ratio_one_is_counted_as_inexact() -> None:
+    """`prARina` -> `prARinaH` changes characters: a normalisation, not a re-segmentation.
+
+    Counting these is what separates "the model split this word" from "the model rewrote
+    this word", which retention alone cannot distinguish.
+    """
+    result = reconcile("prARina Agatya", "prARinaH Agatya")
+
+    assert result.n_units_replaced_inexact == 1
+    assert result.n_units_kept_verbatim == 0
+
+
+def test_verbatim_units_are_not_counted_as_inexact() -> None:
+    result = reconcile("tadapi ca", "")
+
+    assert result.n_units_replaced_inexact == 0
+    assert result.n_units_kept_verbatim == 2
+
+
+def test_result_fields_include_the_inexact_counter() -> None:
+    result = reconcile("tadapi", "tad api")
+
+    assert set(vars(result)) == {
+        "text",
+        "n_units_raw",
+        "n_units_out",
+        "n_units_kept_verbatim",
+        "n_units_replaced_inexact",
+        "chars_raw",
+        "chars_model",
+        "chars_out",
+    }
+
+
+# ------------------------------------------------------- bounded exhaustive scan (minor)
+
+
+def test_the_window_scan_is_bounded() -> None:
+    """A unit may absorb at most `MAX_WINDOW_SEGMENTS` segments, so a pathological model
+    output cannot make one raw unit swallow the whole sentence."""
+    from sanskrit_tok.sandhi.reconcile import MAX_WINDOW_SEGMENTS
+
+    assert MAX_WINDOW_SEGMENTS == 8
+
+
+def test_the_best_window_is_the_highest_ratio_not_the_last_increasing_one() -> None:
+    """The scan is exhaustive within the bound: a window whose similarity dips and then
+    recovers is still found, which a monotone extension would have missed."""
+    result = reconcile("viSvAsakAraRAdeva", "viSvAsa kAraRAt eva")
+
+    assert result.text == "viSvAsa kAraRAt eva"

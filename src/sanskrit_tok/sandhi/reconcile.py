@@ -20,7 +20,10 @@ segmentation reconciled against the raw sentence, not the raw model output"):
 * every raw unit that aligns to nothing survives verbatim, as does every unit with no
   letter in it at all (punctuation, digits), so deletions are undone;
 * the segment cursor only advances on a successful alignment, so a dropped word does not
-  knock the rest of the sentence out of alignment.
+  knock the rest of the sentence out of alignment;
+* and a window is only given to the unit with the better claim on it — a window that
+  resembles the *next* raw unit at least as much is refused, so a dropped word cannot be
+  "repaired" by stealing its neighbour's segments and duplicating it.
 
 The similarity is `difflib.SequenceMatcher(...).ratio()` on the concatenated window,
 thresholded at `DEFAULT_THRESHOLD`. Both variants are kept downstream — the raw model
@@ -33,7 +36,7 @@ Pure functions only: no I/O, no model, no cache (CLAUDE.md §8).
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-__all__ = ["DEFAULT_THRESHOLD", "ReconcileResult", "reconcile"]
+__all__ = ["DEFAULT_THRESHOLD", "MAX_WINDOW_SEGMENTS", "ReconcileResult", "reconcile"]
 
 #: Similarity a window of model segments must reach before it may replace a raw unit.
 #: 0.6 is `difflib`'s own conventional "close enough" cutoff and, on this model's output,
@@ -42,6 +45,15 @@ __all__ = ["DEFAULT_THRESHOLD", "ReconcileResult", "reconcile"]
 #: parameter because it is a judgement call, and the value used is recorded in the split
 #: manifest.
 DEFAULT_THRESHOLD = 0.6
+
+#: The most model segments one raw whitespace unit may absorb. The scan inside that bound
+#: is exhaustive — every window size is scored and the best-scoring eligible one wins —
+#: rather than a monotone extension that stops at the first dip, because similarity is not
+#: monotone in window size: a compound's ratio can fall as a partly-matching segment is
+#: added and rise again when the segment completing it arrives. The bound keeps the scan
+#: O(8) per unit and stops a degenerate model output from letting one unit swallow a
+#: sentence; eight is far above the longest real samāsa this splitter produces.
+MAX_WINDOW_SEGMENTS = 8
 
 
 @dataclass(frozen=True)
@@ -57,12 +69,21 @@ class ReconcileResult:
     phonemes (`viSvAsakAraRAdeva` -> `viSvAsa kAraRAt eva` puts back a `t`). What must not
     happen is `chars_out` falling far below `chars_raw`, which is the deletion this module
     exists to undo.
+
+    The two unit counters are the honesty checks retention cannot provide.
+    `n_units_kept_verbatim` counts what the model did not account for (its deletions, and
+    every punctuation/digit unit). `n_units_replaced_inexact` counts the replacements whose
+    similarity was below 1.0 — the model did not merely re-segment those characters, it
+    changed them, whether by restoring an elided phoneme (legitimate) or by rewriting the
+    word (not). Retention can read 1.000 while both are high, so both are reported per
+    corpus.
     """
 
     text: str
     n_units_raw: int
     n_units_out: int
     n_units_kept_verbatim: int
+    n_units_replaced_inexact: int
     chars_raw: int
     chars_model: int
     chars_out: int
@@ -84,29 +105,46 @@ def _has_letter(unit: str) -> bool:
     return any(char.isalpha() for char in unit)
 
 
-def _best_window(unit: str, segments: list[str], start: int, threshold: float) -> int:
-    """How many segments from `start` best match `unit`; `0` when none does.
+def _best_window(
+    unit: str,
+    segments: list[str],
+    start: int,
+    threshold: float,
+    next_unit: str | None,
+) -> tuple[int, float]:
+    """The best window of segments from `start` for `unit`, as `(size, ratio)`; `(0, 0.0)`
+    when none is eligible.
 
-    Extends the window one segment at a time for as long as the similarity keeps
-    *increasing*, and remembers the largest similarity seen that also cleared
-    `threshold`. Both halves matter. Stopping at the first sub-threshold ratio would lose
-    every multi-segment compound — `viSvAsakAraRAdeva` scores 0.58 against its first
-    segment alone and only reaches 0.84 and 0.94 as the window grows — while ignoring the
-    threshold would let an unrelated segment swallow a unit the model had dropped.
+    Every window size from 1 to `MAX_WINDOW_SEGMENTS` is scored with
+    `SequenceMatcher(...).ratio()` on the concatenated segments, and the highest-scoring
+    *eligible* one wins (ties go to the shorter window). A window is eligible when:
+
+    * its similarity to `unit` is at least `threshold` — the threshold gates eligibility,
+      it does not stop the scan. A compound scores 0.58 against its first segment alone
+      and only clears 0.6 at two segments, so a scan that stopped at the first
+      sub-threshold ratio would lose every compound split; and
+    * it resembles `unit` **more** than it resembles `next_unit`, the next letter-bearing
+      raw unit. Without that lookahead a dropped word is "repaired" by stealing the
+      following word's segments and the sentence acquires a duplicate: `rAmaH rAmam
+      vadati` with `rAmaH` dropped becomes `rAmam rAmam vadati`, a case error introduced
+      by this pipeline, with character retention reading a reassuring 1.000. The guard
+      makes the greedy walk yield the window to whichever unit has the better claim on it,
+      leaving the unmatched one verbatim — which is the correct outcome, since the model
+      dropped it.
     """
     best_size = 0
-    best_ratio = threshold
-    previous_ratio = -1.0
-    for size in range(1, len(segments) - start + 1):
+    best_ratio = 0.0
+    limit = min(MAX_WINDOW_SEGMENTS, len(segments) - start)
+    for size in range(1, limit + 1):
         window = "".join(segments[start : start + size])
         ratio = SequenceMatcher(None, unit, window).ratio()
-        if ratio <= previous_ratio:
-            break
-        previous_ratio = ratio
-        if ratio >= best_ratio:
-            best_ratio = ratio
-            best_size = size
-    return best_size
+        if ratio < threshold or ratio <= best_ratio:
+            continue
+        if next_unit is not None and ratio <= SequenceMatcher(None, next_unit, window).ratio():
+            continue
+        best_size = size
+        best_ratio = ratio
+    return best_size, best_ratio
 
 
 def reconcile(
@@ -128,15 +166,26 @@ def reconcile(
     raw_units = raw_slp1.split()
     segments = model_slp1.split()
 
+    # The next *letter-bearing* unit after each position, for the lookahead guard: a
+    # punctuation unit between two words never competes for a window, so skipping to the
+    # next real word is what makes the guard fire on `rAmaH , rAmam` as well.
+    next_letter_unit: list[str | None] = [None] * len(raw_units)
+    following: str | None = None
+    for index in range(len(raw_units) - 1, -1, -1):
+        next_letter_unit[index] = following
+        if _has_letter(raw_units[index]):
+            following = raw_units[index]
+
     out_units: list[str] = []
     kept_verbatim = 0
+    replaced_inexact = 0
     cursor = 0
 
-    for unit in raw_units:
-        size = (
-            _best_window(unit, segments, cursor, threshold)
+    for index, unit in enumerate(raw_units):
+        size, ratio = (
+            _best_window(unit, segments, cursor, threshold, next_letter_unit[index])
             if _has_letter(unit) and cursor < len(segments)
-            else 0
+            else (0, 0.0)
         )
         if size == 0:
             out_units.append(unit)
@@ -144,6 +193,8 @@ def reconcile(
             continue
         out_units.extend(segments[cursor : cursor + size])
         cursor += size
+        if ratio < 1.0:
+            replaced_inexact += 1
 
     text = " ".join(out_units)
     return ReconcileResult(
@@ -151,6 +202,7 @@ def reconcile(
         n_units_raw=len(raw_units),
         n_units_out=len(out_units),
         n_units_kept_verbatim=kept_verbatim,
+        n_units_replaced_inexact=replaced_inexact,
         chars_raw=_non_space_chars(raw_slp1),
         chars_model=_non_space_chars(model_slp1),
         chars_out=_non_space_chars(text),

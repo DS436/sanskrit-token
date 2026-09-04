@@ -27,7 +27,14 @@ from pathlib import Path
 from sanskrit_tok.data.exclusion import assert_not_excluded, sentence_hash
 from sanskrit_tok.encoding import to_slp1
 
-__all__ = ["build_training_corpus", "identity_transform", "slp1_transform"]
+__all__ = [
+    "build_training_corpus",
+    "deduplicate_sources",
+    "filter_leaked_sentences",
+    "identity_transform",
+    "select_training_sentences",
+    "slp1_transform",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +51,93 @@ def identity_transform(text: str) -> str:
     a corpus built without transliteration says so in a traceback.
     """
     return text
+
+
+def filter_leaked_sentences(
+    sources: Mapping[str, Sequence[str]],
+    exclusion: frozenset[str],
+    hash_fn: Callable[[str], str] = sentence_hash,
+) -> tuple[dict[str, list[str]], dict[str, int]]:
+    """Drop sentences that collide with the evaluation exclusion list before training.
+
+    Real corpora are not perfectly split: a handful of Sāmayik train sentences are
+    formulaic course-material lines ("पाठान्ता: प्रश्ना:", "end-of-lesson questions")
+    that recur verbatim in its own dev/test/test_ood splits, and a handful of Itihāsa
+    train sentences are famous, oft-quoted ślokas that recur verbatim in its dev/test
+    splits — not a split-alignment bug, just how these corpora were assembled upstream
+    (verified by inspection: 2026-09-03 decision log entry "T1/T2 training run: filtered
+    218 leaked sentences before the corpus build; no vocab shortfall").
+
+    `build_training_corpus`'s own `assert_not_excluded` call (CLAUDE.md §2.4) is a hard
+    stop for exactly this condition — a safety net, not the removal mechanism — so this
+    runs first and drops the colliding sentences, logging a WARNING with the count per
+    source. After this filter, that assertion is expected to pass trivially.
+
+    Returns `(filtered_sources, dropped_counts)`: `dropped_counts` names *every* source
+    passed in, including the ones with nothing dropped (value `0`), so a caller building a
+    manifest never has to special-case a source that had no leakage.
+
+    `hash_fn` must be the function `exclusion` was built with — `sentence_hash_en` for the
+    English (E1) side, whose list is `data/exclusion_hashes_en.txt`.
+    """
+    filtered: dict[str, list[str]] = {}
+    dropped_counts: dict[str, int] = {}
+    for name, texts in sources.items():
+        kept = [text for text in texts if hash_fn(text) not in exclusion]
+        dropped = len(texts) - len(kept)
+        dropped_counts[name] = dropped
+        if dropped:
+            logger.warning(
+                "%s: dropped %d/%d sentence(s) that collide with the evaluation "
+                "exclusion list (formulaic/repeated text recurring across splits, not a "
+                "split-alignment bug; see docs/decisions.md)",
+                name,
+                dropped,
+                len(texts),
+            )
+        filtered[name] = kept
+    return filtered, dropped_counts
+
+
+def deduplicate_sources(sources: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+    """Drop blanks and exact repeats of the **stripped original text**, across sources.
+
+    First occurrence wins, in source order then within-source order, and the per-source
+    structure is preserved so a caller can still report `n_in` per source. See this
+    module's docstring for why this deduplication is on the original text and why
+    `build_training_corpus` deduplicates again on the transformed text.
+    """
+    seen: set[str] = set()
+    result: dict[str, list[str]] = {}
+    for name, texts in sources.items():
+        kept: list[str] = []
+        for text in texts:
+            stripped = text.strip()
+            if not stripped or stripped in seen:
+                continue
+            seen.add(stripped)
+            kept.append(text)
+        result[name] = kept
+    return result
+
+
+def select_training_sentences(
+    sources: Mapping[str, Sequence[str]],
+    exclusion: frozenset[str],
+    hash_fn: Callable[[str], str] = sentence_hash,
+) -> list[str]:
+    """The exact sentences a training corpus is built from, flat and in corpus order.
+
+    Leakage filter, then blank and exact-repeat removal on the stripped original text.
+    This is the single definition of "the training sentences", used by
+    `experiments/03_sandhi_split/split_corpora.py` to decide what to hand the sandhi
+    splitter and by `train_tokenizers.py` to decide what to feed the corpus builder and
+    what the split cache must cover. One function rather than two implementations because
+    the two must agree exactly: a sentence in one set and not the other is either model
+    time spent on text nothing reads, or a `MissingSplitError` five hours later.
+    """
+    filtered, _ = filter_leaked_sentences(sources, exclusion, hash_fn)
+    return [text for texts in deduplicate_sources(filtered).values() for text in texts]
 
 
 def build_training_corpus(

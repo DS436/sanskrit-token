@@ -39,18 +39,19 @@ import os
 import random
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from sanskrit_tok.data.exclusion import load_exclusion_hashes, sentence_hash
-from sanskrit_tok.data.flores import ParallelCorpus, load_jsonl, save_jsonl
-from sanskrit_tok.data.itihasa import load_itihasa
-from sanskrit_tok.data.samayik import load_samayik
+from sanskrit_tok.data.exclusion import load_exclusion_hashes
 from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import (
+    SANSKRIT_LANGUAGE,
+    SANSKRIT_SOURCE_LOADERS,
+    collect_sources,
     load_config,
+    load_corpus_entry,
     provenance,
     repo_root,
     resolve_path,
@@ -60,25 +61,12 @@ from sanskrit_tok.experiment import (
 )
 from sanskrit_tok.sandhi import SandhiSplitter, SplitCache
 from sanskrit_tok.sandhi.reconcile import DEFAULT_THRESHOLD, reconcile
+from sanskrit_tok.tokenizers.corpus import select_training_sentences
 
 logger = logging.getLogger("split_corpora")
 
-SANSKRIT_LANGUAGE = "san_Deva"
-ENGLISH_LANGUAGE = "eng_Latn"
-HINDI_LANGUAGE = "hin_Deva"
-
 #: The name the training corpus is reported under in the manifest and its jsonl file.
 TRAIN_CORPUS_NAME = "train"
-
-#: `train_sources` entries -> a loader for that split's Sanskrit sentences. Deliberately
-#: the same two names and the same loaders `train_tokenizers.py`'s `SOURCE_LOADERS` uses
-#: for the `sa` side: the split corpus has to be built from the same sentences as the raw
-#: one or the T1/T4 comparison is not matched.
-SOURCE_LOADERS: dict[str, Callable[[], list[str]]] = {
-    "samayik_train": lambda: load_samayik("train").sentences[SANSKRIT_LANGUAGE],
-    "itihasa_train": lambda: load_itihasa("train").sentences[SANSKRIT_LANGUAGE],
-}
-
 
 class SupportsSplit(Protocol):
     """What `split_corpus` needs from a splitter: a batch size, `split`, and `stats`.
@@ -124,10 +112,11 @@ class SplitConfig:
         of work are spent, rather than at the moment the loader is looked up.
         """
         train_sources = [str(name) for name in mapping["train_sources"]]
-        unknown = [name for name in train_sources if name not in SOURCE_LOADERS]
+        unknown = [name for name in train_sources if name not in SANSKRIT_SOURCE_LOADERS]
         if unknown:
             raise KeyError(
-                f"unknown train_sources entry/entries {unknown}; known: {list(SOURCE_LOADERS)}"
+                f"unknown train_sources entry/entries {unknown}; known: "
+                f"{list(SANSKRIT_SOURCE_LOADERS)}"
             )
         subset_raw = mapping.get("subset")
         subset = (
@@ -152,31 +141,6 @@ class SplitConfig:
 # ------------------------------------------------------------------- corpus preparation
 
 
-def load_corpus_entry(entry: Mapping[str, Any], root: Path) -> ParallelCorpus:
-    """Dispatch one `eval_corpora` entry to its loader, by `entry["loader"]`.
-
-    The same dispatch as `experiments/02_tpp_parallel/run.py`, on the same config shape,
-    so the two scripts cannot end up looking at different corpora.
-    """
-    loader = str(entry["loader"])
-    split = str(entry["split"])
-    if loader == "samayik":
-        return load_samayik(split)  # type: ignore[arg-type]
-    if loader == "itihasa":
-        return load_itihasa(split)  # type: ignore[arg-type]
-    if loader == "flores":
-        jsonl_path = resolve_path(str(entry["jsonl"]), root)
-        if jsonl_path.exists():
-            return load_jsonl(jsonl_path, name="flores200", split=split)
-        from sanskrit_tok.data.flores import load_flores
-
-        logger.info("%s not found; downloading FLORES-200 %s", jsonl_path, split)
-        corpus = load_flores((SANSKRIT_LANGUAGE, HINDI_LANGUAGE, ENGLISH_LANGUAGE), split)
-        save_jsonl(corpus, jsonl_path)
-        return corpus
-    raise ValueError(f"corpus {entry.get('name')!r}: unknown loader {loader!r}")
-
-
 def eval_sentences(entry: Mapping[str, Any], root: Path) -> list[str]:
     """The Sanskrit sentences of one evaluation corpus, in evaluation order.
 
@@ -196,42 +160,6 @@ def eval_sentences(entry: Mapping[str, Any], root: Path) -> list[str]:
             len(corpus),
         )
     return take_indices(sentences, indices)[SANSKRIT_LANGUAGE]
-
-
-def training_sentences(
-    sources: Mapping[str, Sequence[str]], exclusion: frozenset[str]
-) -> list[str]:
-    """The Devanagari sentences behind `data/processed/tok_train_slp1.txt`, in its order.
-
-    Reproduces the raw corpus's selection on the Devanagari side: drop every sentence
-    whose SLP1 hash is on the evaluation exclusion list (CLAUDE.md §2.4), transliterate,
-    drop what is blank after stripping, and keep the first occurrence of each distinct
-    SLP1 form across sources in source order — which is precisely what
-    `tokenizers.corpus.build_training_corpus` does when it writes the raw corpus, and is
-    pinned to it by a test.
-
-    The reason to reproduce it rather than to split everything is that the `T4` arms must
-    be trained on the *same sentences* as `T1`/`T2`: any other set turns a controlled
-    comparison into two unrelated tokenizers.
-    """
-    seen: set[str] = set()
-    selected: list[str] = []
-    for name, texts in sources.items():
-        kept = [text for text in texts if sentence_hash(text) not in exclusion]
-        if len(kept) < len(texts):
-            logger.warning(
-                "%s: dropped %d/%d sentence(s) colliding with the evaluation exclusion list",
-                name,
-                len(texts) - len(kept),
-                len(texts),
-            )
-        for text in kept:
-            slp1 = to_slp1(text, "devanagari").strip()
-            if not slp1 or slp1 in seen:
-                continue
-            seen.add(slp1)
-            selected.append(text)
-    return selected
 
 
 def select_subset(texts: Sequence[str], n: int, seed: int) -> list[str]:
@@ -262,12 +190,23 @@ class CorpusSplitReport:
     "CORRECTION: splitter character retention is 87.3%") and both over non-space
     characters. The pair is the measurement that justifies reconciliation: the first
     should sit well below 1, the second at or just above it.
+
+    `n_units_kept_verbatim` and `n_units_replaced_inexact` are the pooled honesty counters
+    retention cannot supply: retention reads 1.000 whether the model re-segmented a
+    sentence faithfully or dropped one word and rewrote another by the same number of
+    characters. The first counts what reconciliation had to put back, the second the
+    replacements whose similarity was below 1.0 — where the model changed characters
+    rather than only inserting boundaries.
     """
 
     name: str
     path: str
     n_sentences: int
     n_out: int
+    n_units_raw: int
+    n_units_out: int
+    n_units_kept_verbatim: int
+    n_units_replaced_inexact: int
     n_units_changed: int
     fraction_units_changed: float
     chars_raw: int
@@ -307,6 +246,7 @@ def split_corpus(
 
     started = time.perf_counter()
     n_units_changed = 0
+    n_units_raw = n_units_out = n_units_verbatim = n_units_inexact = 0
     chars_raw = chars_model = chars_out = 0
     written = 0
 
@@ -333,6 +273,10 @@ def split_corpus(
                 written += 1
                 if result.n_units_out != result.n_units_raw:
                     n_units_changed += 1
+                n_units_raw += result.n_units_raw
+                n_units_out += result.n_units_out
+                n_units_verbatim += result.n_units_kept_verbatim
+                n_units_inexact += result.n_units_replaced_inexact
                 chars_raw += result.chars_raw
                 chars_model += result.chars_model
                 chars_out += result.chars_out
@@ -354,19 +298,27 @@ def split_corpus(
     os.replace(tmp_path, out_path)
     seconds = time.perf_counter() - started
     logger.info(
-        "%s: wrote %d record(s) to %s in %.1f s (retention %.4f model, %.4f reconciled)",
+        "%s: wrote %d record(s) to %s in %.1f s (retention %.4f model, %.4f reconciled; "
+        "%d unit(s) kept verbatim, %d replaced inexactly, of %d)",
         name,
         written,
         out_path,
         seconds,
         _ratio(chars_model, chars_raw),
         _ratio(chars_out, chars_raw),
+        n_units_verbatim,
+        n_units_inexact,
+        n_units_raw,
     )
     return CorpusSplitReport(
         name=name,
         path=str(out_path),
         n_sentences=len(texts),
         n_out=written,
+        n_units_raw=n_units_raw,
+        n_units_out=n_units_out,
+        n_units_kept_verbatim=n_units_verbatim,
+        n_units_replaced_inexact=n_units_inexact,
         n_units_changed=n_units_changed,
         fraction_units_changed=_ratio(n_units_changed, len(texts)),
         chars_raw=chars_raw,
@@ -421,6 +373,10 @@ def build_manifest(
                 "path": report.path,
                 "n_sentences": report.n_sentences,
                 "n_out": report.n_out,
+                "n_units_raw": report.n_units_raw,
+                "n_units_out": report.n_units_out,
+                "n_units_kept_verbatim": report.n_units_kept_verbatim,
+                "n_units_replaced_inexact": report.n_units_replaced_inexact,
                 "n_units_changed": report.n_units_changed,
                 "fraction_units_changed": report.fraction_units_changed,
                 "chars_raw": report.chars_raw,
@@ -515,10 +471,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     exclusion = load_exclusion_hashes(config.exclusion_path)
     logger.info("loaded %d exclusion hashes from %s", len(exclusion), config.exclusion_path)
-    sources = {name: SOURCE_LOADERS[name]() for name in config.train_sources}
+    sources = collect_sources(config.train_sources, SANSKRIT_SOURCE_LOADERS)
     for name, texts in sources.items():
         logger.info("source %s: %d sentence(s) loaded", name, len(texts))
-    train_texts = training_sentences(sources, exclusion)
+    train_texts = select_training_sentences(sources, exclusion)
     logger.info(
         "training corpus: %d distinct, non-leaked sentence(s) after the exp02 pipeline",
         len(train_texts),

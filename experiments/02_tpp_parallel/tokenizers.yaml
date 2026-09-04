@@ -24,8 +24,11 @@ corpus_path: data/processed/tok_train_slp1.txt
 english_corpus_path: data/processed/tok_train_en.txt
 split_corpus_path: data/processed/tok_train_slp1_split.txt
 
-# Written by experiments/03_sandhi_split/split_corpora.py; read-only here.
+# Both written by experiments/03_sandhi_split/split_corpora.py; read-only here. The
+# manifest's `reconcile_threshold` is authoritative — it records what the corpus was
+# actually reconciled with — and the value below is checked against it, not trusted.
 split_cache_path: data/processed/split/cache.jsonl
+split_manifest_path: data/processed/split/manifest.json
 split_reconcile_threshold: 0.6
 
 # Prose before verse (CLAUDE.md §7): Sāmayik precedes Itihāsa in every table and config.

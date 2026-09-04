@@ -18,25 +18,41 @@ strict JSON. Metrics live in `sanskrit_tok.metrics`; corpus loading lives in
 `git_commit`/`git_dirty` stay in `sanskrit_tok.provenance`, which owns the subprocess
 handling and its own tests; `provenance()` here is the thin composition of the two with a
 timestamp, in the key order `results.json` stores them in.
+
+`load_corpus_entry` and `SOURCE_LOADERS` are here for the same reason as the rest: three
+scripts (exp02's `run.py` and `train_tokenizers.py`, exp03's `split_corpora.py`) name the
+same corpora in the same YAML shape, and a fourth copy of the dispatch is a fourth chance
+for two of them to end up measuring and training on different text.
 """
 
 import json
 import logging
 import math
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.provenance import git_commit, git_dirty
 
+if TYPE_CHECKING:
+    from sanskrit_tok.data.parallel import ParallelCorpus
+
 __all__ = [
+    "ENGLISH_LANGUAGE",
+    "ENGLISH_SOURCE_LOADERS",
+    "HINDI_LANGUAGE",
+    "SANSKRIT_LANGUAGE",
+    "SANSKRIT_SOURCE_LOADERS",
+    "SOURCE_LOADERS",
     "TPP_EXTRA_KEYS",
+    "collect_sources",
     "load_config",
+    "load_corpus_entry",
     "provenance",
     "repo_root",
     "resolve_path",
@@ -129,6 +145,93 @@ def provenance(root: Path | None = None) -> dict[str, object]:
         "git_dirty": dirty,
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
     }
+
+
+# ------------------------------------------------------------------------ corpus loading
+
+#: FLORES-200 language codes, the names every corpus in this project keys its sentences by.
+SANSKRIT_LANGUAGE = "san_Deva"
+ENGLISH_LANGUAGE = "eng_Latn"
+HINDI_LANGUAGE = "hin_Deva"
+
+
+def load_corpus_entry(entry: Mapping[str, Any], root: Path) -> "ParallelCorpus":
+    """Dispatch one config `corpora`/`eval_corpora` entry to its loader, by `entry["loader"]`.
+
+    The shape is the one `experiments/02_tpp_parallel/config.yaml` established:
+    `{name, loader, split}` plus `jsonl` for FLORES, whose devtest file is downloaded and
+    cached on first use and read from disk afterwards. Imported lazily so that loading this
+    module does not pull in `datasets`.
+    """
+    from sanskrit_tok.data.flores import load_jsonl, save_jsonl
+    from sanskrit_tok.data.itihasa import load_itihasa
+    from sanskrit_tok.data.samayik import load_samayik
+
+    loader = str(entry["loader"])
+    split = str(entry["split"])
+    if loader == "samayik":
+        return load_samayik(split)  # type: ignore[arg-type]
+    if loader == "itihasa":
+        return load_itihasa(split)  # type: ignore[arg-type]
+    if loader == "flores":
+        jsonl_path = resolve_path(str(entry["jsonl"]), root)
+        if jsonl_path.exists():
+            return load_jsonl(jsonl_path, name="flores200", split=split)
+        from sanskrit_tok.data.flores import load_flores
+
+        logger.info("%s not found; downloading FLORES-200 %s", jsonl_path, split)
+        corpus = load_flores((SANSKRIT_LANGUAGE, HINDI_LANGUAGE, ENGLISH_LANGUAGE), split)
+        save_jsonl(corpus, jsonl_path)
+        return corpus
+    raise ValueError(f"corpus {entry.get('name')!r}: unknown loader {loader!r}")
+
+
+def _train_sentences(loader: str, language: str) -> list[str]:
+    """One language of one corpus's `train` split, through the same dispatch as everything
+    else — so "the Sāmayik training sentences" has exactly one definition in this repo."""
+    corpus = load_corpus_entry(
+        {"name": f"{loader}_train", "loader": loader, "split": "train"}, repo_root()
+    )
+    return list(corpus.sentences[language])
+
+
+#: Training-corpus source name -> a loader for that split's Sanskrit sentences. Prose
+#: before verse (CLAUDE.md §7): Sāmayik first, and the order is binding — it decides which
+#: of two duplicate sentences is the one kept.
+SANSKRIT_SOURCE_LOADERS: dict[str, Callable[[], list[str]]] = {
+    "samayik_train": lambda: _train_sentences("samayik", SANSKRIT_LANGUAGE),
+    "itihasa_train": lambda: _train_sentences("itihasa", SANSKRIT_LANGUAGE),
+}
+
+#: The English side of the very same `ParallelCorpus` objects, for the matched E1 control
+#: arms: the two corpora are the two sides of exactly the same sentences.
+ENGLISH_SOURCE_LOADERS: dict[str, Callable[[], list[str]]] = {
+    "samayik_train_en": lambda: _train_sentences("samayik", ENGLISH_LANGUAGE),
+    "itihasa_train_en": lambda: _train_sentences("itihasa", ENGLISH_LANGUAGE),
+}
+
+
+#: Both sides, which is what `train_tokenizers.py` resolves an arm's `sources` against.
+SOURCE_LOADERS: dict[str, Callable[[], list[str]]] = {
+    **SANSKRIT_SOURCE_LOADERS,
+    **ENGLISH_SOURCE_LOADERS,
+}
+
+
+def collect_sources(
+    names: Sequence[str], loaders: Mapping[str, Callable[[], list[str]]] | None = None
+) -> dict[str, list[str]]:
+    """Load the sentences for each named source, in config order.
+
+    `loaders` defaults to `SOURCE_LOADERS`; `split_corpora.py` passes
+    `SANSKRIT_SOURCE_LOADERS` so an English source name in its `train_sources` is an error
+    rather than five hours of a sandhi splitter reading English.
+    """
+    table = SOURCE_LOADERS if loaders is None else loaders
+    missing = [name for name in names if name not in table]
+    if missing:
+        raise KeyError(f"unknown corpus source(s) {missing}; known: {list(table)}")
+    return {name: table[name]() for name in names}
 
 
 # ---------------------------------------------------------------------- corpus wrangling

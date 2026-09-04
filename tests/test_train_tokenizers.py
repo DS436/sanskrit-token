@@ -285,8 +285,11 @@ def test_ensure_training_corpus_writes_the_manifest_it_is_given(tmp_path: Path) 
 
 
 def test_english_train_split_loaders_are_registered() -> None:
-    assert "samayik_train_en" in train_tokenizers.SOURCE_LOADERS
-    assert "itihasa_train_en" in train_tokenizers.SOURCE_LOADERS
+    from sanskrit_tok.experiment import ENGLISH_SOURCE_LOADERS, SOURCE_LOADERS
+
+    assert "samayik_train_en" in SOURCE_LOADERS
+    assert "itihasa_train_en" in SOURCE_LOADERS
+    assert set(ENGLISH_SOURCE_LOADERS) == {"samayik_train_en", "itihasa_train_en"}
 
 
 def test_arm_side_defaults_to_sanskrit() -> None:
@@ -460,6 +463,8 @@ def _split_config(tmp_path: Path) -> dict[str, object]:
         "corpus_path": "data/processed/tok_train_slp1.txt",
         "split_corpus_path": "data/processed/tok_train_slp1_split.txt",
         "split_cache_path": "data/processed/split/cache.jsonl",
+        "split_manifest_path": "data/processed/split/manifest.json",
+        "split_reconcile_threshold": 0.6,
         "sources": ["samayik_train", "itihasa_train"],
         "exclusion_path": "data/exclusion_hashes.txt",
     }
@@ -577,3 +582,154 @@ def test_tokenizers_yaml_declares_the_four_split_arms() -> None:
     assert by_name["T4_unigram_split_64k"]["vocab_size"] == 64000
     assert all(by_name[name]["side"] == "sa_split" for name in by_name if name.startswith("T4_"))
     assert not [name for name in by_name if name.endswith("_sub")]
+
+
+# --------------------------------------------- shared training-sentence selection (fix 1)
+
+
+#: Two Devanagari spellings that transliterate to the same SLP1 string: `॥` (U+0965, the
+#: double danda) and `।।` (two U+0964 single dandas) both become `..`. Itihāsa's train
+#: split really does contain such a pair, and it is what broke the first cut of the split
+#: pipeline: `split_corpora.py` deduped on SLP1 and so split only one of them, while the
+#: cache is keyed on the *Devanagari*, so the other was missing when the corpus was built.
+SAME_SLP1_PAIR = ("जयमुदीरयेत्॥", "जयमुदीरयेत्।।")
+
+
+def test_the_same_slp1_pair_really_does_differ_in_devanagari_only() -> None:
+    first, second = SAME_SLP1_PAIR
+    assert first != second
+    assert to_slp1(first, "devanagari") == to_slp1(second, "devanagari")
+
+
+def test_select_training_sentences_keeps_both_devanagari_spellings() -> None:
+    """The selection deduplicates on the *original* text, so every sentence whose split
+    the corpus builder will later ask for is in the set that gets split."""
+    from sanskrit_tok.tokenizers.corpus import select_training_sentences
+
+    first, second = SAME_SLP1_PAIR
+    selected = select_training_sentences({"a": [first, second]}, frozenset())
+
+    assert selected == [first, second]
+
+
+def test_select_training_sentences_drops_exact_repeats_and_leaks_and_blanks() -> None:
+    from sanskrit_tok.tokenizers.corpus import select_training_sentences
+
+    sources = {
+        "a": ["रामः गच्छति", "सीता वदति", "   ", "रामः गच्छति"],
+        "b": ["रामः गच्छति", "बालकः पठति"],  # duplicate across sources
+    }
+    exclusion = frozenset({sentence_hash("सीता वदति")})
+
+    selected = select_training_sentences(sources, exclusion)
+
+    assert selected == ["रामः गच्छति", "बालकः पठति"]
+
+
+def test_the_split_side_precheck_accepts_both_devanagari_spellings(tmp_path: Path) -> None:
+    """The regression the reviewer found, pinned end to end: both spellings are cached
+    (because the selection both sides share put both of them in), so the precheck passes."""
+    from sanskrit_tok.sandhi.cache import SplitCache
+
+    cache_path = tmp_path / "data" / "processed" / "split" / "cache.jsonl"
+    cache_path.parent.mkdir(parents=True)
+    cache = SplitCache(cache_path)
+    for text in SAME_SLP1_PAIR:
+        cache.put(text, "jayam udIrayet")
+    cache.close()
+
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+    assert spec.precheck is not None
+
+    spec.precheck({"a": list(SAME_SLP1_PAIR)})
+
+
+def test_the_split_side_precheck_uses_the_same_selection_as_the_splitter(
+    tmp_path: Path,
+) -> None:
+    """A cache holding only the SLP1-deduped half of the pair must now be reported as
+    short — the failure mode that used to surface only after a five-hour split run."""
+    from sanskrit_tok.sandhi.cache import SplitCache
+
+    cache_path = tmp_path / "data" / "processed" / "split" / "cache.jsonl"
+    cache_path.parent.mkdir(parents=True)
+    cache = SplitCache(cache_path)
+    cache.put(SAME_SLP1_PAIR[0], "jayam udIrayet")
+    cache.close()
+
+    spec = train_tokenizers.side_spec("sa_split", _split_config(tmp_path), tmp_path)
+    assert spec.precheck is not None
+
+    with pytest.raises(train_tokenizers.MissingSplitError, match="1 of 2"):
+        spec.precheck({"a": list(SAME_SLP1_PAIR)})
+
+
+def test_ensure_training_corpus_deduplicates_on_the_original_before_transforming(
+    tmp_path: Path,
+) -> None:
+    """The corpus builder is fed the *selected* sentences, so the split side's transform
+    is never asked for a sentence the split run did not split. The written corpus is
+    unchanged: `build_training_corpus` still dedups on the transformed text, so the two
+    spellings collapse to one SLP1 line."""
+    transformed: list[str] = []
+
+    def transform(text: str) -> str:
+        transformed.append(text)
+        return to_slp1(text, "devanagari")
+
+    first, second = SAME_SLP1_PAIR
+    manifest = train_tokenizers.ensure_training_corpus(
+        {"a": [first, second, first]},
+        tmp_path / "corpus.txt",
+        frozenset(),
+        manifest_path=tmp_path / "manifest.json",
+        transform=transform,
+    )
+
+    assert transformed == [first, second]  # the exact repeat never reaches the transform
+    assert manifest["n_out"] == 1  # ... and the two spellings still collapse to one line
+    assert (tmp_path / "corpus.txt").read_text(encoding="utf-8").splitlines() == [
+        to_slp1(first, "devanagari")
+    ]
+
+
+# ------------------------------------------------ single-sourced reconcile threshold
+
+
+def _write_split_manifest(tmp_path: Path, threshold: float) -> Path:
+    path = tmp_path / "data" / "processed" / "split" / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"reconcile_threshold": threshold}), encoding="utf-8")
+    return path
+
+
+def test_the_split_threshold_comes_from_the_split_manifest(tmp_path: Path) -> None:
+    """The manifest is the record of what the corpus was actually split and reconciled
+    with; `tokenizers.yaml` must not be able to silently disagree with it."""
+    _write_split_manifest(tmp_path, 0.6)
+    config = dict(_split_config(tmp_path))
+    del config["split_reconcile_threshold"]
+
+    spec = train_tokenizers.side_spec("sa_split", config, tmp_path)
+
+    assert spec.transform.threshold == 0.6
+
+
+def test_a_threshold_disagreement_between_config_and_manifest_is_an_error(
+    tmp_path: Path,
+) -> None:
+    _write_split_manifest(tmp_path, 0.6)
+    config = dict(_split_config(tmp_path))
+    config["split_reconcile_threshold"] = 0.75
+
+    with pytest.raises(ValueError, match="0.75"):
+        train_tokenizers.side_spec("sa_split", config, tmp_path)
+
+
+def test_the_config_threshold_is_used_when_no_manifest_exists_yet(tmp_path: Path) -> None:
+    config = dict(_split_config(tmp_path))
+    config["split_reconcile_threshold"] = 0.75
+
+    spec = train_tokenizers.side_spec("sa_split", config, tmp_path)
+
+    assert spec.transform.threshold == 0.75
