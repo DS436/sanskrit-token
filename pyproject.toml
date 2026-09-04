@@ -19,6 +19,7 @@ dependencies = [
     "tiktoken>=0.7,<1",
     "huggingface-hub>=0.24,<2",
     "protobuf>=4.25,<8",
+    "torch>=2.4,<3",
 ]
 
 [dependency-groups]
