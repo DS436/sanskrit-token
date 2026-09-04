@@ -10,7 +10,7 @@ import pytest
 
 from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
 from sanskrit_tok.metrics.compression import compression
-from sanskrit_tok.metrics.fertility import fertility
+from sanskrit_tok.metrics.fertility import fertility, fertility_against_reference
 from sanskrit_tok.metrics.parity import parity
 from sanskrit_tok.tokenizers.base import Tokenizer
 
@@ -141,6 +141,76 @@ def test_fertility_rejects_a_bare_str() -> None:
     """A `str` is a `Sequence[str]`, so this would otherwise be measured per character."""
     with pytest.raises(TypeError, match="single str"):
         fertility(CHAR, "ab cde")  # type: ignore[arg-type]
+
+
+# --- fertility against a reference word count (the T4 primary denominator) --------
+
+
+def test_fertility_against_reference_hand_computed() -> None:
+    """The Experiment 03 case: `"abcd"` is one raw word; sandhi splitting makes it
+    `"ab cd"`, which CharTokenizer costs 2 + 2 = 4 tokens. Divided by the RAW word count
+    (1), that is 4.0 — the same denominator every unsplit arm is measured on
+    (docs/decisions.md, "Fertility for split arms uses the raw word count as the primary
+    denominator")."""
+    result = fertility_against_reference(CHAR, ["ab cd"], ["abcd"])
+    assert result["value"] == pytest.approx(4.0)
+    assert result["n"] == 1
+    assert result["unit"] == "tokens/reference word"
+    assert result["per_text"] == [pytest.approx(4.0)]
+    assert result["n_undefined"] == 0
+
+
+def test_fertility_against_reference_is_nan_where_the_reference_has_no_words() -> None:
+    """No reference word means no tokens-per-reference-word ratio: `nan`, never `0.0`."""
+    result = fertility_against_reference(CHAR, ["ab cd"], ["   "])
+    assert math.isnan(result["per_text"][0])
+    assert math.isnan(result["value"])
+    assert result["n"] == 0
+    assert result["n_undefined"] == 1
+
+
+def test_fertility_against_reference_pools_across_texts() -> None:
+    """Pooled: (4 + 1) tokens over (1 + 2) reference words, not the mean of 4.0 and 0.5."""
+    result = fertility_against_reference(CHAR, ["ab cd", "f"], ["abcd", "gh ij"])
+    assert result["value"] == pytest.approx(5 / 3)
+    assert result["n"] == 3
+    assert result["per_text"] == [pytest.approx(4.0), pytest.approx(0.5)]
+
+
+def test_fertility_against_reference_matches_plain_fertility_when_texts_are_the_reference() -> None:
+    """With no splitting there is nothing to correct for, so the two agree exactly."""
+    texts = ["ab cde", "f"]
+    assert fertility_against_reference(CHAR, texts, texts)["value"] == pytest.approx(
+        fertility(CHAR, texts)["value"]
+    )
+
+
+def test_fertility_against_reference_ignores_inter_word_whitespace() -> None:
+    """Each word is encoded on its own, exactly as `fertility` does, so the inserted
+    boundary spaces cost nothing and the numerator stays comparable across arms."""
+    assert fertility_against_reference(CHAR, ["ab   cd"], ["abcd"])["value"] == pytest.approx(4.0)
+
+
+def test_fertility_against_reference_of_empty_input() -> None:
+    """Nothing measured at all, as opposed to text that happens to hold no words."""
+    result = fertility_against_reference(CHAR, [], [])
+    assert result["value"] == 0.0
+    assert result["n"] == 0
+    assert result["n_undefined"] == 0
+
+
+def test_fertility_against_reference_length_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="aligned"):
+        fertility_against_reference(CHAR, ["ab cd"], ["abcd", "ef"])
+
+
+@pytest.mark.parametrize("bad_side", ["texts", "reference"])
+def test_fertility_against_reference_rejects_a_bare_str(bad_side: str) -> None:
+    with pytest.raises(TypeError, match="single str"):
+        if bad_side == "texts":
+            fertility_against_reference(CHAR, "ab cd", ["abcd"])  # type: ignore[arg-type]
+        else:
+            fertility_against_reference(CHAR, ["ab cd"], "abcd")  # type: ignore[arg-type]
 
 
 # --- compression -----------------------------------------------------------------

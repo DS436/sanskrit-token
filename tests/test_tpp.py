@@ -9,7 +9,8 @@ import math
 
 import pytest
 
-from sanskrit_tok.metrics.tpp import tpp
+from sanskrit_tok.metrics._ratio import RatioParts
+from sanskrit_tok.metrics.tpp import tpp, tpp_paired_delta
 
 
 class CharTokenizer:
@@ -116,3 +117,87 @@ def test_tpp_rejects_a_confidence_level_outside_the_unit_interval() -> None:
     for bad in (0.0, 1.0, 95.0, -0.5, math.nan):
         with pytest.raises(ValueError, match="confidence level"):
             tpp(CharTokenizer(), ["abc"], ["ab"], n_bootstrap=10, ci=bad)
+
+
+# --- tpp_paired_delta: the split-arm minus raw-arm difference (Experiment 03) --------
+
+
+def _parts(source: tuple[int, ...], pivot: tuple[int, ...]) -> RatioParts:
+    return RatioParts(source_counts=source, pivot_counts=pivot)
+
+
+def test_tpp_paired_delta_hand_computed() -> None:
+    """`a` is 6/4 = 1.5, `b` is 4/4 = 1.0, so the delta (split minus raw) is 0.5."""
+    result = tpp_paired_delta(
+        _parts((4, 2), (2, 2)),
+        _parts((2, 2), (2, 2)),
+        n_bootstrap=200,
+        seed=0,
+        ci=0.95,
+    )
+    assert result["value_a"] == pytest.approx(1.5)
+    assert result["value_b"] == pytest.approx(1.0)
+    assert result["delta"] == pytest.approx(0.5)
+    assert result["value"] == result["delta"]
+    assert result["n"] == 2
+    assert result["unit"] == "delta tokens/proposition ratio"
+    assert result["n_bootstrap"] == 200 and result["seed"] == 0 and result["ci"] == 0.95
+
+
+def test_tpp_paired_delta_of_identical_sides_is_zero_with_a_degenerate_ci() -> None:
+    """Nothing changed, so every resample gives the same ratio on both sides."""
+    parts = _parts((4, 2, 7), (2, 2, 3))
+    result = tpp_paired_delta(parts, parts, n_bootstrap=100, seed=3)
+    assert result["delta"] == 0.0
+    assert result["ci_low"] == 0.0 and result["ci_high"] == 0.0
+
+
+def test_tpp_paired_delta_is_deterministic_for_a_seed() -> None:
+    a, b = _parts((4, 2, 9), (2, 2, 3)), _parts((3, 2, 8), (2, 2, 3))
+    first = tpp_paired_delta(a, b, n_bootstrap=100, seed=7)
+    second = tpp_paired_delta(a, b, n_bootstrap=100, seed=7)
+    assert (first["ci_low"], first["ci_high"]) == (second["ci_low"], second["ci_high"])
+
+
+def test_tpp_paired_delta_ci_brackets_the_delta() -> None:
+    result = tpp_paired_delta(
+        _parts((4, 2, 9, 5), (2, 2, 3, 4)),
+        _parts((3, 2, 8, 5), (2, 2, 3, 4)),
+        n_bootstrap=500,
+        seed=1,
+    )
+    assert result["ci_low"] <= result["delta"] <= result["ci_high"]
+
+
+def test_tpp_paired_delta_resamples_pairs_jointly() -> None:
+    """The bootstrap is paired: a draw takes the same pair indices on both sides, so a
+    pair-for-pair identical difference cannot pick up noise from mismatched draws."""
+    a = _parts((4, 8, 12), (2, 2, 2))
+    b = _parts((2, 4, 6), (2, 2, 2))  # exactly half of `a` on every pair
+    result = tpp_paired_delta(a, b, n_bootstrap=200, seed=5)
+    assert result["delta"] == pytest.approx(a.value - b.value)
+    # every resample halves identically, so the interval is the delta's own spread only
+    assert result["ci_low"] < result["ci_high"]
+
+
+def test_tpp_paired_delta_zero_bootstrap_gives_nan_ci() -> None:
+    result = tpp_paired_delta(_parts((4,), (2,)), _parts((2,), (2,)), n_bootstrap=0)
+    assert math.isnan(result["ci_low"]) and math.isnan(result["ci_high"])
+
+
+def test_tpp_paired_delta_with_an_empty_pivot_side_is_nan_throughout() -> None:
+    result = tpp_paired_delta(_parts((4,), (0,)), _parts((2,), (0,)), n_bootstrap=50)
+    assert math.isnan(result["delta"])
+    assert math.isnan(result["ci_low"]) and math.isnan(result["ci_high"])
+
+
+def test_tpp_paired_delta_length_mismatch_raises() -> None:
+    """The two sides must be the same pairs, or the difference is not paired at all."""
+    with pytest.raises(ValueError, match="same"):
+        tpp_paired_delta(_parts((4, 2), (2, 2)), _parts((2,), (2,)), n_bootstrap=0)
+
+
+def test_tpp_paired_delta_rejects_a_confidence_level_outside_the_unit_interval() -> None:
+    for bad in (0.0, 1.0, 95.0, -0.5, math.nan):
+        with pytest.raises(ValueError, match="confidence level"):
+            tpp_paired_delta(_parts((4,), (2,)), _parts((2,), (2,)), n_bootstrap=10, ci=bad)

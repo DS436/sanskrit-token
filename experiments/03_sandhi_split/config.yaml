@@ -1,0 +1,60 @@
+# Experiment 03 — sandhi-split arms (T4) vs matched raw arms (T1/T2), CLAUDE.md §7.
+#
+# Relative paths are resolved against the repository root (the parent of `experiments/`),
+# not the working directory, so the runner works from anywhere in the repo.
+
+corpora:               # prose before verse; order is binding for tables and figure rows
+  - {name: samayik_test, loader: samayik, split: test}
+  - {name: samayik_test_ood, loader: samayik, split: test_ood}
+  - {name: itihasa_test, loader: itihasa, split: test}
+  - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
+
+# Where `split_corpora.py` wrote one `<corpus>.jsonl` per corpus (`{index, raw_deva,
+# raw_slp1, output_model, output}`) and its manifest. The runner never loads the splitter
+# model: a sentence missing from these files aborts the run rather than falling back to
+# raw text, which would silently measure T4 on unsplit sentences.
+split_cache_path: data/processed/split
+split_manifest_path: data/processed/split/manifest.json
+
+# The matched comparison. Both families are trained from scratch by this project at the
+# same two vocabulary sizes on the same sentences (CLAUDE.md §5); the only difference
+# within a pair is whether the training text was sandhi-split first. The throughput rule
+# selected the FULL training corpus, so there are no `_sub` arms to match against
+# (docs/decisions.md, "T4 arms registered as ... no `_sub` arms").
+arms_raw: [T1_bpe_raw_32k, T1_bpe_raw_64k, T2_unigram_raw_32k, T2_unigram_raw_64k]
+arms_split: [T4_bpe_split_32k, T4_bpe_split_64k, T4_unigram_split_32k, T4_unigram_split_64k]
+
+# [raw arm, split arm] at equal algorithm and equal vocabulary size. `tpp_delta` is
+# split - raw over these, with a paired bootstrap CI; the figure draws one x position per
+# pair. Both sides of a pair must name the same `english_control` arm, or the delta would
+# be taken against two different denominators.
+matched_pairs:
+  - [T1_bpe_raw_32k, T4_bpe_split_32k]
+  - [T1_bpe_raw_64k, T4_bpe_split_64k]
+  - [T2_unigram_raw_32k, T4_unigram_split_32k]
+  - [T2_unigram_raw_64k, T4_unigram_split_64k]
+
+# The controlled English side: the E1 arm matching each Sanskrit arm on algorithm,
+# vocabulary size and training corpus (docs/decisions.md, "Add a matched English control
+# family E1 for TPP"). This is the pivot the verdict is read against.
+english_control:
+  T1_bpe_raw_32k: E1_bpe_32k
+  T1_bpe_raw_64k: E1_bpe_64k
+  T2_unigram_raw_32k: E1_unigram_32k
+  T2_unigram_raw_64k: E1_unigram_64k
+  T4_bpe_split_32k: E1_bpe_32k
+  T4_bpe_split_64k: E1_bpe_64k
+  T4_unigram_split_32k: E1_unigram_32k
+  T4_unigram_split_64k: E1_unigram_64k
+
+# Deployed practice, reported beside the controlled numbers and never as a control: a
+# 200k general-domain vocabulary (CLAUDE.md §2.5).
+deployed_pivot: T0_o200k
+
+n_bootstrap: 1000
+seed: 0
+ci: 0.95
+
+exclusion_path: data/exclusion_hashes.txt
+exclusion_path_en: data/exclusion_hashes_en.txt
+output_dir: outputs/03_sandhi_split

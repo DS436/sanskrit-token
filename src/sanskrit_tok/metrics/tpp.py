@@ -36,10 +36,19 @@ import numpy as np
 from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
 from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
 
-__all__ = ["tpp"]
+__all__ = ["tpp", "tpp_paired_delta"]
 
 #: Unit label carried into `results.json` and every figure axis.
 UNIT = "tokens/proposition ratio"
+
+#: Unit label for the *difference* between two TPP ratios (`tpp_paired_delta`).
+UNIT_DELTA = "delta tokens/proposition ratio"
+
+
+def _require_ci(ci: float) -> None:
+    """`ci` must be a confidence *level* strictly inside `(0, 1)`; see `tpp`'s docstring."""
+    if not 0 < ci < 1:
+        raise ValueError(f"ci must be a confidence level strictly between 0 and 1, got {ci!r}")
 
 
 def _bootstrap_ci(
@@ -115,8 +124,7 @@ def tpp(
     which `numpy` clamps to the extremes, and `0.05` gives a needle-thin interval that
     reads as a very precise measurement — so this is checked rather than trusted.
     """
-    if not 0 < ci < 1:
-        raise ValueError(f"ci must be a confidence level strictly between 0 and 1, got {ci!r}")
+    _require_ci(ci)
     parts = token_ratio(tokenizer, texts, pivot_texts, pivot_tokenizer)
     ci_low, ci_high = _bootstrap_ci(parts, n_bootstrap, seed, ci)
     return {
@@ -131,4 +139,106 @@ def tpp(
         "ci_high": ci_high,
         "n_bootstrap": n_bootstrap,
         "seed": seed,
+    }
+
+
+def _bootstrap_delta_ci(
+    counts_a: RatioParts,
+    counts_b: RatioParts,
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+) -> tuple[float, float]:
+    """Percentile CI of `ratio(a) - ratio(b)` over `n_bootstrap` joint resamples.
+
+    One set of pair indices per draw, used on *both* sides: the two arms are measured on
+    the same sentences, so a draw must take those sentences out of both or the difference
+    picks up noise from two different corpora rather than from the two arms. A draw whose
+    pivot side sums to zero on either side is `nan` and is dropped from the percentile.
+    """
+    n = len(counts_a.source_counts)
+    if n == 0 or n_bootstrap <= 0:
+        return math.nan, math.nan
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, n, size=(n_bootstrap, n))
+    draws_a = _resampled_ratios(counts_a, indices, n_bootstrap)
+    draws_b = _resampled_ratios(counts_b, indices, n_bootstrap)
+    draws = draws_a - draws_b
+    if not bool(np.isfinite(draws).any()):
+        return math.nan, math.nan
+    tail = (1.0 - ci) / 2.0
+    low, high = np.nanpercentile(draws, [100.0 * tail, 100.0 * (1.0 - tail)])
+    return float(low), float(high)
+
+
+def _resampled_ratios(parts: RatioParts, indices: np.ndarray, n_bootstrap: int) -> np.ndarray:
+    """Ratio of sums for each row of `indices`, `nan` where the pivot side sums to zero."""
+    source = np.asarray(parts.source_counts, dtype=float)
+    pivot = np.asarray(parts.pivot_counts, dtype=float)
+    source_sums = source[indices].sum(axis=1)
+    pivot_sums = pivot[indices].sum(axis=1)
+    ratios: np.ndarray = np.divide(
+        source_sums,
+        pivot_sums,
+        out=np.full(n_bootstrap, math.nan),
+        where=pivot_sums != 0.0,
+    )
+    return ratios
+
+
+def tpp_paired_delta(
+    counts_a: RatioParts,
+    counts_b: RatioParts,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 0,
+    ci: float = 0.95,
+) -> dict[str, float | int | str]:
+    """The difference between two TPP ratios measured on the same pairs, with a paired CI.
+
+    Experiment 03's success criterion is not "the split arm's TPP is low" but "the split
+    arm's TPP is *lower than its matched raw arm's*, by more than sampling noise", so the
+    quantity that needs an interval is the difference itself. `counts_a` is the side the
+    delta is reported for (the `T4` split arm) and `counts_b` the side it is compared
+    against (its matched `T1`/`T2` raw arm): `delta = ratio(a) - ratio(b)`, so a negative
+    delta whose interval excludes 0 is the result H3 predicts.
+
+    Both sides come from `token_ratio` over the *same* sentences of the same corpus,
+    normally against the same English pivot, and the bootstrap resamples one set of pair
+    indices for both (`_bootstrap_delta_ci`). Differencing two independently-resampled
+    intervals would be a different, wider and wrong quantity: most of the variation is
+    shared between the two arms, and pairing removes it.
+
+    Returns `value` (= `delta`, so the CLAUDE.md §7 metric contract holds), `delta`,
+    `value_a` and `value_b` (the two ratios behind it), `n` = the number of pairs,
+    `unit`, `ci_low`/`ci_high` = the percentile interval, and `n_bootstrap`/`seed`/`ci` =
+    the settings that produced it.
+
+    `delta` is `nan` when either ratio is undefined (a pivot side with no tokens at all);
+    `ci_low`/`ci_high` are `nan` when `n_bootstrap` is 0, there are no pairs, or every draw
+    is undefined. Raises `ValueError` if the two sides hold different numbers of pairs —
+    they would then not be the same sentences, and nothing here would be paired — or if
+    `ci` is not a confidence level strictly between 0 and 1.
+    """
+    _require_ci(ci)
+    if len(counts_a.source_counts) != len(counts_b.source_counts):
+        raise ValueError(
+            "counts_a and counts_b must cover the same pairs: got "
+            f"{len(counts_a.source_counts)} and {len(counts_b.source_counts)}"
+        )
+    value_a, value_b = counts_a.value, counts_b.value
+    ci_low, ci_high = _bootstrap_delta_ci(counts_a, counts_b, n_bootstrap, seed, ci)
+    delta = value_a - value_b
+    return {
+        "value": delta,
+        "delta": delta,
+        "value_a": value_a,
+        "value_b": value_b,
+        "n": len(counts_a.source_counts),
+        "unit": UNIT_DELTA,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
+        "n_bootstrap": n_bootstrap,
+        "seed": seed,
+        "ci": ci,
     }
