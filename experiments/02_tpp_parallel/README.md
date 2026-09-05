@@ -19,6 +19,16 @@ here settles H2 in general.
 
 **Run:** `uv run python experiments/02_tpp_parallel/run.py`
 
+> **Re-run 2026-09-05 at commit `b7302a8`, clean tree.** Every trained arm was retrained
+> after the trainers stopped letting line breaks reach the pre-tokenizer, so every number
+> on this page moved slightly and four of them are new
+> (`docs/decisions.md`, 2026-09-05, "Trainers strip newlines" and the CORRECTION entry for
+> this experiment). **No conclusion changed in the controlled comparison.** Two rows of the
+> *deployed-practice* tables did: `T1_bpe_raw_32k`* against `T0_o200k` and against
+> `T0_llama4` on Sāmayik test now sit below 1.0 with their CIs excluding it, where before
+> they straddled it. `E1_unigram_64k` now trains to **62,896** pieces rather than 64,000,
+> which is recorded below and in the decision log.
+
 **Runtime:** 2m09s wall-clock (113.0s user, 88% CPU) on this machine with every tokenizer
 cache, corpus jsonl and trained `tokenizer.json` already warm — no network access,
 essentially unchanged from the 2m07s of the pre-E1 run. `english_pivots` stays at the two
@@ -38,32 +48,39 @@ to nothing — see below). Training the four E1 arms first (a one-off,
 — the primary prose corpus this hypothesis is pre-registered against — every one of the
 four matched pairs (all four Sanskrit sides are raw-subword baselines; see **Scope**
 above) costs *more* tokens per proposition in Sanskrit than in English, with
-every 95% CI entirely above 1.0: `T1_bpe_raw_64k`*/`E1_bpe_64k` **1.027 [1.014, 1.040]**,
-up to `T2_unigram_raw_32k`*/`E1_unigram_32k` 1.148 [1.134, 1.164]. The same Sanskrit arm
-measured against the deployed 200k-vocabulary `T0_o200k` reads 0.908 [0.896, 0.921] —
+every 95% CI entirely above 1.0: `T1_bpe_raw_64k`*/`E1_bpe_64k` **1.035 [1.021, 1.049]**,
+up to `T2_unigram_raw_32k`*/`E1_unigram_32k` 1.142 [1.128, 1.157]. The same Sanskrit arm
+measured against the deployed 200k-vocabulary `T0_o200k` reads 0.887 [0.875, 0.899] —
 below parity. Nothing about the Sanskrit side changed between those two numbers; the
-English side did. `E1_bpe_64k` spends 34,801 tokens on the English half of Sāmayik test
-where `T0_o200k` spends 39,339 (11.5% fewer), because it too was trained on this domain.
-That denominator accounts for the whole move: rescaling the rounded 0.908 by
-39,339/34,801 gives 1.026, within rounding of the measured 1.027 (the unrounded ratio
-reproduces it exactly). The apparent Sanskrit advantage was the English pivot's handicap.
+English side did. `E1_bpe_64k` spends 33,702 tokens on the English half of Sāmayik test
+where `T0_o200k` spends 39,339 (14.3% fewer), because it too was trained on this domain.
+That denominator accounts for the whole move: rescaling the measured 0.887 by
+39,339/33,702 gives 1.035, exactly the measured controlled value. The apparent Sanskrit
+advantage was the English pivot's handicap.
 
 **The controlled numbers on the other three corpora, in the same direction.** Sāmayik
-`test_ood` (Mann Ki Baat transcripts, out-of-domain for *both* sides) 1.067–1.161, all four
-CIs above 1.0; FLORES devtest (out-of-domain for both sides) 1.138–1.219, likewise. Only
-**Itihāsa test stays below 1.0 under the control** — 0.607 [0.604, 0.610] to 0.663
-[0.660, 0.667], all four CIs excluding 1.0 — a smaller flip than the 0.47–0.55 the same
+`test_ood` (Mann Ki Baat transcripts, out-of-domain for *both* sides) 1.061–1.163, all four
+CIs above 1.0; FLORES devtest (out-of-domain for both sides) 1.143–1.219, likewise. Only
+**Itihāsa test stays below 1.0 under the control** — 0.598 [0.594, 0.601] to 0.658
+[0.655, 0.661], all four CIs excluding 1.0 — a smaller flip than the 0.46–0.55 the same
 arms show against `T0_o200k`, but a decisive one. Itihāsa is verse: meter, not
 tokenization, is the leading suspect for why Sanskrit looks compact there (CLAUDE.md
 §2.7), and its English side is a 19th-century verse translation whose own verbosity sits
 in the denominator. So the one surviving flip is on the one corpus whose confounds this
 experiment was already told not to trust.
 
-**Deployed practice is unchanged and still the robust finding.** Against the tokenizers
-people actually use, Sanskrit costs 1.8–2.9 English tokens per proposition on prose and
-Wikipedia text (`T0_o200k` 1.835 [1.813, 1.858] on Sāmayik test, up to `T3_sarvam` 2.899
-[2.865, 2.929] on FLORES), for every off-the-shelf arm, English-centric and Indic alike.
-Every number in the four per-corpus tables below is byte-identical to the pre-E1 run.
+**Deployed practice is still the robust finding.** Against the tokenizers people actually
+use, Sanskrit costs 1.8–2.9 English tokens per proposition on prose and Wikipedia text
+(`T0_o200k` 1.835 [1.813, 1.858] on Sāmayik test, up to `T3_sarvam` 2.899 [2.865, 2.929]
+on FLORES), for every off-the-shelf arm, English-centric and Indic alike. Those rows are
+byte-identical across every run of this experiment: no off-the-shelf arm was retrained.
+The trained `T1`/`T2` rows in the same tables did move with the newline fix, and two of
+them crossed 1.0: `T1_bpe_raw_32k`* against `T0_o200k` on Sāmayik test went from
+1.009 [0.995, 1.023] to **0.984 [0.970, 0.998]**, and against `T0_llama4` from
+0.991 [0.977, 1.005] to **0.966 [0.952, 0.980]**. Both are deployed-practice columns, not
+controls, so neither changes a verdict — a Sanskrit arm beating a 200k general-domain
+English tokenizer is a statement about vocabulary size and domain, which is exactly why
+the E1 table exists.
 
 **Verdict, scoped to the arms that exist: under matched conditions, *raw subword*
 training on Sanskrit does not by itself bring TPP below English on prose.** Read the arm
@@ -96,7 +113,7 @@ api`, so it cannot spend one token per morpheme however much Sanskrit text it se
 T1/T2 do not beat a matched English control on prose is evidence that scale-and-vocabulary
 alone do not recover the density — it says nothing about whether sandhi-splitting (T4) or
 merge-constrained training (T6) will. Those are the next two experiments, and this result
-is the baseline they have to beat: **1.027 on Sāmayik test against `E1_bpe_64k`** is the
+is the baseline they have to beat: **1.035 on Sāmayik test against `E1_bpe_64k`** is the
 number T4 and T6 must push below 1.0 with a CI excluding it.
 
 Two further caveats keep even the T1/T2 result provisional. First, both sides are trained
@@ -123,10 +140,10 @@ first (CLAUDE.md §2.7). `*` marks the provisional Sanskrit arms (see caveats).
 
 | Matched pair (Sanskrit / English) | Sāmayik test (prose) | Sāmayik test_ood (prose, OOD) | Itihāsa test (verse) | FLORES devtest |
 |---|---|---|---|---|
-| `T1_bpe_raw_32k`* / `E1_bpe_32k` (32k) | 1.077 [1.063, 1.091] | 1.091 [1.078, 1.103] | **0.653 [0.650, 0.657]** | 1.139 [1.128, 1.150] |
-| `T1_bpe_raw_64k`* / `E1_bpe_64k` (64k) | 1.027 [1.014, 1.040] | 1.067 [1.054, 1.078] | **0.607 [0.604, 0.610]** | 1.138 [1.126, 1.149] |
-| `T2_unigram_raw_32k`* / `E1_unigram_32k` (32k) | 1.148 [1.134, 1.164] | 1.161 [1.146, 1.174] | **0.663 [0.660, 0.667]** | 1.207 [1.194, 1.220] |
-| `T2_unigram_raw_64k`* / `E1_unigram_64k` (64k) | 1.096 [1.082, 1.111] | 1.146 [1.132, 1.159] | **0.626 [0.622, 0.629]** | 1.219 [1.206, 1.232] |
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` (32k) | 1.084 [1.070, 1.098] | 1.086 [1.072, 1.098] | **0.645 [0.642, 0.649]** | 1.143 [1.131, 1.154] |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` (64k) | 1.035 [1.021, 1.049] | 1.061 [1.048, 1.073] | **0.598 [0.594, 0.601]** | 1.144 [1.131, 1.155] |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` (32k) | 1.142 [1.128, 1.157] | 1.163 [1.148, 1.176] | **0.658 [0.655, 0.661]** | 1.206 [1.194, 1.219] |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k`‡ (64k) | 1.107 [1.092, 1.121] | 1.156 [1.142, 1.169] | **0.623 [0.619, 0.626]** | 1.219 [1.206, 1.232] |
 
 Per corpus: **Sāmayik test** — 0 pairs below 1.0, 4 above (CIs exclude 1.0), 0 straddling.
 **Sāmayik test_ood** — 0 below, 4 above, 0 straddling. **Itihāsa test** — 4 below (CIs
@@ -136,10 +153,19 @@ sentence encoded to zero tokens under any control arm.
 
 Why the same Sanskrit arms read differently here than in the tables below: the control
 arms are cheaper on English than the deployed pivot, because they share its domain.
-`E1_bpe_64k` uses 34,801 tokens on Sāmayik test's English side against `T0_o200k`'s 39,339
-(11.5% fewer) and 376,705 against 484,898 on Itihāsa test (22.3% fewer). A ratio whose
+`E1_bpe_64k` uses 33,702 tokens on Sāmayik test's English side against `T0_o200k`'s 39,339
+(14.3% fewer) and 374,789 against 484,898 on Itihāsa test (22.7% fewer). A ratio whose
 denominator shrinks by a tenth to a fifth moves accordingly, and that movement is
 vocabulary and domain, not language — which is the entire reason this table exists.
+
+**‡ `E1_unigram_64k` is 62,896 pieces, not 64,000.** The EM-based Unigram trainer settles
+on fewer pieces than requested when the corpus does not support the full vocabulary, and
+stripping line breaks removed ~1,100 `word\n` candidates it had been counting
+(`docs/decisions.md`, 2026-09-05, CORRECTION for Experiment 02). The matched-size rule
+(CLAUDE.md §2.5) is therefore satisfied to within 1.7% on that one pair, and the shortfall
+runs in the direction that makes the English pivot *dearer*, i.e. it pushes the
+`T2_unigram_raw_64k`* ratio **down**; the measured ratio is still above 1.0 with its CI
+excluding it, so the verdict does not turn on it.
 
 `results.json` stores these under `tpp_controlled` as `corpus -> "<sa_arm>/<en_arm>" ->
 summary`, each summary carrying the same keys as a `tpp` entry (`value`, `n`, `unit`,
@@ -175,13 +201,14 @@ short for Sanskrit, the opposite bias from TPP.
 | `T3_sarvam` (68k) | 2.416 [2.386, 2.447] | 2.373 [2.342, 2.404] | 1.81 [1.78, 1.83] | 4.08 |
 | `T3_sutra` (256k) | 1.930 [1.905, 1.955] | 1.895 [1.870, 1.921] | 1.76 [1.74, 1.78] | 3.26 |
 | `T3_brahmic131k` (131k) | 1.873 [1.850, 1.896] | 1.839 [1.816, 1.862] | 1.90 [1.87, 1.92] | 3.22 |
-| `T1_bpe_raw_32k`* (32k) | 1.009 [0.995, 1.023] | 0.991 [0.977, 1.005] | — | 1.70 |
-| `T1_bpe_raw_64k`* (64k) | **0.908 [0.896, 0.921]** | 0.892 [0.879, 0.904] | — | 1.52 |
-| `T2_unigram_raw_32k`* (32k) | 1.070 [1.056, 1.086] | 1.051 [1.036, 1.067] | — | 1.80 |
-| `T2_unigram_raw_64k`* (64k) | 0.999 [0.985, 1.014] | 0.981 [0.967, 0.995] | — | 1.68 |
+| `T1_bpe_raw_32k`* (32k) | **0.984 [0.970, 0.998]** | 0.966 [0.952, 0.980] | — | 1.65 |
+| `T1_bpe_raw_64k`* (64k) | **0.887 [0.875, 0.899]** | 0.871 [0.859, 0.883] | — | 1.49 |
+| `T2_unigram_raw_32k`* (32k) | 1.069 [1.055, 1.085] | 1.050 [1.036, 1.066] | — | 1.80 |
+| `T2_unigram_raw_64k`* (64k) | 1.002 [0.988, 1.017] | 0.984 [0.970, 0.998] | — | 1.69 |
 
-Below 1.0 (CI excludes): `T1_bpe_raw_64k`*. Above 1.0 (CI excludes): every T0/T3 arm and
-`T2_unigram_raw_32k`*. Straddling 1.0: `T1_bpe_raw_32k`*, `T2_unigram_raw_64k`*.
+Below 1.0 (CI excludes): `T1_bpe_raw_64k`* and, since the newline-stripped retrain,
+`T1_bpe_raw_32k`*. Above 1.0 (CI excludes): every T0/T3 arm and `T2_unigram_raw_32k`*.
+Straddling 1.0: `T2_unigram_raw_64k`* (1.002 [0.988, 1.017]).
 
 ### Sāmayik test_ood (prose, primary, out-of-domain, n=4047)
 
@@ -194,10 +221,10 @@ Below 1.0 (CI excludes): `T1_bpe_raw_64k`*. Above 1.0 (CI excludes): every T0/T3
 | `T3_sarvam` (68k) | 2.556 [2.526, 2.585] | 2.518 [2.489, 2.547] | 1.80 [1.78, 1.82] | 5.17 |
 | `T3_sutra` (256k) | 2.057 [2.033, 2.081] | 2.027 [2.003, 2.049] | 1.83 [1.81, 1.85] | 4.16 |
 | `T3_brahmic131k` (131k) | 1.972 [1.949, 1.993] | 1.943 [1.921, 1.964] | 1.95 [1.93, 1.97] | 4.05 |
-| `T1_bpe_raw_32k`* (32k) | 1.156 [1.143, 1.169] | 1.139 [1.126, 1.151] | — | 2.34 |
-| `T1_bpe_raw_64k`* (64k) | 1.066 [1.053, 1.077] | 1.050 [1.037, 1.061] | — | 2.16 |
-| `T2_unigram_raw_32k`* (32k) | 1.251 [1.236, 1.265] | 1.233 [1.218, 1.246] | — | 2.53 |
-| `T2_unigram_raw_64k`* (64k) | 1.180 [1.166, 1.193] | 1.163 [1.149, 1.175] | — | 2.39 |
+| `T1_bpe_raw_32k`* (32k) | 1.139 [1.126, 1.152] | 1.123 [1.109, 1.134] | — | 2.31 |
+| `T1_bpe_raw_64k`* (64k) | 1.048 [1.036, 1.059] | 1.032 [1.020, 1.044] | — | 2.12 |
+| `T2_unigram_raw_32k`* (32k) | 1.260 [1.244, 1.274] | 1.241 [1.226, 1.255] | — | 2.55 |
+| `T2_unigram_raw_64k`* (64k) | 1.189 [1.174, 1.202] | 1.171 [1.157, 1.184] | — | 2.40 |
 
 Below 1.0: none. Above 1.0 (CI excludes): all eleven available arms. Straddling: none.
 
@@ -212,10 +239,10 @@ Below 1.0: none. Above 1.0 (CI excludes): all eleven available arms. Straddling:
 | `T3_sarvam` (68k) | 1.425 [1.419, 1.432] | 1.402 [1.396, 1.408] | 1.12 [1.11, 1.12] | 5.28 |
 | `T3_sutra` (256k) | 1.169 [1.164, 1.174] | 1.150 [1.145, 1.155] | 1.09 [1.09, 1.10] | 4.33 |
 | `T3_brahmic131k` (131k) | 1.121 [1.115, 1.126] | 1.102 [1.097, 1.107] | 1.15 [1.15, 1.16] | 4.25 |
-| `T1_bpe_raw_32k`* (32k) | **0.524 [0.521, 0.526]** | 0.515 [0.512, 0.517] | — | 1.94 |
-| `T1_bpe_raw_64k`* (64k) | **0.472 [0.469, 0.474]** | 0.464 [0.462, 0.466] | — | 1.75 |
-| `T2_unigram_raw_32k`* (32k) | **0.546 [0.543, 0.548]** | 0.537 [0.534, 0.539] | — | 2.02 |
-| `T2_unigram_raw_64k`* (64k) | **0.506 [0.504, 0.509]** | 0.498 [0.496, 0.500] | — | 1.88 |
+| `T1_bpe_raw_32k`* (32k) | **0.513 [0.511, 0.516]** | 0.505 [0.502, 0.507] | — | 1.90 |
+| `T1_bpe_raw_64k`* (64k) | **0.462 [0.460, 0.464]** | 0.454 [0.452, 0.457] | — | 1.71 |
+| `T2_unigram_raw_32k`* (32k) | **0.551 [0.548, 0.553]** | 0.542 [0.539, 0.544] | — | 2.04 |
+| `T2_unigram_raw_64k`* (64k) | **0.513 [0.511, 0.516]** | 0.505 [0.502, 0.507] | — | 1.90 |
 
 † `T0_gemma3`'s original-script CI is [0.9909, 1.0000] — essentially parity, straddling
 1.0 by 0.00005; rounds to 1.00 above. Below 1.0 (SLP1, CI excludes): all four T1/T2 arms.
@@ -234,10 +261,10 @@ this SLP1-based classification).
 | `T3_sarvam` (68k) | 2.899 [2.865, 2.929] | 2.881 [2.847, 2.911] | 1.88 [1.86, 1.90] | 4.58 |
 | `T3_sutra` (256k) | 2.316 [2.288, 2.342] | 2.301 [2.273, 2.327] | 1.86 [1.84, 1.88] | 3.66 |
 | `T3_brahmic131k` (131k) | 2.244 [2.219, 2.269] | 2.230 [2.205, 2.254] | 2.09 [2.06, 2.11] | 3.57 |
-| `T1_bpe_raw_32k`* (32k) | 1.320 [1.304, 1.335] | 1.312 [1.296, 1.326] | — | 2.08 |
-| `T1_bpe_raw_64k`* (64k) | 1.227 [1.212, 1.241] | 1.219 [1.204, 1.233] | — | 1.94 |
-| `T2_unigram_raw_32k`* (32k) | 1.445 [1.427, 1.462] | 1.436 [1.418, 1.453] | — | 2.28 |
-| `T2_unigram_raw_64k`* (64k) | 1.363 [1.346, 1.379] | 1.354 [1.337, 1.370] | — | 2.15 |
+| `T1_bpe_raw_32k`* (32k) | 1.312 [1.297, 1.327] | 1.304 [1.288, 1.318] | — | 2.07 |
+| `T1_bpe_raw_64k`* (64k) | 1.220 [1.204, 1.234] | 1.212 [1.197, 1.226] | — | 1.92 |
+| `T2_unigram_raw_32k`* (32k) | 1.450 [1.432, 1.467] | 1.441 [1.423, 1.458] | — | 2.29 |
+| `T2_unigram_raw_64k`* (64k) | 1.366 [1.349, 1.382] | 1.357 [1.341, 1.373] | — | 2.15 |
 
 Below 1.0: none. Above 1.0 (CI excludes): all eleven available arms. Straddling: none.
 
