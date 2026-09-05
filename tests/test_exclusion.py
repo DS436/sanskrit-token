@@ -5,12 +5,17 @@ from pathlib import Path
 import pytest
 
 from sanskrit_tok.data.exclusion import (
+    SHINGLE_K,
     LeakageError,
     assert_not_excluded,
     build_exclusion_list,
+    build_shingle_index,
+    has_shingle_overlap,
+    letters_only,
     load_exclusion_hashes,
     sentence_hash,
     sentence_hash_en,
+    shingles,
 )
 
 
@@ -141,3 +146,73 @@ def test_assert_not_excluded_with_the_english_hash_fn_passes_for_a_clean_list() 
         )
         is None
     )
+
+
+# ------------------------------------------------------- the near-duplicate shingle layer
+
+#: One Itihāsa-style verse line in SLP1, with the danda and verse numbering a DCS copy of
+#: the same text would punctuate differently. 60 letters, so it has shingles.
+VERSE = "Darmakzetre kurukzetre samavetA yuyutsavaH | mAmakAH pARqavAScEva kimakurvata saMjaya ||"
+
+#: The second half of the same verse as DCS might carry it: a different sentence by any
+#: hash, the same letters in the same order.
+HALF_VERSE = "mAmakAH pARqavAScEva kimakurvata saMjaya"
+
+#: Unrelated Sanskrit of comparable length.
+OTHER = "yadA yadA hi Darmasya glAnirBavati BArata | aByutTAnamaDarmasya tadAtmAnaM sfjAmyaham ||"
+
+
+def test_letters_only_keeps_letters_and_case() -> None:
+    assert letters_only("tat | tvam 2 asi ||") == "tattvamasi"
+    assert letters_only("rAmaH") == "rAmaH"  # SLP1 case is contrastive, so it survives
+
+
+def test_letters_only_of_empty_or_punctuation_is_empty() -> None:
+    assert letters_only("") == ""
+    assert letters_only("|| 12 ||") == ""
+
+
+def test_shingles_are_every_window_and_none_when_too_short() -> None:
+    assert shingles("abcdef", k=4) == {"abcd", "bcde", "cdef"}
+    assert shingles("abc", k=4) == set()
+
+
+def test_shingles_rejects_a_non_positive_k() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        shingles("abcdef", k=0)
+
+
+def test_a_half_verse_overlaps_the_full_verse_it_came_from() -> None:
+    """The Itihāsa/DCS case: same letters, different sentence boundaries and punctuation."""
+    index = build_shingle_index([VERSE])
+    assert len(letters_only(HALF_VERSE)) >= SHINGLE_K
+    assert has_shingle_overlap(HALF_VERSE, index)
+
+
+def test_two_unrelated_sentences_do_not_overlap() -> None:
+    index = build_shingle_index([VERSE])
+    assert not has_shingle_overlap(OTHER, index)
+
+
+def test_a_short_sentence_matches_only_by_exact_letters() -> None:
+    short = "sUta uvAca"
+    assert len(letters_only(short)) < SHINGLE_K
+    index = build_shingle_index([short])
+    assert has_shingle_overlap("sUta uvAca ||", index)  # same letters, different punctuation
+    assert not has_shingle_overlap("fzaya UcuH", index)
+
+
+def test_a_short_sentence_is_not_caught_inside_a_long_one() -> None:
+    """The deliberate floor of the filter: sub-`k` text has no window to offer."""
+    index = build_shingle_index([VERSE])
+    assert not has_shingle_overlap("saMjaya", index)
+
+
+def test_a_short_evaluation_sentence_never_collides_with_a_window() -> None:
+    index = build_shingle_index(["sUta uvAca", VERSE])
+    assert all(len(entry) in {SHINGLE_K, len(letters_only("sUta uvAca"))} for entry in index)
+
+
+def test_empty_text_overlaps_nothing() -> None:
+    assert not has_shingle_overlap("|| 4 ||", build_shingle_index([VERSE]))
+    assert build_shingle_index(["", "|| ||"]) == frozenset()

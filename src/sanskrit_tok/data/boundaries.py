@@ -14,15 +14,40 @@ boundary derived from the lemma and labelled heuristic"):
   a similarity alignment does not, and a word whose alignment is implausible (ratio < 0.6)
   or whose offsets do not come out strictly increasing inside the word is reported as
   `None` rather than guessed at, and counted.
-* **Secondary — the stem/ending boundary.** `stem_boundary` is the longest common prefix
-  of a segment and its lemma, kept only when the stem is at least two characters and the
-  ending is non-empty. This is a **heuristic**, not DCS annotation, and every table that
-  uses it must say so.
+* **Secondary — the stem/ending boundary.** `stem_boundary` is **sandhi-aware and
+  part-of-speech gated**, and it is a **heuristic**, not DCS annotation; every table that
+  uses it must say so. The rule, in full (docs/decisions.md, 2026-09-05, "Stem boundaries
+  are heuristic; sandhi-aware rule with part-of-speech exclusions", and the CORRECTION
+  entry that pins the wording):
 
-`GoldSentence` packages both, in the two text variants Experiment 04 trains on: the
-sandhied text (`t5_marked`) and the gold "oracle" split (`t6_marked`), each carrying
-`BOUNDARY_MARKER` (U+001F) at the boundaries a constrained BPE may not merge across
-(docs/decisions.md, "MorphBPE-hard implemented as boundary-marker pre-tokenisation").
+  1. A segment whose UPOS is in `NO_STEM_UPOS` — pronouns, particles, adverbs, both
+     conjunction classes, adpositions and numerals — gets **no** stem boundary. These are
+     the closed classes whose surface forms are suppletive (`yaH`/`yad`, `mama`/`mad`) or
+     whose "ending" is not an ending, so a prefix rule can only invent a boundary.
+  2. Otherwise take the longest common prefix of segment and lemma. If it covers the whole
+     lemma, the surface preserves the lemma and the cut goes at `len(lemma)`
+     (`vIram`/`vIra` -> 4, i.e. `vIra|m`).
+  3. If it stops exactly one character short of the lemma's end, and both the lemma's final
+     character and the surface character at that position are vowels, the inflection has
+     **fused or lengthened the stem's final vowel** — `vIrAH`/`vIra`, `anuBAvena`/`anuBAva`
+     — and the cut goes **before that vowel** (3 and 6), which is the consonantal body.
+     Such a cut is flagged `fused`: it is inside the lemma by character count, but it is
+     the linguistically motivated position, not an accident of the prefix.
+  4. Anything else — the lemma and the surface diverge inside the consonantal body, as in
+     `jagAda`/`gad` or `gacCati`/`gam` — yields **no boundary at all**. The old rule cut
+     there anyway, at the prefix, which is what made 46.8% of its cuts fall inside the
+     lemma; `stem_boundary_lcp` keeps that rule for the audit that measures it.
+
+  Then the two long-standing guards: the stem must be at least `MIN_STEM_LENGTH`
+  characters and the ending must be non-empty.
+
+`GoldSentence` packages both, in the three marked text variants Experiment 04 trains on:
+the sandhied text with segment *and* stem marks (`t5_marked`), the sandhied text with
+**segment marks only** (`t5seg_marked`, the clean "MorphBPE with gold boundaries" arm,
+which owes nothing to the stem heuristic) and the gold "oracle" split with stem marks
+(`t6_marked`), each carrying `BOUNDARY_MARKER` (U+001F) at the boundaries a constrained BPE
+may not merge across (docs/decisions.md, "MorphBPE-hard implemented as boundary-marker
+pre-tokenisation").
 Removing every marker from either marked string returns the corresponding plain string
 exactly, which is what makes the marker safe as a training-time-only device.
 
@@ -52,10 +77,17 @@ __all__ = [
     "GoldSentence",
     "MIN_ALIGN_RATIO",
     "MIN_STEM_LENGTH",
+    "NO_STEM_UPOS",
+    "SLP1_VOWELS",
+    "StemAudit",
     "align_segments",
     "build_gold_sentence",
     "mark",
     "stem_boundary",
+    "stem_boundary_lcp",
+    "stem_cut_inside_lemma",
+    "stem_cut_is_fused",
+    "stem_rule_audit",
     "text_words_slp1",
 ]
 
@@ -74,6 +106,17 @@ MIN_STEM_LENGTH = 2
 
 #: Lemmas DCS writes for "no lemma"; `_` is the CoNLL-U empty cell.
 _EMPTY_LEMMAS = frozenset({"", "_"})
+
+#: SLP1's vowels, simple and compound, short and long. Case is significant: `a` is short
+#: *a* and `A` is long *ā*, which is exactly the distinction `stem_cut_is_fused` turns on.
+SLP1_VOWELS = frozenset("aAiIuUfFxXeEoO")
+
+#: Universal parts of speech that get no stem boundary (docs/decisions.md, 2026-09-05,
+#: "Stem boundaries are heuristic; sandhi-aware rule with part-of-speech exclusions"). Every
+#: one of them is a closed class whose surface forms are suppletive (`yaH`/`yad`,
+#: `mama`/`mad`, `dvau`/`dvi`) or invariant (`iti`, `ca`, `eva`), so a prefix rule applied to
+#: them can only invent a boundary that is not there.
+NO_STEM_UPOS = frozenset({"PRON", "PART", "ADV", "CCONJ", "SCONJ", "ADP", "NUM"})
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -164,29 +207,166 @@ def align_segments(surface_slp1: str, segments_slp1: Sequence[str]) -> list[int]
     return offsets
 
 
-def stem_boundary(segment_slp1: str, lemma_slp1: str) -> int | None:
-    """Length of the common prefix of segment and lemma — the derived stem/ending split.
-
-    `None` when there is no lemma, when the prefix is shorter than `MIN_STEM_LENGTH`, or
-    when it covers the whole segment (an uninflected form has no ending to split off).
-
-    Heuristic, not DCS annotation, and it is wrong in both directions. It under-splits when
-    the lemma's own vowel is rewritten by inflection — `stem_boundary("BAvAnAm", "BAva")` is
-    **3**, not 4, because `BAva` ends in a short `a` where the stem has long `A` (the
-    Experiment 04 brief's worked example says 4; the SLP1 strings say 3) — and it gives up
-    entirely when reduplication or guṇa moves the stem, as in
-    `stem_boundary("jagAda", "gad") is None`. Every table built on it says "heuristic".
-    """
-    if not segment_slp1 or lemma_slp1 in _EMPTY_LEMMAS:
-        return None
+def _common_prefix_length(segment_slp1: str, lemma_slp1: str) -> int:
+    """How many leading characters `segment_slp1` and `lemma_slp1` share."""
     length = 0
     for segment_char, lemma_char in zip(segment_slp1, lemma_slp1, strict=False):
         if segment_char != lemma_char:
             break
         length += 1
+    return length
+
+
+def stem_boundary_lcp(segment_slp1: str, lemma_slp1: str) -> int | None:
+    """The **old** rule: the longest common prefix of segment and lemma, with the guards.
+
+    `None` when there is no lemma, when the prefix is shorter than `MIN_STEM_LENGTH`, or
+    when it covers the whole segment (an uninflected form has no ending to split off).
+
+    Superseded by `stem_boundary` and kept only so the ingestion can *measure* what it
+    replaced: 46.8% of the cuts this rule makes on held-out DCS fall strictly inside the
+    lemma (`vIr|AH` for lemma `vIra`, `anuBAv|ena` for `anuBAva`, `gac|Cati` for `gam`), so
+    the T6 arms it used to mark were constrained by an inconsistent heuristic
+    (docs/decisions.md, 2026-09-05, "Stem boundaries are heuristic"). Nothing in the
+    pipeline calls this for a boundary any more; `stem_rule_audit` calls it for a number.
+    """
+    if not segment_slp1 or lemma_slp1 in _EMPTY_LEMMAS:
+        return None
+    length = _common_prefix_length(segment_slp1, lemma_slp1)
     if length < MIN_STEM_LENGTH or length >= len(segment_slp1):
         return None
     return length
+
+
+def stem_cut_is_fused(segment_slp1: str, lemma_slp1: str, cut: int) -> bool:
+    """Whether `cut` sits before a stem-final vowel the inflection fused or lengthened.
+
+    True exactly when the cut stops one character short of the lemma's end, the lemma's
+    final character is a vowel and the surface carries a vowel in its place: `vIrAH`/`vIra`
+    at 3 (`a` + `as` -> `A`), `anuBAvena`/`anuBAva` at 6 (`a` + `ina` -> `ena`). No single
+    character offset is *the* boundary in these words — the surface vowel belongs to the
+    stem and to the ending at once — so the cut goes before it and carries this flag, and
+    `stem_rule_audit` counts these separately from the cuts that fall inside the lemma's
+    consonantal body, which are simply wrong.
+    """
+    return (
+        cut == len(lemma_slp1) - 1
+        and cut < len(segment_slp1)
+        and bool(lemma_slp1)
+        and lemma_slp1[-1] in SLP1_VOWELS
+        and segment_slp1[cut] in SLP1_VOWELS
+    )
+
+
+def stem_cut_inside_lemma(segment_slp1: str, lemma_slp1: str, cut: int) -> bool:
+    """Whether `cut` falls strictly inside the lemma — i.e. the stem is a *proper* prefix.
+
+    The literal character-count test, `cut < len(lemma)`, deliberately counting the fused
+    cuts of `stem_cut_is_fused` as inside: a caller measuring a rule reports both this
+    fraction and the fused one, and subtracts if it wants the fraction of cuts that are
+    inside the lemma *for no good reason*. `segment_slp1` is unused by the test itself and
+    is in the signature so a caller passes the whole triple and cannot mix up which string
+    is which.
+    """
+    del segment_slp1  # part of the triple for the caller's clarity; not needed by the test
+    return cut < len(lemma_slp1)
+
+
+def stem_boundary(segment_slp1: str, lemma_slp1: str, upos: str = "") -> int | None:
+    """The stem/ending split: sandhi-aware, part-of-speech gated, never inside the body.
+
+    See this module's docstring for the rule in full. In one line: closed-class parts of
+    speech (`NO_STEM_UPOS`) get nothing; the cut goes at `len(lemma)` when the surface
+    preserves the lemma, before the fused vowel when the lemma is vowel-final and the
+    surface has a different vowel there, and nowhere at all when segment and lemma diverge
+    inside the consonantal body.
+
+    `upos` defaults to `""` so a caller with no part-of-speech annotation still gets the
+    sandhi-aware behaviour; DCS always supplies one.
+
+    Heuristic, not DCS annotation. What it fixes relative to `stem_boundary_lcp` is the
+    third case — `stem_boundary("jagAda", "gad") is None` under both rules, but
+    `stem_boundary("gacCati", "gam")` is `None` here where the LCP rule cut at 2. What it
+    does *not* fix is that a fused cut is one character to the left of where a linguist
+    would draw the morpheme boundary; that is flagged, counted and reported, never hidden.
+    """
+    if upos in NO_STEM_UPOS:
+        return None
+    if not segment_slp1 or lemma_slp1 in _EMPTY_LEMMAS:
+        return None
+    cut = _common_prefix_length(segment_slp1, lemma_slp1)
+    if cut != len(lemma_slp1) and not stem_cut_is_fused(segment_slp1, lemma_slp1, cut):
+        return None
+    if cut < MIN_STEM_LENGTH or cut >= len(segment_slp1):
+        return None
+    return cut
+
+
+@dataclass(frozen=True)
+class StemAudit:
+    """How many cuts one stem rule made on a corpus, and how many fell inside the lemma.
+
+    `n_segments` is every segment the rule was offered (lemma or not, closed class or not),
+    so `n_cuts / n_segments` says how much of the corpus the rule marks at all.
+    `n_inside_lemma` is the literal `stem_cut_inside_lemma` count and `n_fused` the subset
+    of those that `stem_cut_is_fused` explains; `n_inside_lemma - n_fused` is the number of
+    cuts that fall inside the lemma's consonantal body, which is the defect the sandhi-aware
+    rule exists to remove and which must be 0 for it.
+    """
+
+    n_segments: int = 0
+    n_cuts: int = 0
+    n_inside_lemma: int = 0
+    n_fused: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """A manifest-ready dict, with the two fractions the decisions entry asks for."""
+        return {
+            "n_segments": self.n_segments,
+            "n_cuts": self.n_cuts,
+            "n_inside_lemma": self.n_inside_lemma,
+            "n_fused": self.n_fused,
+            "n_inside_lemma_excluding_fused": self.n_inside_lemma - self.n_fused,
+            "fraction_inside_lemma": (
+                self.n_inside_lemma / self.n_cuts if self.n_cuts else 0.0
+            ),
+            "fraction_fused": self.n_fused / self.n_cuts if self.n_cuts else 0.0,
+            "fraction_inside_lemma_excluding_fused": (
+                (self.n_inside_lemma - self.n_fused) / self.n_cuts if self.n_cuts else 0.0
+            ),
+        }
+
+
+def stem_rule_audit(sentence: DcsSentence) -> dict[str, StemAudit]:
+    """`{"sandhi_aware": ..., "lcp": ...}` — both rules' cut counts over one sentence.
+
+    Runs on the same `(segment, lemma, upos)` triples `build_gold_sentence` derives its
+    boundaries from, so the numbers describe the corpus as ingested rather than a
+    re-derivation of it. The ingestion accumulates these over the held-out split and writes
+    both dicts into the manifest, which is what makes "the new rule's cuts do not fall
+    inside the lemma" a measurement rather than a claim about the code.
+    """
+    counters = {"sandhi_aware": StemAudit(), "lcp": StemAudit()}
+    for word in sentence.words:
+        for token in word.tokens:
+            segment = _slp1(token.unsandhied_iast)
+            lemma = _slp1(token.lemma_iast) if token.lemma_iast else ""
+            if not segment:
+                continue
+            for name, cut in (
+                ("sandhi_aware", stem_boundary(segment, lemma, token.upos)),
+                ("lcp", stem_boundary_lcp(segment, lemma)),
+            ):
+                current = counters[name]
+                counters[name] = StemAudit(
+                    n_segments=current.n_segments + 1,
+                    n_cuts=current.n_cuts + (cut is not None),
+                    n_inside_lemma=current.n_inside_lemma
+                    + (cut is not None and stem_cut_inside_lemma(segment, lemma, cut)),
+                    n_fused=current.n_fused
+                    + (cut is not None and stem_cut_is_fused(segment, lemma, cut)),
+                )
+    return counters
 
 
 def mark(text: str, offsets: Sequence[int], marker: str = BOUNDARY_MARKER) -> str:
@@ -225,11 +405,13 @@ class GoldSentence:
       indices into `oracle_split_slp1` (the split text is where a stem boundary is
       unambiguous, because each segment stands alone there). Heuristic; see
       `stem_boundary`.
-    * `t5_marked` / `t6_marked` — `text_slp1` and `oracle_split_slp1` with
-      `BOUNDARY_MARKER` at the boundaries a constrained merge may not cross. `t5_marked`
-      carries the segment boundaries *and* the stem boundaries projected into the sandhied
-      surface; `t6_marked` carries only the stem boundaries, since the segments are
-      already whitespace-separated there.
+    * `t5_marked` / `t5seg_marked` / `t6_marked` — the three marked training texts, with
+      `BOUNDARY_MARKER` at the boundaries a constrained merge may not cross. `t5_marked` is
+      `text_slp1` with the segment boundaries *and* the stem boundaries projected into the
+      sandhied surface; `t5seg_marked` is `text_slp1` with the **segment boundaries only**,
+      so an arm trained on it is constrained by DCS annotation alone and owes nothing to the
+      stem heuristic; `t6_marked` is `oracle_split_slp1` with only the stem boundaries,
+      since the segments are already whitespace-separated there.
     * `n_words` / `n_words_aligned` — words in `text_slp1`, and how many have a non-`None`
       alignment.
     * `human_verified` — no token of the sentence carries `UnsandhiedReconstructed=True`.
@@ -240,6 +422,7 @@ class GoldSentence:
     segment_offsets: list[list[int] | None]
     stem_offsets: list[list[int]]
     t5_marked: str
+    t5seg_marked: str
     t6_marked: str
     n_words: int
     n_words_aligned: int
@@ -303,11 +486,12 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
     segment_offsets: list[list[int] | None] = []
     stem_offsets: list[list[int]] = []
     marked_words: list[str] = []
+    segment_marked_words: list[str] = []
     oracle_cursor = 0
 
     for index, word in enumerate(text_words):
         token_index = mapping[index]
-        segments, lemmas = _segments_and_lemmas(sentence, token_index, word)
+        segments, lemmas, tags = _segments_and_lemmas(sentence, token_index, word)
         offsets = align_segments(word, segments) if token_index is not None else None
         segment_offsets.append(offsets)
 
@@ -318,8 +502,10 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
         absolute_stems: list[int] = []
         projected_stems: list[int] = []
         segment_cursor = oracle_cursor
-        for segment_index, (segment, lemma) in enumerate(zip(segments, lemmas, strict=True)):
-            boundary = stem_boundary(segment, lemma)
+        for segment_index, (segment, lemma, upos) in enumerate(
+            zip(segments, lemmas, tags, strict=True)
+        ):
+            boundary = stem_boundary(segment, lemma, upos)
             if boundary is not None:
                 absolute_stems.append(segment_cursor + boundary)
                 if offsets is not None:
@@ -337,6 +523,7 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
 
         word_marks = sorted({*(offsets or []), *projected_stems})
         marked_words.append(mark(word, word_marks))
+        segment_marked_words.append(mark(word, sorted(offsets or [])))
 
     oracle_split_slp1 = " ".join(oracle_words)
     flat_stems = sorted(offset for word_stems in stem_offsets for offset in word_stems)
@@ -346,6 +533,7 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
         segment_offsets=segment_offsets,
         stem_offsets=stem_offsets,
         t5_marked=" ".join(marked_words),
+        t5seg_marked=" ".join(segment_marked_words),
         t6_marked=mark(oracle_split_slp1, flat_stems),
         n_words=len(text_words),
         n_words_aligned=sum(1 for offsets in segment_offsets if offsets is not None),
@@ -355,18 +543,31 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
 
 def _segments_and_lemmas(
     sentence: DcsSentence, token_index: int | None, word: str
-) -> tuple[list[str], list[str]]:
-    """The SLP1 segments and lemmas of one `# text` word.
+) -> tuple[list[str], list[str], list[str]]:
+    """The SLP1 segments, lemmas and UPOS tags of one `# text` word.
 
-    A word with no matching token-block word is its own single segment with no lemma, so
-    it passes through the oracle split unsplit and contributes no boundary.
+    The UPOS tags come along because `stem_boundary` gates on them: a pronoun or a particle
+    gets no stem boundary at all, and the tag is the only thing that says which is which.
+
+    A word with no matching token-block word is its own single segment with no lemma and no
+    tag, so it passes through the oracle split unsplit and contributes no boundary.
     """
     if token_index is None:
-        return [word], [""]
+        return [word], [""], [""]
     tokens = sentence.words[token_index].tokens
-    segments = [_slp1(token.unsandhied_iast) for token in tokens]
-    lemmas = [_slp1(token.lemma_iast) if token.lemma_iast else "" for token in tokens]
-    kept = [(segment, lemma) for segment, lemma in zip(segments, lemmas, strict=True) if segment]
+    triples = [
+        (
+            _slp1(token.unsandhied_iast),
+            _slp1(token.lemma_iast) if token.lemma_iast else "",
+            token.upos,
+        )
+        for token in tokens
+    ]
+    kept = [triple for triple in triples if triple[0]]
     if not kept:
-        return [word], [""]
-    return [segment for segment, _ in kept], [lemma for _, lemma in kept]
+        return [word], [""], [""]
+    return (
+        [segment for segment, _, _ in kept],
+        [lemma for _, lemma, _ in kept],
+        [upos for _, _, upos in kept],
+    )

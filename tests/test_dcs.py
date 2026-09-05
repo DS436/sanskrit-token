@@ -25,6 +25,10 @@ from sanskrit_tok.data.boundaries import (
     build_gold_sentence,
     mark,
     stem_boundary,
+    stem_boundary_lcp,
+    stem_cut_inside_lemma,
+    stem_cut_is_fused,
+    stem_rule_audit,
 )
 from sanskrit_tok.data.dcs import (
     DCS_COMMIT,
@@ -38,6 +42,7 @@ from sanskrit_tok.data.dcs import (
 )
 from sanskrit_tok.data.exclusion import (
     build_exclusion_list,
+    build_shingle_index,
     sentence_hash,
     sentence_hash_slp1,
 )
@@ -279,14 +284,39 @@ def test_fused_character_joins_the_left_segment_only_sometimes() -> None:
 # ------------------------------------------------------------------------ stem boundary
 
 
-def test_stem_boundary_is_the_longest_common_prefix_with_the_lemma() -> None:
-    # `BAvAnAm` / `BAva`: the common prefix is `BAv`, not `BAva` — the lemma ends in a
-    # short `a` where the inflected stem has a long `A` (the Exp04 brief's worked example
-    # says 4; the SLP1 strings say 3, and the definition is the longest common prefix).
-    assert stem_boundary("BAvAnAm", "BAva") == 3
+def test_stem_boundary_cuts_at_the_lemma_when_the_surface_preserves_it() -> None:
+    assert stem_boundary("vIram", "vIra") == 4  # `vIra|m`
     assert stem_boundary("jYAnam", "jYAna") == 5
-    assert stem_boundary("yaH", "yad") == 2
     assert stem_boundary("namAmi", "nam") == 3
+
+
+def test_stem_boundary_cuts_before_a_fused_stem_final_vowel() -> None:
+    # No character offset is *the* boundary in these: the surface vowel is the stem's final
+    # vowel and the ending's first at once, so the cut goes before it and is flagged fused.
+    assert stem_boundary("vIrAH", "vIra") == 3  # `vIr|AH`, from `vIra` + `as`
+    assert stem_boundary("anuBAvena", "anuBAva") == 6  # `anuBAv|ena`, from `anuBAva` + `ina`
+    assert stem_cut_is_fused("vIrAH", "vIra", 3)
+    assert stem_cut_is_fused("anuBAvena", "anuBAva", 6)
+    assert stem_cut_inside_lemma("vIrAH", "vIra", 3)  # inside by character count, and flagged
+    assert not stem_cut_is_fused("vIram", "vIra", 4)
+    assert not stem_cut_inside_lemma("vIram", "vIra", 4)
+
+
+def test_stem_boundary_is_none_when_the_cut_would_fall_inside_the_lemma_body() -> None:
+    # The defect the sandhi-aware rule removes: the LCP rule cut at the prefix anyway.
+    assert stem_boundary("gacCati", "gam") is None
+    assert stem_boundary_lcp("gacCati", "gam") == 2
+    assert stem_boundary("jagAda", "gad") is None
+
+
+def test_stem_boundary_is_none_for_the_closed_class_parts_of_speech() -> None:
+    assert stem_boundary("yaH", "yad", "PRON") is None
+    assert stem_boundary("mama", "mad", "PRON") is None
+    # UPOS is what decides these two: the string pair alone would yield a cut.
+    assert stem_boundary("nityam", "nitya") == 5
+    assert stem_boundary("nityam", "nitya", "ADV") is None
+    assert stem_boundary("dvau", "dvi") == 2
+    assert stem_boundary("dvau", "dvi", "NUM") is None
 
 
 def test_stem_boundary_is_none_when_the_prefix_is_too_short() -> None:
@@ -302,6 +332,22 @@ def test_stem_boundary_is_none_when_the_ending_would_be_empty() -> None:
 def test_stem_boundary_is_none_for_an_unknown_lemma() -> None:
     assert stem_boundary("BAvAnAm", "_") is None
     assert stem_boundary("BAvAnAm", "") is None
+
+
+def test_stem_boundary_lcp_is_the_old_rule_unchanged() -> None:
+    # Kept only so the ingestion can measure what the sandhi-aware rule replaced.
+    assert stem_boundary_lcp("BAvAnAm", "BAva") == 3
+    assert stem_boundary_lcp("yaH", "yad") == 2
+    assert stem_boundary_lcp("sama", "sama") is None
+
+
+def test_stem_rule_audit_counts_both_rules(sentences: list[DcsSentence]) -> None:
+    audit = stem_rule_audit(sentences[0])
+    assert set(audit) == {"sandhi_aware", "lcp"}
+    # The sandhi-aware rule makes fewer cuts and none of them fall inside the lemma body.
+    assert audit["sandhi_aware"].n_cuts < audit["lcp"].n_cuts
+    assert audit["sandhi_aware"].to_dict()["n_inside_lemma_excluding_fused"] == 0
+    assert audit["lcp"].to_dict()["n_inside_lemma_excluding_fused"] > 0
 
 
 # -------------------------------------------------------------------------------- mark
@@ -326,12 +372,15 @@ def test_gold_sentence_for_the_first_fixture_sentence(sentences: list[DcsSentenc
     assert gold.text_slp1 == "pratItyajAnAM BAvAnAM nEHsvABAvyaM jagAda yaH"
     assert gold.oracle_split_slp1 == "pratItya jAnAm BAvAnAm nEHsvABAvyam jagAda yaH"
     assert gold.segment_offsets == [[8], [], [], [], []]
-    assert gold.stem_offsets == [[5], [18], [34], [], [45]]
+    # `yaH` / `yad` no longer carries a stem cut: the lemma is consonant-final and the
+    # surface diverges inside its body, which the sandhi-aware rule declines to guess at.
+    assert gold.stem_offsets == [[5], [18], [34], [], []]
     assert gold.t5_marked == (
-        f"pratI{MARK}tya{MARK}jAnAM BAv{MARK}AnAM nEHsvABAvya{MARK}M jagAda ya{MARK}H"
+        f"pratI{MARK}tya{MARK}jAnAM BAv{MARK}AnAM nEHsvABAvya{MARK}M jagAda yaH"
     )
+    assert gold.t5seg_marked == f"pratItya{MARK}jAnAM BAvAnAM nEHsvABAvyaM jagAda yaH"
     assert gold.t6_marked == (
-        f"pratI{MARK}tya jAnAm BAv{MARK}AnAm nEHsvABAvya{MARK}m jagAda ya{MARK}H"
+        f"pratI{MARK}tya jAnAm BAv{MARK}AnAm nEHsvABAvya{MARK}m jagAda yaH"
     )
     assert gold.n_words == 5
     assert gold.n_words_aligned == 5
@@ -343,7 +392,10 @@ def test_gold_sentence_for_the_compound_fixture_sentence(sentences: list[DcsSent
     assert gold.text_slp1 == "taM namAmy asamajYAnam acintyam anidarSanam"
     assert gold.oracle_split_slp1 == "tam namAmi a sama jYAnam a cintyam a nidarSanam"
     assert gold.segment_offsets == [[], [], [1, 5], [1], [1]]
-    assert gold.stem_offsets == [[2], [7], [23], [31], [46]]
+    assert gold.stem_offsets == [[], [7], [23], [], [46]]
+    assert gold.t5seg_marked == (
+        f"taM namAmy a{MARK}sama{MARK}jYAnam a{MARK}cintyam a{MARK}nidarSanam"
+    )
     assert gold.n_words == 5
     assert gold.n_words_aligned == 5
 
@@ -357,16 +409,19 @@ def test_gold_sentence_marks_words_absent_from_the_token_block_as_unaligned(
     assert gold.text_slp1 == "yaTA tvayA mahAyAne DarmanErAtmyam AtmanA"
     assert gold.oracle_split_slp1 == gold.text_slp1
     assert gold.segment_offsets == [[], [], [], None, None]
-    assert gold.stem_offsets == [[], [8], [18], [], []]
+    assert gold.stem_offsets == [[], [], [18], [], []]
     assert gold.n_words == 5
     assert gold.n_words_aligned == 3
-    assert gold.t5_marked == f"yaTA tva{MARK}yA mahAyAn{MARK}e DarmanErAtmyam AtmanA"
+    assert gold.t5_marked == f"yaTA tvayA mahAyAn{MARK}e DarmanErAtmyam AtmanA"
+    # Segment-only marking leaves a sentence with no internal segment boundary untouched.
+    assert gold.t5seg_marked == gold.text_slp1
 
 
 def test_gold_sentence_markers_are_removable_without_trace(sentences: list[DcsSentence]) -> None:
     for sentence in sentences:
         gold = build_gold_sentence(sentence)
         assert gold.t5_marked.replace(MARK, "") == gold.text_slp1
+        assert gold.t5seg_marked.replace(MARK, "") == gold.text_slp1
         assert gold.t6_marked.replace(MARK, "") == gold.oracle_split_slp1
 
 
@@ -493,6 +548,7 @@ def test_ingest_writes_both_splits_and_a_manifest(
         "segment_offsets",
         "stem_offsets",
         "t5_marked",
+        "t5seg_marked",
         "t6_marked",
         "n_words",
         "n_words_aligned",
@@ -529,6 +585,82 @@ def test_ingest_drops_training_sentences_that_duplicate_a_heldout_sentence(
     assert manifest["splits"]["train"]["n_sentences"] == 0
     assert manifest["n_dropped_heldout_duplicate"] == 3
     assert (out_dir / "train.jsonl").read_text(encoding="utf-8") == ""
+
+
+def test_ingest_drops_training_sentences_near_duplicating_an_evaluation_sentence(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """The near-duplicate layer: same letters, different sentence boundaries and hash.
+
+    The fixture's first sentence, re-punctuated and split in two the way a parallel corpus
+    would carry it, hashes to something else entirely — and shares far more than 24 letters
+    with it, so the shingle filter catches what the hash cannot.
+    """
+
+    evaluation = "pratItyajAnAM BAvAnAM || nEHsvABAvyaM jagAda yaH ||"
+    out_dir = tmp_path / "dcs"
+    manifest = ingest_module.ingest(
+        conllu_dir=FIXTURE.parent,
+        out_dir=out_dir,
+        excluded=frozenset(),
+        heldout_fraction=0.0,  # floors to one text; the fixture is one text, so nothing trains
+        seed=0,
+        min_words=2,
+        files=[FIXTURE],
+        shingle_indices={"parallel_eval": build_shingle_index([evaluation])},
+    )
+    # Everything is held out here, so the *train* filter has nothing to act on; what this
+    # asserts is that the index reached the manifest and the held-out split was not filtered.
+    assert manifest["shingle_k"] == 24
+    assert manifest["n_dropped_shingle"] == 0
+    assert manifest["splits"]["heldout"]["n_sentences"] == 3
+    assert set(manifest["n_dropped_shingle_per_source"]) == {"parallel_eval", "dcs_heldout"}
+    assert manifest["shingle_index_sizes"]["parallel_eval"] > 0
+
+
+def test_ingest_shingle_filter_drops_a_repunctuated_training_sentence(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """The same fixture under a second `text_id`, with the first held out: the training
+    copy is dropped by the *hash* layer, and a re-punctuated evaluation sentence drops the
+    rest by shingle overlap."""
+    twin = tmp_path / "twin.conllu"
+    twin.write_text(
+        FIXTURE.read_text(encoding="utf-8")
+        .replace("## text_id: 415", "## text_id: 999")
+        .replace("pratītyajānāṃ", "pratītyajānāṁ"),  # a different hash, the same letters
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "dcs"
+    manifest = ingest_module.ingest(
+        conllu_dir=tmp_path,
+        out_dir=out_dir,
+        excluded=frozenset(),
+        heldout_fraction=0.5,
+        seed=0,
+        min_words=2,
+        files=[FIXTURE, twin],
+        shingle_indices={},  # only the DCS held-out split guards, and that is the point
+    )
+    assert manifest["splits"]["heldout"]["n_sentences"] == 3
+    assert manifest["n_dropped_shingle"] >= 1
+    assert manifest["n_dropped_shingle_per_source"]["dcs_heldout"] >= 1
+
+
+def test_ingest_records_both_stem_rules(tmp_path: Path, ingest_module: ModuleType) -> None:
+    manifest = ingest_module.ingest(
+        conllu_dir=FIXTURE.parent,
+        out_dir=tmp_path / "dcs",
+        excluded=frozenset(),
+        heldout_fraction=1.0,
+        seed=0,
+        min_words=2,
+        files=[FIXTURE],
+    )
+    audit = manifest["stem_rule"]
+    assert set(audit) == {"lcp", "sandhi_aware"}
+    assert audit["sandhi_aware"]["n_inside_lemma_excluding_fused"] == 0
+    assert audit["lcp"]["fraction_inside_lemma_excluding_fused"] > 0
 
 
 def test_random_seed_zero_is_what_assign_heldout_texts_uses(ingest_module: ModuleType) -> None:

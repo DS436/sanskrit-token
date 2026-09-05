@@ -31,3 +31,15 @@ min_words: 2
 # (CLAUDE.md §2.4). DCS's own held-out hashes are subtracted first, so re-running is
 # idempotent rather than progressively emptying the held-out split.
 exclusion_path: data/exclusion_hashes.txt
+
+# The near-duplicate layer (docs/decisions.md, 2026-09-05, "Near-duplicate leakage filter:
+# 24-letter shingles against every evaluation set"). A TRAIN sentence is dropped when any
+# window of this many letters of its letter-normalised SLP1 form occurs in the
+# letter-normalised form of any evaluation sentence: the six parallel-corpus splits below
+# plus this script's own DCS held-out split. Changing it means re-ingesting and retraining
+# every `_dcs` arm.
+shingle_k: 24
+
+# FLORES devtest is the one evaluation source with no downloader of its own; the other five
+# come from `load_samayik` / `load_itihasa`, which cache under `data/raw/`.
+flores_devtest_jsonl: data/raw/flores/devtest.jsonl

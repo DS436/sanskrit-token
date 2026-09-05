@@ -21,11 +21,27 @@ so one code path serves both lists, and the caller must pass the one its list wa
 with: the two agree on pure ASCII (transliteration leaves Latin alone) but diverge on any
 sentence carrying Devanagari, so checking an English list with the Sanskrit hash would
 pass a leak through unnoticed.
+
+**The second layer: near-duplicates.** A sha256 catches only sentences that are
+whitespace-identical after transliteration, and the Experiment 04 review showed that is
+not enough. The Mahābhārata and Rāmāyaṇa are DCS texts *and* the Itihāsa parallel corpus,
+and the two segment the epics into sentences differently, so 19% of Itihāsa test verses
+occurred verbatim — as letter strings — inside a DCS training sentence while hashing to
+something else entirely (docs/decisions.md, 2026-09-05, "Near-duplicate leakage filter:
+24-letter shingles against every evaluation set"). `letters_only`, `shingles`,
+`build_shingle_index` and `has_shingle_overlap` are that second layer: a training sentence
+is dropped when any `SHINGLE_K`-letter window of its letter-normalised SLP1 form occurs in
+the letter-normalised form of any evaluation sentence. Normalising to letters is what makes
+the two segmentations comparable — danda placement, spacing and verse numbering all
+disappear — and a window rather than a whole sentence is what catches a half-verse inside a
+longer line. The layer is *additive*: the hash list stays the authority every training
+script asserts against, and the shingle filter runs before it, removing what it would never
+have seen.
 """
 
 import hashlib
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 
 from sanskrit_tok.encoding import to_slp1
@@ -33,14 +49,19 @@ from sanskrit_tok.encoding import to_slp1
 __all__ = [
     "EXCLUSION_PATH",
     "EXCLUSION_PATH_EN",
+    "SHINGLE_K",
     "LeakageError",
     "assert_not_excluded",
     "build_exclusion_list",
+    "build_shingle_index",
+    "has_shingle_overlap",
     "hash_sources",
+    "letters_only",
     "load_exclusion_hashes",
     "sentence_hash",
     "sentence_hash_en",
     "sentence_hash_slp1",
+    "shingles",
 ]
 
 logger = logging.getLogger(__name__)
@@ -60,6 +81,13 @@ _HEADER_HASH_LINE_OTHER = "# sha256 of every evaluation sentence, one per line"
 
 #: How many offending indices `assert_not_excluded` names before it stops listing them.
 _MAX_NAMED_OFFENDERS = 5
+
+#: Window length, in letters, of the near-duplicate shingle filter. 24 SLP1 letters is
+#: roughly four Sanskrit words, or half a śloka pāda: long enough that two unrelated
+#: sentences essentially never share one (verified on the corpora this project uses) and
+#: short enough to catch a half-verse quoted inside a longer line, which is exactly the
+#: shape the Itihāsa/DCS overlap takes.
+SHINGLE_K = 24
 
 
 def sentence_hash(text: str) -> str:
@@ -182,6 +210,88 @@ def load_exclusion_hashes(path: Path) -> frozenset[str]:
                 continue
             hashes.add(stripped)
     return frozenset(hashes)
+
+
+# ------------------------------------------------------------- near-duplicate shingles
+
+
+def letters_only(text_slp1: str) -> str:
+    """`text_slp1` with every non-letter removed, case preserved.
+
+    `str.isalpha()` is the test, so SLP1's ASCII letters survive and dandas, digits,
+    whitespace, verse numbering and punctuation do not. Case is preserved because SLP1 uses
+    case contrastively — `A` is long *ā* and `a` is short *a*, `S`/`z` are two different
+    sibilants — so lowercasing would merge distinct phonemes and make the filter both
+    coarser and harder to reason about.
+
+    This is the normalisation that makes two *segmentations* of the same text comparable:
+    DCS and Itihāsa break the epics into sentences at different places and punctuate them
+    differently, but the letters in between are the same letters in the same order.
+    """
+    return "".join(character for character in text_slp1 if character.isalpha())
+
+
+def shingles(letters: str, k: int = SHINGLE_K) -> set[str]:
+    """Every `k`-letter window of `letters`, as a set (empty when `letters` is shorter).
+
+    `letters` is expected to be `letters_only` output; nothing enforces it, but a window
+    containing a space or a danda would be a window that two differently-punctuated copies
+    of the same text do not share, which defeats the point.
+    """
+    if k <= 0:
+        raise ValueError(f"shingle length k must be positive, got {k}")
+    if len(letters) < k:
+        return set()
+    return {letters[start : start + k] for start in range(len(letters) - k + 1)}
+
+
+def build_shingle_index(eval_texts_slp1: Iterable[str], k: int = SHINGLE_K) -> frozenset[str]:
+    """Every `k`-letter shingle of every evaluation sentence, plus the short ones whole.
+
+    A sentence with at least `k` letters contributes its windows. A sentence with fewer
+    contributes its **whole** letters-only form instead, which is shorter than `k` and so
+    can never collide with a window: it is matched only by `has_shingle_overlap`'s
+    equal-length exact rule for equally short text. Without this, short evaluation
+    sentences — of which the parallel corpora have plenty — would contribute nothing at all
+    and be invisible to the filter.
+
+    Returns one flat frozenset. A caller wanting per-source drop counts (the DCS ingestion
+    does) builds one index per source and tests against each.
+    """
+    index: set[str] = set()
+    for text in eval_texts_slp1:
+        letters = letters_only(text)
+        if not letters:
+            continue
+        if len(letters) < k:
+            index.add(letters)
+        else:
+            index |= shingles(letters, k)
+    return frozenset(index)
+
+
+def has_shingle_overlap(
+    text_slp1: str, index: frozenset[str], k: int = SHINGLE_K
+) -> bool:
+    """Whether `text_slp1` shares a `k`-letter window with anything in `index`.
+
+    A sentence of at least `k` letters overlaps when *any* of its windows is in the index —
+    one shared 24-letter run is already a quotation, not a coincidence. A sentence shorter
+    than `k` has no window to offer, so it is compared by **exact letters-only equality**
+    against the short entries `build_shingle_index` stored whole; that is strictly weaker
+    (a short training sentence sitting inside a long evaluation one is not caught here) and
+    is the deliberate floor of the filter, since a 20-letter window shared with a long text
+    is common enough that dropping on it would delete large parts of the corpus.
+
+    `index` must have been built with the same `k`.
+    """
+    letters = letters_only(text_slp1)
+    if not letters:
+        return False
+    if len(letters) < k:
+        return letters in index
+    return any(shingle in index for shingle in shingles(letters, k))
+
 
 
 class LeakageError(RuntimeError):

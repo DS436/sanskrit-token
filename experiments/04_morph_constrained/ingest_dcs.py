@@ -14,13 +14,32 @@ Three rules the numbers depend on (docs/decisions.md, 2026-09-05):
 * **Held out by whole text.** 5% of `text_id`s, chosen with `random.Random(seed)` over the
   sorted unique ids; every sentence of a held-out text goes to `heldout.jsonl`. Splitting
   by sentence would put two ślokas of one work on both sides of the wall.
-* **No leakage.** A sentence whose sandhied SLP1 form hashes into `data/exclusion_hashes.txt`
-  is dropped from *both* splits and counted. The DCS held-out hashes that a previous run of
-  this script contributed to that list are subtracted from it first, so re-running does not
-  progressively delete the held-out split it created (`_previous_dcs_hashes`). Separately, a
-  training sentence whose text is identical to a held-out sentence's is dropped too: DCS's
-  formulaic lines recur verbatim across texts, so a whole-text split alone does not keep the
-  two sides disjoint (`n_dropped_heldout_duplicate`).
+* **No leakage, in two layers.** A sentence whose sandhied SLP1 form hashes into
+  `data/exclusion_hashes.txt` is dropped from *both* splits and counted. The DCS held-out
+  hashes that a previous run of this script contributed to that list are subtracted from it
+  first, so re-running does not progressively delete the held-out split it created
+  (`_previous_dcs_hashes`). Separately, a training sentence whose text is identical to a
+  held-out sentence's is dropped too: DCS's formulaic lines recur verbatim across texts, so
+  a whole-text split alone does not keep the two sides disjoint
+  (`n_dropped_heldout_duplicate`).
+
+  The second layer is the **near-duplicate filter** (docs/decisions.md, 2026-09-05,
+  "Near-duplicate leakage filter: 24-letter shingles against every evaluation set"). A hash
+  only catches sentences that are whitespace-identical, and the Mahābhārata and Rāmāyaṇa are
+  both DCS texts and the Itihāsa parallel corpus, segmented into sentences differently by
+  each — so 19% of Itihāsa test verses sat verbatim, as letter strings, inside a DCS
+  training sentence that hashed to something else. A **training** sentence is therefore also
+  dropped when any 24-letter window of its letter-normalised form occurs in the
+  letter-normalised form of any evaluation sentence: FLORES devtest, Sāmayik
+  dev/test/test_ood, Itihāsa dev/test, and this script's own DCS held-out split. Counts go
+  into the manifest as `n_dropped_shingle` and `n_dropped_shingle_per_source`. The held-out
+  split is *not* filtered — it is the evaluation set.
+
+* **The stem rule is audited, not assumed.** Both stem rules — the sandhi-aware
+  `stem_boundary` the marked corpora are built from, and the superseded `stem_boundary_lcp`
+  — are run over every held-out segment and their cut counts written to the manifest under
+  `stem_rule`, so "the new rule does not cut inside the lemma" is a number in the file
+  rather than a claim in a docstring (docs/decisions.md, "Stem boundaries are heuristic").
 * **`# text` is the sentence.** Words come from the `# text` line; a word the token block
   does not reconstruct carries no gold segmentation and is counted as unaligned
   (`n_sentences_text_mismatch` counts the sentences where this happens).
@@ -47,11 +66,16 @@ import json
 import logging
 import random
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from sanskrit_tok.data.boundaries import build_gold_sentence, text_words_slp1
+from sanskrit_tok.data.boundaries import (
+    StemAudit,
+    build_gold_sentence,
+    stem_rule_audit,
+    text_words_slp1,
+)
 from sanskrit_tok.data.dcs import (
     DCS_COMMIT,
     DCS_LICENCE,
@@ -64,12 +88,22 @@ from sanskrit_tok.data.dcs import (
 )
 from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
+    SHINGLE_K,
+    build_shingle_index,
+    has_shingle_overlap,
     load_exclusion_hashes,
     sentence_hash_slp1,
 )
+from sanskrit_tok.data.flores import load_jsonl
+from sanskrit_tok.data.itihasa import load_itihasa
+from sanskrit_tok.data.samayik import load_samayik
+from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, sanitize_json
 
 logger = logging.getLogger("ingest_dcs")
+
+#: The Sanskrit side of every parallel evaluation corpus, as the loaders key it.
+SANSKRIT_LANGUAGE = "san_Deva"
 
 #: How often the file loop logs progress.
 _PROGRESS_EVERY = 50
@@ -86,6 +120,10 @@ MISSING_TEXT_ID = -1
 
 #: How many offending paths an error names before it stops listing them.
 _MAX_NAMED = 5
+
+#: The manifest key (and shingle-index key) for this script's own held-out split, which is
+#: an evaluation set like any other and is filtered against after pass 1 builds it.
+DCS_HELDOUT_SOURCE = "dcs_heldout"
 
 
 class IngestError(RuntimeError):
@@ -176,6 +214,8 @@ def ingest(
     files: Sequence[Path] | None = None,
     repo: str = DCS_REPO,
     commit: str = DCS_COMMIT,
+    shingle_indices: Mapping[str, frozenset[str]] | None = None,
+    shingle_k: int = SHINGLE_K,
 ) -> dict[str, Any]:
     """Parse every file, write both splits and `manifest.json`; return the manifest.
 
@@ -192,6 +232,13 @@ def ingest(
        `build_exclusion.py` puts the held-out hashes into `data/exclusion_hashes.txt`,
        leaving them in the training split would be a leak by CLAUDE.md §2.4's own
        definition and would fail Task 3's `assert_not_excluded` outright.
+
+    `shingle_indices` maps an evaluation source name to its `build_shingle_index` output;
+    a training sentence overlapping any of them is dropped and counted, per source and in
+    total. It is empty by default so a caller that only wants the hash layer (and every
+    test that runs offline) gets exactly the previous behaviour. The DCS held-out split is
+    added to it here, after pass 1, from the sentences pass 1 actually wrote — the point is
+    to filter against the evaluation set that exists, not the one the config describes.
 
     `files` defaults to every `.conllu` under `conllu_dir`, sorted; it is a parameter so
     the tests can run the whole pipeline over a fixture.
@@ -214,17 +261,22 @@ def ingest(
         "n_dropped_excluded": 0,
         "n_dropped_min_words": 0,
         "n_dropped_heldout_duplicate": 0,
+        "n_dropped_shingle": 0,
         "n_sentences_text_mismatch": 0,
         "n_words": 0,
         "n_words_aligned": 0,
         "n_sentences_human_verified": 0,
     }
+    indices: dict[str, frozenset[str]] = dict(shingle_indices or {})
+    shingle_drops: dict[str, int] = dict.fromkeys(indices, 0)
+    stem_audit: dict[str, StemAudit] = {}
     per_split: dict[str, dict[str, Any]] = {
         "train": {"n_sentences": 0, "texts": set()},
         "heldout": {"n_sentences": 0, "texts": set()},
     }
     started = time.monotonic()
     heldout_hashes: set[str] = set()
+    heldout_texts: list[str] = []
 
     def run_pass(split: str, handle: TextIO, pass_paths: Sequence[Path]) -> None:
         for index, path in enumerate(pass_paths, start=1):
@@ -251,6 +303,17 @@ def ingest(
                 if split == "train" and digest in heldout_hashes:
                     counts["n_dropped_heldout_duplicate"] += 1
                     continue
+                if split == "train" and indices:
+                    matched = [
+                        source
+                        for source, index in indices.items()
+                        if has_shingle_overlap(gold.text_slp1, index, shingle_k)
+                    ]
+                    if matched:
+                        counts["n_dropped_shingle"] += 1
+                        for source in matched:
+                            shingle_drops[source] += 1
+                        continue
 
                 record = {
                     "sent_id": sentence.sent_id,
@@ -261,6 +324,17 @@ def ingest(
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 if split == "heldout":
                     heldout_hashes.add(digest)
+                    heldout_texts.append(gold.text_slp1)
+
+                if split == "heldout":
+                    for rule, audit in stem_rule_audit(sentence).items():
+                        current = stem_audit.get(rule, StemAudit())
+                        stem_audit[rule] = StemAudit(
+                            n_segments=current.n_segments + audit.n_segments,
+                            n_cuts=current.n_cuts + audit.n_cuts,
+                            n_inside_lemma=current.n_inside_lemma + audit.n_inside_lemma,
+                            n_fused=current.n_fused + audit.n_fused,
+                        )
 
                 per_split[split]["n_sentences"] += 1
                 per_split[split]["texts"].add(sentence.text_id)
@@ -283,6 +357,14 @@ def ingest(
     train_paths = [path for path in paths if text_id_of[path] not in heldout_ids]
     with (out_dir / HELDOUT_FILENAME).open("w", encoding="utf-8") as heldout_handle:
         run_pass("heldout", heldout_handle, heldout_paths)
+    if shingle_indices is not None:
+        indices[DCS_HELDOUT_SOURCE] = build_shingle_index(heldout_texts, shingle_k)
+        shingle_drops.setdefault(DCS_HELDOUT_SOURCE, 0)
+        logger.info(
+            "shingle index over %d source(s): %s",
+            len(indices),
+            ", ".join(f"{name}={len(index)}" for name, index in indices.items()),
+        )
     with (out_dir / TRAIN_FILENAME).open("w", encoding="utf-8") as train_handle:
         run_pass("train", train_handle, train_paths)
 
@@ -314,8 +396,13 @@ def ingest(
                 "n_dropped_excluded",
                 "n_dropped_min_words",
                 "n_dropped_heldout_duplicate",
+                "n_dropped_shingle",
             )
         },
+        "n_dropped_shingle_per_source": shingle_drops,
+        "shingle_k": shingle_k,
+        "shingle_index_sizes": {name: len(index) for name, index in indices.items()},
+        "stem_rule": {rule: audit.to_dict() for rule, audit in sorted(stem_audit.items())},
         "n_sentences_text_mismatch": counts["n_sentences_text_mismatch"],
         "n_words": counts["n_words"],
         "n_words_aligned": counts["n_words_aligned"],
@@ -336,6 +423,45 @@ def ingest(
     )
     logger.info("wrote %s", manifest_path)
     return manifest
+
+
+def evaluation_shingle_indices(
+    root: Path, flores_jsonl: Path, k: int = SHINGLE_K
+) -> dict[str, frozenset[str]]:
+    """One shingle index per evaluation source, built from its Sanskrit side in SLP1.
+
+    The six parallel-corpus splits `experiments/02_tpp_parallel/build_exclusion.py` hashes
+    — FLORES devtest, Sāmayik dev/test/test_ood, Itihāsa dev/test — loaded through the same
+    loaders, so the two leakage layers are guarding the same text. They store Devanagari, so
+    each sentence is transliterated with `to_slp1(text, "devanagari")` before normalisation;
+    the DCS side is already SLP1 and needs none. The seventh source, the DCS held-out split,
+    is added by `ingest` itself once pass 1 has written it.
+
+    One index per source rather than one union, because the manifest records drops per
+    source and a union cannot say which evaluation set a dropped sentence came from.
+    """
+    del root  # the loaders resolve their own cache paths; kept for call-site symmetry
+    corpora = {
+        "flores_devtest": load_jsonl(flores_jsonl, name="flores200", split="devtest"),
+        "samayik_dev": load_samayik("dev"),
+        "samayik_test": load_samayik("test"),
+        "samayik_test_ood": load_samayik("test_ood"),
+        "itihasa_dev": load_itihasa("dev"),
+        "itihasa_test": load_itihasa("test"),
+    }
+    indices: dict[str, frozenset[str]] = {}
+    for name, corpus in corpora.items():
+        texts = [
+            to_slp1(text, "devanagari") for text in corpus.sentences[SANSKRIT_LANGUAGE]
+        ]
+        indices[name] = build_shingle_index(texts, k)
+        logger.info(
+            "shingle index %s: %d sentence(s) -> %d shingle(s)",
+            name,
+            len(texts),
+            len(indices[name]),
+        )
+    return indices
 
 
 def main() -> None:
@@ -361,6 +487,11 @@ def main() -> None:
     excluded = load_exclusion_hashes(exclusion_path) - _previous_dcs_hashes(out_dir)
     logger.info("%d exclusion hashes in force (from %s)", len(excluded), exclusion_path)
 
+    shingle_k = int(config.get("shingle_k", SHINGLE_K))
+    shingle_indices = evaluation_shingle_indices(
+        root, resolve_path(str(config["flores_devtest_jsonl"]), root), shingle_k
+    )
+
     manifest = ingest(
         conllu_dir=conllu_dir,
         out_dir=out_dir,
@@ -370,11 +501,13 @@ def main() -> None:
         min_words=int(config["min_words"]),
         repo=str(config["repo"]),
         commit=commit,
+        shingle_indices=shingle_indices,
+        shingle_k=shingle_k,
     )
     logger.info(
         "done: train %d sentences / %d texts, heldout %d / %d; dropped %d excluded, "
-        "%d too short, %d duplicating a held-out sentence; alignment %.4f; "
-        "human-verified %.4f",
+        "%d too short, %d duplicating a held-out sentence, %d near-duplicating an "
+        "evaluation sentence (%s); alignment %.4f; human-verified %.4f",
         manifest["splits"]["train"]["n_sentences"],
         manifest["splits"]["train"]["n_texts"],
         manifest["splits"]["heldout"]["n_sentences"],
@@ -382,9 +515,25 @@ def main() -> None:
         manifest["n_dropped_excluded"],
         manifest["n_dropped_min_words"],
         manifest["n_dropped_heldout_duplicate"],
+        manifest["n_dropped_shingle"],
+        ", ".join(
+            f"{source}={count}"
+            for source, count in manifest["n_dropped_shingle_per_source"].items()
+        ),
         manifest["alignment_rate"],
         manifest["human_verified_fraction"],
     )
+    for rule, audit in manifest["stem_rule"].items():
+        logger.info(
+            "stem rule %s: %d cut(s) over %d segment(s); inside the lemma %.4f "
+            "(%.4f fused, %.4f not)",
+            rule,
+            audit["n_cuts"],
+            audit["n_segments"],
+            audit["fraction_inside_lemma"],
+            audit["fraction_fused"],
+            audit["fraction_inside_lemma_excluding_fused"],
+        )
 
 
 if __name__ == "__main__":
