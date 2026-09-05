@@ -44,7 +44,7 @@ from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Any
 
-from sanskrit_tok.data.dcs import DcsSentence
+from sanskrit_tok.data.dcs import DcsSentence, sentence_is_human_verified
 from sanskrit_tok.encoding import to_slp1
 
 __all__ = [
@@ -56,6 +56,7 @@ __all__ = [
     "build_gold_sentence",
     "mark",
     "stem_boundary",
+    "text_words_slp1",
 ]
 
 #: U+001F UNIT SEPARATOR: the private boundary marker inserted into *training* text so a
@@ -121,6 +122,20 @@ def align_segments(surface_slp1: str, segments_slp1: Sequence[str]) -> list[int]
     not strictly increasing inside `(0, len(surface_slp1))`. The last case is what rejects
     a segmentation that cannot physically fit the surface (two copies of `ab` against a
     surface holding one).
+
+    **Where a vowel-sandhi-fused character lands** (docs/decisions.md, 2026-09-05,
+    "Correction: the fused character does not consistently join the left segment"). When
+    sandhi contracts the two vowels either side of a join into one surface character, that
+    character belongs to both segments and no index is correct. Which side `difflib` gives
+    it to is not uniform: the fused character joins the **left** segment, unless the sandhi
+    output happens to equal the right segment's first character (`a` + `E` -> `E`,
+    `a` + `A` -> `A`, `a` + `O` -> `O`), in which case `difflib` matches it to the right
+    segment and the boundary lands **before** it. Pinned by regression tests:
+    `rAmeti` ['rAma', 'iti'] -> [4]; `tatrEva` ['tatra', 'eva'] -> [5];
+    `vacanenEkam` ['vacanena', 'Ekam'] -> [7]; `sAgacCat` ['sa', 'AgacCat'] -> [1].
+    The convention is identical for every arm, so paired comparisons are unaffected;
+    absolute MorphScore is not portable, which is why the metric also reports a symmetric
+    +/-1-character tolerant variant.
     """
     if not surface_slp1 or not segments_slp1:
         return None
@@ -254,15 +269,33 @@ def _match_text_words_to_token_block(
     return mapping
 
 
+def text_words_slp1(sentence: DcsSentence) -> list[str]:
+    """The `# text` line as SLP1 words — exactly the words `GoldSentence` is built over.
+
+    Whitespace is normalised to single spaces and each word is transliterated on its own,
+    so word boundaries survive transliteration exactly; a word that transliterates to the
+    empty string (punctuation-only) is dropped, which is why a caller wanting the word
+    count must call this rather than `sentence.text_iast.split()`.
+
+    Public so a caller can apply a `min_words` filter *before* paying for alignment: the
+    ingestion drops 14,204 short sentences, and building their gold boundaries first is
+    work thrown away. `_slp1` is memoised, so the second call inside
+    `build_gold_sentence` is free.
+    """
+    return [
+        slp1
+        for slp1 in (_slp1(word) for word in _WHITESPACE.split(sentence.text_iast.strip()) if word)
+        if slp1
+    ]
+
+
 def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
     """Convert one parsed `DcsSentence` into SLP1 with its gold boundaries located.
 
-    Whitespace in `# text` is normalised to single spaces (each word is transliterated on
-    its own, so word boundaries survive transliteration exactly); words are matched to the
-    token block by `_match_text_words_to_token_block`.
+    Words come from `text_words_slp1`; they are matched to the token block by
+    `_match_text_words_to_token_block`.
     """
-    text_words = [_slp1(word) for word in _WHITESPACE.split(sentence.text_iast.strip()) if word]
-    text_words = [word for word in text_words if word]
+    text_words = text_words_slp1(sentence)
     token_words = [_slp1(word.surface_iast) for word in sentence.words]
     mapping = _match_text_words_to_token_block(text_words, token_words)
 
@@ -316,9 +349,7 @@ def build_gold_sentence(sentence: DcsSentence) -> GoldSentence:
         t6_marked=mark(oracle_split_slp1, flat_stems),
         n_words=len(text_words),
         n_words_aligned=sum(1 for offsets in segment_offsets if offsets is not None),
-        human_verified=all(
-            not token.reconstructed for word in sentence.words for token in word.tokens
-        ),
+        human_verified=sentence_is_human_verified(sentence),
     )
 
 

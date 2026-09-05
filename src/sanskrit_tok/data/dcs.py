@@ -79,7 +79,11 @@ _SENT_ID_PREFIX = "# sent_id = "
 
 _MISC_UNSANDHIED = "Unsandhied"
 _MISC_RECONSTRUCTED = "UnsandhiedReconstructed"
-_FEAT_CPD = "Case=Cpd"
+
+#: FEATS key/value marking a compound member. Read from the *parsed* FEATS map, not as a
+#: substring of the raw cell, so a hypothetical `Xcase=Cpdx` can never be mistaken for it.
+_FEAT_CASE = "Case"
+_FEAT_CPD = "Cpd"
 
 #: CoNLL-U's empty cell.
 _EMPTY_CELL = "_"
@@ -153,11 +157,26 @@ def text_matches_token_block(sentence: DcsSentence) -> bool:
 
 
 def _git(*args: str) -> str:
-    """Run `git` with `args`, returning stdout; raises `CalledProcessError` on failure."""
+    """Run `git` with `args`, returning stdout; raises `CalledProcessError` on failure.
+
+    stdout and stderr are captured so a 1.9 GB clone does not spray progress lines over
+    the ingestion log, but a *failing* git is logged with its stderr before the exception
+    propagates: a clone that dies on authentication, disk space or a bad commit says so
+    only on stderr, and swallowing it leaves a bare `CalledProcessError` with no cause.
+    """
     logger.info("git %s", " ".join(args))
-    completed = subprocess.run(
-        ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
-    )
+    try:
+        completed = subprocess.run(
+            ["git", *args], check=True, capture_output=True, text=True, encoding="utf-8"
+        )
+    except subprocess.CalledProcessError as error:
+        logger.error(
+            "git %s failed with exit code %s; stderr:\n%s",
+            " ".join(args),
+            error.returncode,
+            (error.stderr or "").strip() or "(empty)",
+        )
+        raise
     return completed.stdout.strip()
 
 
@@ -211,10 +230,10 @@ def _cell(value: str) -> str:
     return "" if value == _EMPTY_CELL else value
 
 
-def _parse_misc(misc: str) -> dict[str, str]:
-    """MISC (`Key=Value|Key=Value`) as a dict; keys without `=` are ignored."""
+def _parse_pipe_fields(cell: str) -> dict[str, str]:
+    """A `Key=Value|Key=Value` cell (MISC or FEATS) as a dict; items without `=` ignored."""
     fields: dict[str, str] = {}
-    for item in misc.split("|"):
+    for item in cell.split("|"):
         key, separator, value = item.partition("=")
         if separator:
             fields[key] = value
@@ -223,16 +242,17 @@ def _parse_misc(misc: str) -> dict[str, str]:
 
 def _parse_token(columns: Sequence[str]) -> DcsToken:
     surface = columns[1]
-    misc = _parse_misc(columns[9])
+    misc = _parse_pipe_fields(columns[9])
+    feats = _cell(columns[5])
     return DcsToken(
         id=int(columns[0]),
         surface_iast=surface,
         lemma_iast=_cell(columns[2]),
         upos=_cell(columns[3]),
-        feats=_cell(columns[5]),
+        feats=feats,
         unsandhied_iast=misc.get(_MISC_UNSANDHIED) or surface,
         reconstructed=misc.get(_MISC_RECONSTRUCTED) == "True",
-        is_cpd=_FEAT_CPD in columns[5],
+        is_cpd=_parse_pipe_fields(feats).get(_FEAT_CASE) == _FEAT_CPD,
     )
 
 

@@ -25,11 +25,20 @@ digest of the same SLP1 bytes, without a lossy Devanagari round-trip — via
 appears in the Sanskrit list only.
 
 They are read from `data/processed/dcs/heldout.jsonl`, which
-`experiments/04_morph_constrained/ingest_dcs.py` writes and which is gitignored. When that
-file is absent (a fresh clone that has not run the ingestion) the source is **skipped with
-a loud warning** and the list is written without it: the committed
-`data/exclusion_hashes.txt` remains the authority, and regenerating it without DCS would
-silently discard 40k hashes.
+`experiments/04_morph_constrained/ingest_dcs.py` writes and which is gitignored.
+
+**Two guards, because a leakage list must never weaken silently.**
+
+* If `heldout.jsonl` is absent (a fresh clone that has not run the ingestion) this script
+  **fails**. Regenerating the list without DCS would drop 30k hashes from the committed
+  file, and the committed file is the authority every training script asserts against.
+  `--allow-missing-dcs` writes the list without that source, for someone who genuinely
+  wants a DCS-free list and has said so.
+* Whatever the sources, the list about to be written must be a **superset** of the one
+  already on disk. Any hash the committed file holds and the new one does not means an
+  evaluation sentence has stopped being excluded — a corpus loader that silently returned
+  a short split, a renamed source, a half-run ingestion. `--allow-shrink` is the escape
+  hatch, and it exists so that removing a source is a deliberate, recorded act.
 
 Config-free and idempotent: it reuses the corpus loaders directly (downloading any split
 that is not already cached under `data/raw/`) and overwrites both lists with the freshly
@@ -38,15 +47,18 @@ computed hashes. Run with:
     uv run python experiments/02_tpp_parallel/build_exclusion.py
 """
 
+import argparse
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
     EXCLUSION_PATH_EN,
     build_exclusion_list,
+    hash_sources,
+    load_exclusion_hashes,
     sentence_hash,
     sentence_hash_en,
     sentence_hash_slp1,
@@ -84,22 +96,65 @@ SANSKRIT_LANGUAGE = "san_Deva"
 ENGLISH_LANGUAGE = "eng_Latn"
 
 
-def load_dcs_heldout(path: Path = DCS_HELDOUT_PATH) -> list[str]:
-    """The sandhied SLP1 text of every DCS held-out sentence, or `[]` with a warning.
+class MissingDcsHeldoutError(RuntimeError):
+    """`heldout.jsonl` is absent, so the list would be written without its DCS hashes."""
 
-    `[]` means the source is left out of the list entirely (rather than contributing an
-    empty set of hashes, which is the same thing but silent).
+
+class ExclusionShrinkError(RuntimeError):
+    """The list about to be written drops hashes the committed one already holds."""
+
+
+def load_dcs_heldout(
+    path: Path = DCS_HELDOUT_PATH, *, allow_missing: bool = False
+) -> list[str]:
+    """The sandhied SLP1 text of every DCS held-out sentence.
+
+    Raises `MissingDcsHeldoutError` when `path` does not exist. Regenerating the Sanskrit
+    list without it silently removes 30,150 evaluation hashes, and a leakage guard that
+    quietly gets weaker is worse than one that refuses to run — so the fresh-clone case is
+    a hard stop with instructions, not a warning.
+
+    `allow_missing=True` (the `--allow-missing-dcs` flag) returns `[]` with a loud warning
+    instead: the source is then left out of the list entirely rather than contributing an
+    empty set of hashes, which is the same thing but silent.
     """
     if not path.exists():
-        logger.warning(
-            "%s not found: the Sanskrit exclusion list will be written WITHOUT the DCS "
-            "held-out hashes. Run experiments/04_morph_constrained/ingest_dcs.py first, "
-            "or keep the committed data/exclusion_hashes.txt.",
-            path,
+        message = (
+            f"{path} not found, so the Sanskrit exclusion list would be written WITHOUT the "
+            "DCS held-out hashes. Run experiments/04_morph_constrained/ingest_dcs.py first, "
+            "or keep the committed data/exclusion_hashes.txt, or pass --allow-missing-dcs "
+            "if you really want a DCS-free list."
         )
+        if not allow_missing:
+            raise MissingDcsHeldoutError(message)
+        logger.warning("--allow-missing-dcs: %s", message)
         return []
     with path.open(encoding="utf-8") as handle:
         return [json.loads(line)["text_slp1"] for line in handle if line.strip()]
+
+
+def assert_superset_of_committed(
+    new_hashes: set[str], path: Path, *, allow_shrink: bool = False
+) -> None:
+    """Raise `ExclusionShrinkError` if `path` holds hashes `new_hashes` does not.
+
+    A missing `path` (nothing committed yet) passes. Every dropped hash is an evaluation
+    sentence that would stop being excluded, so the default is to refuse; `allow_shrink`
+    (the `--allow-shrink` flag) downgrades it to a warning for a deliberate removal.
+    """
+    if not path.exists():
+        return
+    lost = load_exclusion_hashes(path) - new_hashes
+    if not lost:
+        return
+    message = (
+        f"{path}: the list about to be written drops {len(lost)} hash(es) the committed "
+        f"file holds, so {len(lost)} evaluation sentence(s) would stop being excluded "
+        f"(e.g. {sorted(lost)[:3]}). Pass --allow-shrink if this removal is deliberate."
+    )
+    if not allow_shrink:
+        raise ExclusionShrinkError(message)
+    logger.warning("--allow-shrink: %s", message)
 
 
 def load_corpora() -> dict[str, ParallelCorpus]:
@@ -122,10 +177,43 @@ def collect_sources(
     return {name: list(corpora[name].sentences[language]) for name in SOURCE_ORDER}
 
 
+def write_list(
+    sources: Mapping[str, Sequence[str]],
+    path: Path,
+    *,
+    hash_fn: Callable[[str], str],
+    hash_fns: Mapping[str, Callable[[str], str]] | None = None,
+    allow_shrink: bool = False,
+) -> int:
+    """Check the superset guard, then write the list; return the number of hashes written.
+
+    The hashes are computed once by `hash_sources` and compared with the committed file
+    *before* `build_exclusion_list` overwrites it, so a refusal leaves the committed list
+    exactly as it was.
+    """
+    new_hashes = hash_sources(sources, hash_fn=hash_fn, hash_fns=hash_fns)
+    assert_superset_of_committed(new_hashes, path, allow_shrink=allow_shrink)
+    return build_exclusion_list(sources, path, hash_fn=hash_fn, hash_fns=hash_fns)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--allow-missing-dcs",
+        action="store_true",
+        help="write the Sanskrit list without the DCS held-out hashes when "
+        "data/processed/dcs/heldout.jsonl is absent (default: fail)",
+    )
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="write a list even if it drops hashes the committed one holds (default: fail)",
+    )
+    args = parser.parse_args()
+
     corpora = load_corpora()
-    dcs_heldout = load_dcs_heldout()
+    dcs_heldout = load_dcs_heldout(allow_missing=args.allow_missing_dcs)
 
     for language, path, hash_fn in (
         (SANSKRIT_LANGUAGE, REPO_ROOT / EXCLUSION_PATH, sentence_hash),
@@ -136,7 +224,9 @@ def main() -> None:
         if language == SANSKRIT_LANGUAGE and dcs_heldout:
             sources[DCS_HELDOUT_SOURCE] = dcs_heldout
             hash_fns[DCS_HELDOUT_SOURCE] = sentence_hash_slp1
-        count = build_exclusion_list(sources, path, hash_fn=hash_fn, hash_fns=hash_fns)
+        count = write_list(
+            sources, path, hash_fn=hash_fn, hash_fns=hash_fns, allow_shrink=args.allow_shrink
+        )
         size = path.stat().st_size
         logger.info(
             "%s: wrote %d unique exclusion hashes to %s (%d bytes)", language, count, path, size

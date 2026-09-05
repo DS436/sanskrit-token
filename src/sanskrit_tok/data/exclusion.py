@@ -36,6 +36,7 @@ __all__ = [
     "LeakageError",
     "assert_not_excluded",
     "build_exclusion_list",
+    "hash_sources",
     "load_exclusion_hashes",
     "sentence_hash",
     "sentence_hash_en",
@@ -111,6 +112,28 @@ _HEADER_FOR_HASH_FN: dict[Callable[[str], str], str] = {
 }
 
 
+def hash_sources(
+    sources: Mapping[str, Sequence[str]],
+    *,
+    hash_fn: Callable[[str], str] = sentence_hash,
+    hash_fns: Mapping[str, Callable[[str], str]] | None = None,
+) -> set[str]:
+    """The unique hashes `build_exclusion_list` would write for `sources`, without writing.
+
+    Split out so a caller can compare a *prospective* list against the committed one
+    before overwriting it — `experiments/02_tpp_parallel/build_exclusion.py` refuses to
+    write a list that would drop hashes the committed file already holds. Sharing this
+    function is what guarantees the comparison is against what would actually be written.
+    """
+    overrides = {} if hash_fns is None else hash_fns
+    hashes: set[str] = set()
+    for name, sentences in sources.items():
+        source_hash_fn = overrides.get(name, hash_fn)
+        for sentence in sentences:
+            hashes.add(source_hash_fn(sentence))
+    return hashes
+
+
 def build_exclusion_list(
     sources: Mapping[str, Sequence[str]],
     path: Path,
@@ -135,12 +158,7 @@ def build_exclusion_list(
     override exists to avoid a lossy Devanagari round-trip, not to mix hash *formats*.
     Mixing formats — an English source into a Sanskrit list — is the caller's error.
     """
-    overrides = {} if hash_fns is None else hash_fns
-    hashes: set[str] = set()
-    for name, sentences in sources.items():
-        source_hash_fn = overrides.get(name, hash_fn)
-        for sentence in sentences:
-            hashes.add(source_hash_fn(sentence))
+    hashes = hash_sources(sources, hash_fn=hash_fn, hash_fns=hash_fns)
 
     source_summary = ", ".join(f"{name}={len(sentences)}" for name, sentences in sources.items())
     path.parent.mkdir(parents=True, exist_ok=True)

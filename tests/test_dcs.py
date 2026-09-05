@@ -36,21 +36,26 @@ from sanskrit_tok.data.dcs import (
     iter_conllu_sentences,
     sentence_is_human_verified,
 )
-from sanskrit_tok.data.exclusion import sentence_hash, sentence_hash_slp1
+from sanskrit_tok.data.exclusion import (
+    build_exclusion_list,
+    sentence_hash,
+    sentence_hash_slp1,
+)
 from sanskrit_tok.encoding import to_slp1
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "dcs_mini.conllu"
 INGEST_PY = REPO_ROOT / "experiments" / "04_morph_constrained" / "ingest_dcs.py"
 DCS_YAML = REPO_ROOT / "experiments" / "04_morph_constrained" / "dcs.yaml"
+BUILD_EXCLUSION_PY = REPO_ROOT / "experiments" / "02_tpp_parallel" / "build_exclusion.py"
 
 MARK = BOUNDARY_MARKER
 
 
-def _load_ingest_module() -> ModuleType:
-    """`experiments/04_morph_constrained/` starts with a digit and cannot be imported;
-    load `ingest_dcs.py` by path, as `tests/test_split_corpora.py` does for exp03."""
-    spec = importlib.util.spec_from_file_location("exp04_ingest_dcs", INGEST_PY)
+def _load_module(name: str, path: Path) -> ModuleType:
+    """Load an experiment script by path: both experiment directories start with a digit
+    and cannot be imported, the pattern `tests/test_split_corpora.py` established."""
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -60,7 +65,12 @@ def _load_ingest_module() -> ModuleType:
 
 @pytest.fixture(scope="module")
 def ingest_module() -> ModuleType:
-    return _load_ingest_module()
+    return _load_module("exp04_ingest_dcs", INGEST_PY)
+
+
+@pytest.fixture(scope="module")
+def build_exclusion_module() -> ModuleType:
+    return _load_module("exp02_build_exclusion", BUILD_EXCLUSION_PY)
 
 
 @pytest.fixture(scope="module")
@@ -218,6 +228,52 @@ def test_align_segments_rejects_non_monotone_offsets() -> None:
     # Two identical segments against a surface that holds only one copy: the second
     # segment cannot start after the first without leaving the surface.
     assert align_segments("ab", ["ab", "ab"]) is None
+
+
+# The offsets `align_segments` actually produces where vowel sandhi contracts two
+# characters into one. The earlier decisions entry claimed the fused character always joins
+# the *left* segment; it does not (docs/decisions.md, 2026-09-05, "Correction: the fused
+# character does not consistently join the left segment"). The rule these four pin: the
+# fused character joins the left segment **unless** the sandhi output equals the right
+# segment's first character (a+E -> E, a+A -> A, a+O -> O), in which case `difflib` matches
+# it to the right segment and the boundary lands before it. The bias is identical across
+# arms, so paired comparisons are unaffected; absolute MorphScore is not portable, which is
+# why MorphScore also reports a symmetric +/-1-character tolerant variant.
+FUSED_SANDHI_CASES = [
+    # (surface, segments, expected offsets, which side the fused character joined)
+    ("rAmeti", ["rAma", "iti"], [4], "left: a + i -> e, and `e` is not `iti`'s first char"),
+    ("tatrEva", ["tatra", "eva"], [5], "left: a + e -> E, and `E` is not `eva`'s first char"),
+    ("vacanenEkam", ["vacanena", "Ekam"], [7], "right: a + E -> E == `Ekam`'s first char"),
+    ("sAgacCat", ["sa", "AgacCat"], [1], "right: a + A -> A == `AgacCat`'s first char"),
+    # No contraction at all: `tat` + `api` is a consonant sandhi, the concatenation and the
+    # surface are the same length, and the boundary is unambiguous.
+    ("tadapi", ["tat", "api"], [3], "no contraction"),
+]
+
+
+@pytest.mark.parametrize(("surface", "segments", "expected", "side"), FUSED_SANDHI_CASES)
+def test_align_segments_pins_where_a_fused_sandhi_character_lands(
+    surface: str, segments: list[str], expected: list[int], side: str
+) -> None:
+    assert align_segments(surface, segments) == expected, side
+
+
+def test_fused_character_joins_the_left_segment_only_sometimes() -> None:
+    """The claim these tests correct, stated as an assertion.
+
+    If the fused character always joined the left segment, every offset below would equal
+    the first segment's length. Two of the four do not, which is the whole point.
+    """
+    joins_left = {
+        surface: align_segments(surface, segments) == [len(segments[0])]
+        for surface, segments, _expected, _side in FUSED_SANDHI_CASES[:4]
+    }
+    assert joins_left == {
+        "rAmeti": True,
+        "tatrEva": True,
+        "vacanenEkam": False,
+        "sAgacCat": False,
+    }
 
 
 # ------------------------------------------------------------------------ stem boundary
@@ -480,3 +536,204 @@ def test_random_seed_zero_is_what_assign_heldout_texts_uses(ingest_module: Modul
     ids = list(range(100))
     expected = set(random.Random(0).sample(sorted(ids), 5))
     assert assign_heldout_texts(ids, fraction=0.05, seed=0) == expected
+
+
+# ------------------------------------------------------------- ingestion split invariants
+
+_SYNTHETIC_HEADER = """## text: {name}
+## text_id: {text_id}
+## chapter: {name}, 1
+## chapter_id: {text_id}
+"""
+
+_SYNTHETIC_SENTENCE = """# text = {text}
+# sent_id = {sent_id}
+1\ttad\ttad\tPRON\t_\t_\t_\t_\t_\tUnsandhied=tad
+2\tapi\tapi\tADV\t_\t_\t_\t_\t_\tUnsandhied=api
+
+"""
+
+
+def _write_conllu(path: Path, blocks: list[str]) -> Path:
+    """A minimal two-word-per-sentence CoNLL-U file assembled from header/sentence blocks."""
+    path.write_text("".join(blocks), encoding="utf-8")
+    return path
+
+
+def _synthetic_text(directory: Path, name: str, text_id: int, texts: list[str]) -> Path:
+    """One well-formed file: a header and one sentence per entry of `texts`."""
+    blocks = [_SYNTHETIC_HEADER.format(name=name, text_id=text_id)]
+    blocks += [
+        _SYNTHETIC_SENTENCE.format(text=text, sent_id=f"{text_id}{index}")
+        for index, text in enumerate(texts, start=1)
+    ]
+    return _write_conllu(directory / f"{name}.conllu", blocks)
+
+
+def test_ingest_accepts_a_well_formed_two_file_corpus(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """The baseline the three invariant tests below deviate from, one at a time."""
+    first = _synthetic_text(tmp_path, "alpha", 1, ["tad api", "tad api ca"])
+    second = _synthetic_text(tmp_path, "beta", 2, ["tvam eva"])
+    out_dir = tmp_path / "dcs"
+    manifest = ingest_module.ingest(
+        conllu_dir=tmp_path,
+        out_dir=out_dir,
+        excluded=frozenset(),
+        heldout_fraction=0.5,
+        seed=0,
+        min_words=2,
+        files=[first, second],
+    )
+    assert manifest["n_sentences_kept"] == 3
+    assert manifest["n_texts"] == 2
+    assert manifest["splits"]["train"]["n_texts"] == 1
+    assert manifest["splits"]["heldout"]["n_texts"] == 1
+    assert (out_dir / "manifest.json").exists()
+
+
+def test_ingest_rejects_a_sentence_whose_text_id_differs_from_its_file_header(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """Routing is by the file's `## text_id`, so a sentence declaring another one is fatal.
+
+    A file holding a second `## text_id:` block is the shape this can really take: the
+    parser carries the new id into the sentences that follow it, while `read_text_id` only
+    ever sees the first, so those sentences would be routed on the wrong text's word.
+    """
+    good = _synthetic_text(tmp_path, "alpha", 1, ["tad api"])
+    smuggled = _write_conllu(
+        tmp_path / "beta.conllu",
+        [
+            _SYNTHETIC_HEADER.format(name="beta", text_id=2),
+            _SYNTHETIC_SENTENCE.format(text="tvam eva", sent_id="21"),
+            _SYNTHETIC_HEADER.format(name="gamma", text_id=3),
+            _SYNTHETIC_SENTENCE.format(text="sa eva", sent_id="31"),
+        ],
+    )
+    with pytest.raises(ingest_module.IngestError) as error:
+        ingest_module.ingest(
+            conllu_dir=tmp_path,
+            out_dir=tmp_path / "dcs",
+            excluded=frozenset(),
+            heldout_fraction=0.5,
+            seed=0,
+            min_words=2,
+            files=[good, smuggled],
+        )
+    message = str(error.value)
+    assert str(smuggled) in message
+    assert "text_id 3" in message and "header says 2" in message
+
+
+def test_read_text_ids_rejects_a_file_with_no_text_id_header(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """No `-1` pseudo-text: files with no header would all be routed together, silently."""
+    good = _synthetic_text(tmp_path, "alpha", 1, ["tad api"])
+    headerless = _write_conllu(
+        tmp_path / "beta.conllu",
+        ["## text: beta\n", _SYNTHETIC_SENTENCE.format(text="tvam eva", sent_id="21")],
+    )
+    assert ingest_module.read_text_ids([good]) == {good: 1}
+    with pytest.raises(ingest_module.IngestError) as error:
+        ingest_module.read_text_ids([good, headerless])
+    assert str(headerless) in str(error.value)
+    assert "text_id" in str(error.value)
+
+
+def test_ingest_fails_on_a_headerless_file_before_writing_anything(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    headerless = _write_conllu(
+        tmp_path / "beta.conllu",
+        ["## text: beta\n", _SYNTHETIC_SENTENCE.format(text="tvam eva", sent_id="21")],
+    )
+    out_dir = tmp_path / "dcs"
+    with pytest.raises(ingest_module.IngestError):
+        ingest_module.ingest(
+            conllu_dir=tmp_path,
+            out_dir=out_dir,
+            excluded=frozenset(),
+            heldout_fraction=0.5,
+            seed=0,
+            min_words=2,
+            files=[headerless],
+        )
+    assert not (out_dir / "manifest.json").exists()
+
+
+def test_assert_splits_disjoint_rejects_a_text_in_both_splits(ingest_module: ModuleType) -> None:
+    ingest_module.assert_splits_disjoint({1, 2}, {3, 4})
+    ingest_module.assert_splits_disjoint(set(), set())
+    with pytest.raises(ingest_module.IngestError) as error:
+        ingest_module.assert_splits_disjoint({1, 2, 3}, {3, 4})
+    assert "[3]" in str(error.value)
+
+
+# ------------------------------------------------------- exclusion-list regeneration guards
+
+
+def _write_heldout(path: Path, texts: list[str]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps({"text_slp1": text}, ensure_ascii=False) + "\n" for text in texts),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_load_dcs_heldout_reads_the_sandhied_slp1_text(
+    tmp_path: Path, build_exclusion_module: ModuleType
+) -> None:
+    path = _write_heldout(tmp_path / "dcs" / "heldout.jsonl", ["tadapi", "tvameva"])
+    assert build_exclusion_module.load_dcs_heldout(path) == ["tadapi", "tvameva"]
+
+
+def test_load_dcs_heldout_fails_when_the_file_is_absent(
+    tmp_path: Path, build_exclusion_module: ModuleType
+) -> None:
+    """A fresh clone must not quietly regenerate the list 30k hashes lighter."""
+    missing = tmp_path / "dcs" / "heldout.jsonl"
+    with pytest.raises(build_exclusion_module.MissingDcsHeldoutError) as error:
+        build_exclusion_module.load_dcs_heldout(missing)
+    assert "ingest_dcs.py" in str(error.value)
+    assert "--allow-missing-dcs" in str(error.value)
+
+
+def test_load_dcs_heldout_returns_empty_when_missing_is_explicitly_allowed(
+    tmp_path: Path, build_exclusion_module: ModuleType
+) -> None:
+    assert build_exclusion_module.load_dcs_heldout(
+        tmp_path / "dcs" / "heldout.jsonl", allow_missing=True
+    ) == []
+
+
+def test_exclusion_list_may_not_shrink_without_allow_shrink(
+    tmp_path: Path, build_exclusion_module: ModuleType
+) -> None:
+    """A leakage guard that silently stops covering a sentence is worse than a broken run."""
+    committed = tmp_path / "exclusion_hashes.txt"
+    build_exclusion_list({"a": ["tadapi", "tvameva"]}, committed, hash_fn=sentence_hash_slp1)
+    before = committed.read_text(encoding="utf-8")
+
+    superset = {sentence_hash_slp1(text) for text in ("tadapi", "tvameva", "sEva")}
+    build_exclusion_module.assert_superset_of_committed(superset, committed)
+
+    shrunk = {sentence_hash_slp1("tadapi")}
+    with pytest.raises(build_exclusion_module.ExclusionShrinkError) as error:
+        build_exclusion_module.write_list(
+            {"a": ["tadapi"]}, committed, hash_fn=sentence_hash_slp1
+        )
+    assert "1 hash" in str(error.value)
+    assert "--allow-shrink" in str(error.value)
+    # The refusal must leave the committed list exactly as it was.
+    assert committed.read_text(encoding="utf-8") == before
+
+    build_exclusion_module.assert_superset_of_committed(shrunk, committed, allow_shrink=True)
+    count = build_exclusion_module.write_list(
+        {"a": ["tadapi"]}, committed, hash_fn=sentence_hash_slp1, allow_shrink=True
+    )
+    assert count == 1
+    assert build_exclusion_module.assert_superset_of_committed(superset, tmp_path / "nope") is None

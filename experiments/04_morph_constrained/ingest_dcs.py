@@ -25,6 +25,13 @@ Three rules the numbers depend on (docs/decisions.md, 2026-09-05):
   does not reconstruct carries no gold segmentation and is counted as unaligned
   (`n_sentences_text_mismatch` counts the sentences where this happens).
 
+Three invariants are checked rather than assumed, because each one failing silently would
+show up only as a MorphScore that looks too good: every file must carry a `## text_id:`
+header (`read_text_ids`; a `-1` pseudo-text would route unrelated files together), every
+sentence's own `text_id` must equal its file header's (routing is by header), and no
+`text_id` may reach both splits (`assert_splits_disjoint`, before the manifest is written).
+All three raise `IngestError`.
+
 The exclusion list itself is regenerated afterwards, with `dcs_heldout` appended:
 
     uv run python experiments/04_morph_constrained/ingest_dcs.py --config .../dcs.yaml
@@ -44,7 +51,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, TextIO
 
-from sanskrit_tok.data.boundaries import build_gold_sentence
+from sanskrit_tok.data.boundaries import build_gold_sentence, text_words_slp1
 from sanskrit_tok.data.dcs import (
     DCS_COMMIT,
     DCS_LICENCE,
@@ -71,6 +78,19 @@ TRAIN_FILENAME = "train.jsonl"
 HELDOUT_FILENAME = "heldout.jsonl"
 MANIFEST_FILENAME = "manifest.json"
 
+#: What `read_text_id` returns for a file with no `## text_id:` header. Such a file is
+#: fatal here rather than routed as a `-1` pseudo-text: every file carrying it would be
+#: lumped into one imaginary text and either held out together or trained on together,
+#: which is precisely the whole-text split this experiment depends on being wrong.
+MISSING_TEXT_ID = -1
+
+#: How many offending paths an error names before it stops listing them.
+_MAX_NAMED = 5
+
+
+class IngestError(RuntimeError):
+    """A corpus invariant the split depends on does not hold; the ingestion must stop."""
+
 
 def assign_heldout_texts(
     text_ids: Iterable[int], *, fraction: float, seed: int
@@ -87,6 +107,43 @@ def assign_heldout_texts(
         return set()
     count = min(len(unique), max(1, int(len(unique) * fraction)))
     return set(random.Random(seed).sample(unique, count))
+
+
+def read_text_ids(paths: Sequence[Path]) -> dict[Path, int]:
+    """Every file's `## text_id`, or raise `IngestError` naming the files that have none.
+
+    The held-out split is by *text*, and a file whose header the parser could not read
+    would be assigned `MISSING_TEXT_ID`; all such files would then share one pseudo-text
+    and be routed together, silently. A missing header means the checkout or the corpus
+    format changed, so the ingestion stops instead of guessing.
+    """
+    text_id_of = {path: read_text_id(path) for path in paths}
+    missing = [path for path, text_id in text_id_of.items() if text_id == MISSING_TEXT_ID]
+    if missing:
+        named = ", ".join(str(path) for path in missing[:_MAX_NAMED])
+        remaining = len(missing) - _MAX_NAMED
+        suffix = "" if remaining <= 0 else f" (+{remaining} more)"
+        raise IngestError(
+            f"{len(missing)} file(s) have no '## text_id:' header and cannot be routed to a "
+            f"split: {named}{suffix}"
+        )
+    return text_id_of
+
+
+def assert_splits_disjoint(train_texts: set[int], heldout_texts: set[int]) -> None:
+    """Raise `IngestError` unless no `text_id` reached both splits.
+
+    The two passes route by file, and every sentence is checked against its own file's
+    header, so this cannot fail as the code stands — which is the point: it is the
+    assertion that says so, and it runs before the manifest is written rather than being
+    rediscovered when a MorphScore number looks too good.
+    """
+    shared = sorted(train_texts & heldout_texts)
+    if shared:
+        raise IngestError(
+            f"{len(shared)} text_id(s) reached both splits, so the held-out set leaks into "
+            f"training: {shared[:_MAX_NAMED]}"
+        )
 
 
 def _previous_dcs_hashes(out_dir: Path) -> frozenset[str]:
@@ -140,7 +197,7 @@ def ingest(
     the tests can run the whole pipeline over a fixture.
     """
     paths = list(conllu_files(conllu_dir) if files is None else files)
-    text_id_of = {path: read_text_id(path) for path in paths}
+    text_id_of = read_text_ids(paths)
     heldout_ids = assign_heldout_texts(
         text_id_of.values(), fraction=heldout_fraction, seed=seed
     )
@@ -171,11 +228,22 @@ def ingest(
 
     def run_pass(split: str, handle: TextIO, pass_paths: Sequence[Path]) -> None:
         for index, path in enumerate(pass_paths, start=1):
+            file_text_id = text_id_of[path]
             for sentence in iter_conllu_sentences(path):
-                gold = build_gold_sentence(sentence)
-                if gold.n_words < min_words:
+                # Routing is by the file's header; the split is only trustworthy if every
+                # sentence in the file really belongs to that text.
+                if sentence.text_id != file_text_id:
+                    raise IngestError(
+                        f"{path}: sentence {sentence.sent_id!r} declares text_id "
+                        f"{sentence.text_id} but the file header says {file_text_id}; it "
+                        f"was about to be routed to the {split!r} split on the header's word"
+                    )
+                # `min_words` before alignment: 14,204 sentences are dropped here, and
+                # building their gold boundaries first is work thrown away.
+                if len(text_words_slp1(sentence)) < min_words:
                     counts["n_dropped_min_words"] += 1
                     continue
+                gold = build_gold_sentence(sentence)
                 digest = sentence_hash_slp1(gold.text_slp1)
                 if digest in excluded:
                     counts["n_dropped_excluded"] += 1
@@ -217,6 +285,8 @@ def ingest(
         run_pass("heldout", heldout_handle, heldout_paths)
     with (out_dir / TRAIN_FILENAME).open("w", encoding="utf-8") as train_handle:
         run_pass("train", train_handle, train_paths)
+
+    assert_splits_disjoint(per_split["train"]["texts"], per_split["heldout"]["texts"])
 
     kept = per_split["train"]["n_sentences"] + per_split["heldout"]["n_sentences"]
     manifest: dict[str, Any] = {
