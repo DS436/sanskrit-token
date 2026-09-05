@@ -310,8 +310,16 @@ class StemAudit:
     so `n_cuts / n_segments` says how much of the corpus the rule marks at all.
     `n_inside_lemma` is the literal `stem_cut_inside_lemma` count and `n_fused` the subset
     of those that `stem_cut_is_fused` explains; `n_inside_lemma - n_fused` is the number of
-    cuts that fall inside the lemma's consonantal body, which is the defect the sandhi-aware
-    rule exists to remove and which must be 0 for it.
+    cuts that fall inside the lemma's consonantal body.
+
+    For `stem_boundary` that difference is **0 by construction, not by measurement**: the
+    rule returns a cut only when `cut == len(lemma)` — outside the lemma, so not counted —
+    or when `stem_cut_is_fused` flags it, so `n_inside_lemma == n_fused` identically and
+    `fraction_inside_lemma_excluding_fused` can only ever be 0.0. Reading that 0 as evidence
+    is circular. The informative number for the sandhi-aware rule is `fraction_fused` (how
+    much of what it marks sits at a boundary no single offset gets right, 36.5% on the
+    held-out split); the difference is a real measurement only for `stem_boundary_lcp`,
+    which is free to cut anywhere and puts 21.4% of its cuts inside the lemma body.
     """
 
     n_segments: int = 0
@@ -343,8 +351,11 @@ def stem_rule_audit(sentence: DcsSentence) -> dict[str, StemAudit]:
     Runs on the same `(segment, lemma, upos)` triples `build_gold_sentence` derives its
     boundaries from, so the numbers describe the corpus as ingested rather than a
     re-derivation of it. The ingestion accumulates these over the held-out split and writes
-    both dicts into the manifest, which is what makes "the new rule's cuts do not fall
-    inside the lemma" a measurement rather than a claim about the code.
+    both dicts into the manifest. Both rules are audited because only the comparison is
+    informative: that the sandhi-aware rule's cuts never fall inside the lemma body follows
+    from its definition (see `StemAudit`), so what the manifest actually establishes is how
+    much of the corpus each rule marks and how the LCP rule it replaced differs — 120,459
+    cuts with 21.4% inside the lemma body against 90,878 cuts with none.
     """
     counters = {"sandhi_aware": StemAudit(), "lcp": StemAudit()}
     for word in sentence.words:

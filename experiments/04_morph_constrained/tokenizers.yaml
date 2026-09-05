@@ -1,6 +1,6 @@
 # The fourteen Experiment 04 tokenizer arms, all trained on the DCS training split.
 #
-# Every arm here is trained on the same 720,510 DCS sentences with the same trainer at the
+# Every arm here is trained on the same 685,805 DCS sentences with the same trainer at the
 # same two vocabulary sizes (CLAUDE.md §2.5), so the paired deltas Experiment 04 reports —
 # T5 - T1_dcs (the constraint alone), T4_oracle - T1_dcs (gold splitting alone),
 # T6 - T4_oracle (the constraint on split text) and T6 - T1_dcs (the proposed method) —
@@ -10,9 +10,9 @@
 # names, which were trained on the Sanskrit sides of the parallel corpora; that is what the
 # `_dcs` / `_oracle_dcs` suffix and the registry's `variant` field exist to keep apart.
 #
-# Four corpora, all streamed from `data/processed/dcs/train.jsonl`, one line per
+# Five corpora, all streamed from `data/processed/dcs/train.jsonl`, one line per
 # `GoldSentence` field, each asserted sentence-by-sentence against the committed exclusion
-# list on its *sandhied* SLP1 text (CLAUDE.md §2.4) so all four are checked against exactly
+# list on its *sandhied* SLP1 text (CLAUDE.md §2.4) so all five are checked against exactly
 # the same strings:
 #
 #   dcs_raw            text_slp1           the sandhied sentence

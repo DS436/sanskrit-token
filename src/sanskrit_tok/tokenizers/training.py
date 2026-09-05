@@ -19,8 +19,8 @@ per-experiment label (`side`, `corpus`) belongs in that experiment's `results.js
 sources in memory (`Mapping[str, Sequence[str]]`) and is what the parallel corpora need:
 they are small, and the leakage filter, the two deduplications and the per-source manifest
 counts all want the whole list. `build_streamed_corpus` takes an iterator of
-`(check_text, write_text)` pairs and never holds the input: Experiment 04 builds four
-corpora from a 720,510-line, 437 MB jsonl, and materialising that as a list of dicts is
+`(check_text, write_text)` pairs and never holds the input: Experiment 04 builds five
+corpora from a 685,805-line, 439 MB jsonl, and materialising that as a list of dicts is
 several gigabytes for no benefit.
 """
 

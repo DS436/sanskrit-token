@@ -53,8 +53,8 @@ mechanism check").
 03 — reported twice: primary over the **raw** sentence's word count, the same denominator
 for every arm, and secondary over the split text's own words for split arms only.
 
-**Run:** `uv run python experiments/04_morph_constrained/run.py` — **3 min**, no
-network beyond the cached off-the-shelf tokenizers, at commit `ca25390` with a clean tree
+**Run:** `uv run python experiments/04_morph_constrained/run.py` — **3–4 min**, no
+network beyond the cached off-the-shelf tokenizers, at commit `eb53842` with a clean tree
 (`results.json` records `git_dirty: false`).
 
 ---
@@ -70,7 +70,9 @@ network beyond the cached off-the-shelf tokenizers, at commit `ca25390` with a c
 | 5. Review fixes: leakage filter, newline-stripped retrain, stem rule, `T5seg` | done |
 
 Every number below is from `outputs/04_morph_constrained/results.json`, run 2026-09-05
-at commit `ca25390`, clean tree. No arm was unavailable (`unavailable_arms: {}`);
+at commit `eb53842`, clean tree (a re-run of the `ca25390` run at the pair-label fix: every
+one of its 9,366 metric leaves is bit-identical, only the figure's tick labels and
+`tpp_delta`'s `label` fields changed). No arm was unavailable (`unavailable_arms: {}`);
 `T0_gemma3` resolved to `unsloth/gemma-3-4b-it`, the substitution already recorded in
 `docs/decisions.md`.
 
@@ -87,12 +89,19 @@ CORRECTIONs).
    differently by each, so 19% of Itihāsa test verses sat verbatim — as letter strings —
    inside a DCS training sentence that hashed to something else. The ingestion now drops a
    training sentence when any 24-letter window of its letter-normalised form occurs in any
-   evaluation sentence. **34,705 sentences dropped** (train 720,510 → 685,805), of which
+   evaluation sentence. **34,705 sentences dropped** (train 720,510 → 685,805). The
+   per-source counts overlap — one training sentence can match several evaluation sets, and
+   is dropped once — so they sum to 35,659 against that deduplicated total of 34,705:
    20,611 matched Itihāsa test, 11,460 Itihāsa dev, 3,581 the DCS held-out split, 5 Sāmayik
    dev, 2 Sāmayik test-OOD, 0 FLORES devtest, 0 Sāmayik test. Residual check: of 400
    randomly sampled Itihāsa test lines, **0** now occur as letter-substrings of
    `tok_train_dcs_raw.txt`; the review measured 19% of Itihāsa test verses occurring
-   verbatim in the pre-filter corpus.
+   verbatim in the pre-filter corpus. The filter has a floor, and it is not symmetric: a
+   training sentence with fewer than 24 letters has no window to offer and is matched only
+   by exact letters-only equality, so 387 of the 51,098 such lines in
+   `tok_train_dcs_raw.txt` (0.06% of its 652,889 written lines) still occur verbatim inside
+   an Itihāsa test verse — the 0/400 residual check tests the opposite direction, whole
+   evaluation verses inside training sentences, and says nothing about this one.
 2. **Line breaks were reaching the pre-tokenizer.** 5–15% of every BPE vocabulary was
    `word\n` entries that no inference-time string can produce, unevenly distributed across
    arms. Every arm in the project is retrained; all 26 now carry **0** newline-bearing
@@ -100,9 +109,12 @@ CORRECTIONs).
 3. **The stem rule cut inside the lemma half the time.** The LCP rule made 120,459 cuts on
    the held-out split, 50.4% of them strictly inside the lemma and only 29.1 pp of those
    explicable as a fused stem-final vowel. The rule is now part-of-speech gated and refuses
-   to cut inside the lemma's consonantal body: 90,878 cuts, 36.5% inside the lemma by
-   character count and **every one of them a flagged fused cut** (the not-fused fraction is
-   0.0000).
+   to cut inside the lemma's consonantal body: 90,878 cuts, **36.5% of them flagged fused
+   cuts** one character short of the lemma's end. Its 0.0000 not-fused-inside-lemma
+   fraction is definitional rather than a measurement — `stem_boundary` returns a cut only
+   at `len(lemma)` or at a flagged fused position, so `n_inside_lemma == n_fused` by
+   construction — and the 36.5% is the informative figure, against the LCP rule's 21.4% of
+   cuts falling strictly inside the lemma body, which *was* a measurement.
 4. **`T5seg` was missing.** The old `T5`/`T6` arms were constrained partly by that
    heuristic, so "MorphBPE with gold boundaries" had never actually been run. It has now,
    and it is the arm that changes the verdict.
@@ -641,8 +653,10 @@ the human-verified held-out subset by **+0.1143 [+0.1063, +0.1224]** at 64k and
 precision and recall together; forbidding them across **segment ∪ heuristic stem (`T5`)**
 raises F1 by +0.0355 [+0.0250, +0.0458] at 64k, essentially all of it recall; and forbidding
 them across **heuristic stem boundaries inside the gold split (`T6`)** raises stem F1 by
-+0.3055 [+0.2938, +0.3169] at 64k over `T4_oracle`. Every interval excludes 0 at both sizes
-in both populations. Whether *sandhi splitting alone* raises MorphScore, which is what H3
++0.3055 [+0.2938, +0.3169] at 64k over `T4_oracle` — but against the heuristic stem
+boundary its own training text was marked with, so that row reads as "the constraint was
+applied", not as an independent validation (Result 2). Every interval excludes 0 at both
+sizes in both populations. Whether *sandhi splitting alone* raises MorphScore, which is what H3
 literally asserts, cannot be read off these tables: the only granularity a split arm has is
 scored over a different population of units (gold segments) from the raw arm's (surface
 words), so the comparison would be between two corpora rather than between two tokenizers.
@@ -705,10 +719,13 @@ decides H4.
    boundary is derived from the segment and its lemma by a part-of-speech-gated,
    sandhi-aware rule that refuses to cut inside the lemma's consonantal body
    (`docs/decisions.md`, 2026-09-05, "Stem boundaries are heuristic", and its CORRECTION).
-   On the held-out split it makes 90,878 cuts, 36.5% of them one character short of the
-   lemma's end at a fused stem-final vowel — flagged as such — and **0** inside the lemma
-   body, against 21.4% for the LCP rule it replaced. Every stem-granularity number is
-   labelled heuristic. `T5seg` is the arm no claim of which depends on it.
+   On the held-out split it makes 90,878 cuts, **36.5% of them one character short of the
+   lemma's end at a fused stem-final vowel**, flagged as such. Its 0 cuts inside the lemma
+   body is a property of the rule's definition, not a measurement of it: `stem_boundary`
+   returns a cut only at `len(lemma)` or at a flagged fused position, so the audit's
+   `n_inside_lemma` and `n_fused` are the same number by construction. What is measured is
+   the 36.5%, and that the LCP rule it replaced put 21.4% of its cuts strictly inside the
+   lemma body. Every stem-granularity number is labelled heuristic. `T5seg` is the arm no claim of which depends on it.
 4. **The fused-sandhi boundary convention shifts boundaries by up to one character.** Vowel
    sandhi fuses two characters into one in 53.4% of multi-segment words, so no character
    offset is *the* boundary; `align_segments` places it on one side or the other depending
