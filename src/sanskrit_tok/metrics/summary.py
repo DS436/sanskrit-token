@@ -23,7 +23,11 @@ __all__ = ["DISTRIBUTION_KEYS", "MetricSummary", "summarise_metric", "summarise_
 #: The distribution keys a metric may attach on top of the `MetricResult` contract
 #: (CLAUDE.md §7), in the order `summarise_metric` looks for them. A metric attaches at
 #: most one, so the order only decides which wins if that ever stops being true.
-DISTRIBUTION_KEYS: tuple[str, ...] = ("per_word", "per_text", "per_pair")
+#: `per_word_f1` is `morphscore`'s, and is a different list from `per_word` (one F1 per
+#: *scored* word, not one token count per word), which is why it is a fourth key rather
+#: than the same one reused (docs/decisions.md, 2026-09-05, "MorphScore: pooled boundary
+#: F1, exclusions counted independently, one-to-one tolerant matching").
+DISTRIBUTION_KEYS: tuple[str, ...] = ("per_word", "per_text", "per_pair", "per_word_f1")
 
 
 class MetricSummary(TypedDict):

@@ -72,8 +72,18 @@ def strip_markers(marked: str, marker: str = BOUNDARY_MARKER) -> tuple[str, list
 
     The offsets are character indices *into the returned plain text*, at the position each
     marker occupied — i.e. the index of the first character after the boundary. Consecutive
-    markers, and a marker at either end, all collapse onto a position that no token span can
-    strictly contain, so they cannot manufacture a violation.
+    markers collapse onto one position, and a marker at either end lands on 0 or on
+    `len(plain)`, which no token span can strictly contain.
+
+    A marker immediately after a space is a different matter, and an earlier version of this
+    docstring claimed it could not manufacture a violation either. It can: `Metaspace`
+    attaches the space *before* a word to that word's first token, so in `ab cd` the token
+    `cd` reports the span `(2, 5)`, which strictly contains offset 3 — the first character of
+    `cd`, and a perfectly respected boundary. `assert_no_cross_boundary_merges` therefore
+    trims whitespace off both edges of every span before testing containment. The marked
+    corpora this project writes put every marker strictly inside a word, so the trim changes
+    none of their numbers; it is there so that the audit stays sound on a marked text whose
+    boundaries fall at word edges.
     """
     out: list[str] = []
     offsets: list[int] = []
@@ -104,6 +114,14 @@ def assert_no_cross_boundary_merges(
     `tokenizer_json`; and count the tokens whose character span `(start, end)` satisfies
     `start < position < end` for some boundary position. Strict containment is the whole
     definition — a token that *ends* at a boundary, or begins at one, respects it.
+
+    **Leading and trailing whitespace is trimmed off each span first.** `Metaspace` reports
+    the space before a word as part of that word's first token, so an untrimmed span would
+    strictly contain the boundary sitting at the word's own first character and count a
+    respected boundary as a violation (`strip_markers` says more). Trimming cannot hide a
+    real violation: whitespace is not part of any morpheme, and a boundary inside a token's
+    actual characters survives it. A token left empty by the trim carries no characters and
+    so can cross nothing.
 
     The sample is **strided, not the first `sample` lines**: a DCS corpus is ordered by text,
     so a prefix would be one work. The file is counted once (a cheap scan), the stride is
@@ -140,8 +158,13 @@ def assert_no_cross_boundary_merges(
             positions = set(offsets)
             n_sentences += 1
             n_boundaries += len(positions)
-            for start, end in tokenizer.encode(text).offsets:
+            for raw_start, raw_end in tokenizer.encode(text).offsets:
                 n_tokens += 1
+                start, end = raw_start, raw_end
+                while start < end and text[start].isspace():
+                    start += 1
+                while end > start and text[end - 1].isspace():
+                    end -= 1
                 crossed = sorted(p for p in positions if start < p < end)
                 if not crossed:
                     continue

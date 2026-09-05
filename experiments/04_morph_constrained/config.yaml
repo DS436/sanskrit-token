@@ -1,0 +1,120 @@
+# Experiment 04 — morpheme-constrained merges (T5, T6) against matched DCS-trained
+# controls, CLAUDE.md §7.
+#
+# Relative paths are resolved against the repository root (the parent of `experiments/`),
+# not the working directory, so the runner works from anywhere in the repo.
+
+# The DCS held-out split, one `GoldSentence` per line, written by `ingest_dcs.py`. Every
+# sentence here is in `data/exclusion_hashes.txt`, which is what kept it out of the twelve
+# `_dcs` arms' training corpora; the runner re-verifies that every run.
+dcs_heldout: data/processed/dcs/heldout.jsonl
+
+corpora:               # prose before verse; order is binding for tables and figure rows
+  - {name: samayik_test, loader: samayik, split: test}
+  - {name: samayik_test_ood, loader: samayik, split: test_ood}
+  - {name: itihasa_test, loader: itihasa, split: test}
+  - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
+
+# Where `experiments/03_sandhi_split/split_corpora.py` wrote one `<corpus>.jsonl` per
+# corpus. The split `_dcs` arms are trained on the DCS *oracle* split but there is no gold
+# split for the parallel corpora, so at evaluation they are measured on the ByT5-reconciled
+# `output` — a train/eval split-source mismatch the README states.
+split_dir: data/processed/split
+
+# MorphScore is the mechanism check, so it covers more than the controlled set: the twelve
+# DCS-trained arms, the three provisional parallel-corpus arms at 64k (for continuity with
+# Experiments 02–03), and three existing-practice arms. Off-the-shelf arms are reported as
+# deployed practice, never as controlled comparisons (CLAUDE.md §2.5).
+arms_morphscore:
+  - T1_bpe_raw_32k_dcs
+  - T1_bpe_raw_64k_dcs
+  - T2_unigram_raw_32k_dcs
+  - T2_unigram_raw_64k_dcs
+  - T4_bpe_split_32k_oracle_dcs
+  - T4_bpe_split_64k_oracle_dcs
+  - T4_unigram_split_32k_oracle_dcs
+  - T4_unigram_split_64k_oracle_dcs
+  - T5_morphbpe_raw_32k_dcs
+  - T5_morphbpe_raw_64k_dcs
+  - T6_morphbpe_split_32k_dcs
+  - T6_morphbpe_split_64k_dcs
+  - T1_bpe_raw_64k          # provisional: trained on the parallel corpora, not DCS
+  - T2_unigram_raw_64k      # provisional
+  - T4_bpe_split_64k        # provisional
+  - T0_o200k                # existing practice
+  - T0_gemma3               # existing practice
+  - T3_sarvam               # existing practice
+
+# TPP is measured on the twelve DCS arms — the controlled set — plus the two provisional
+# arms whose Experiment 03 numbers the README carries forward for continuity.
+arms_tpp:
+  - T1_bpe_raw_32k_dcs
+  - T1_bpe_raw_64k_dcs
+  - T2_unigram_raw_32k_dcs
+  - T2_unigram_raw_64k_dcs
+  - T4_bpe_split_32k_oracle_dcs
+  - T4_bpe_split_64k_oracle_dcs
+  - T4_unigram_split_32k_oracle_dcs
+  - T4_unigram_split_64k_oracle_dcs
+  - T5_morphbpe_raw_32k_dcs
+  - T5_morphbpe_raw_64k_dcs
+  - T6_morphbpe_split_32k_dcs
+  - T6_morphbpe_split_64k_dcs
+  - T1_bpe_raw_64k          # provisional
+  - T4_bpe_split_64k        # provisional
+
+# The headline (docs/decisions.md, "Experiment 04 headline is the paired TPP delta between
+# constrained and unconstrained DCS arms"). `[a, b]` means `TPP(a) - TPP(b)` with the
+# English side and the evaluation sentences held fixed, so a negative delta whose CI
+# excludes 0 is the result H4's TPP half predicts. Four contrasts at two vocabulary sizes:
+# the constraint alone (T5−T1), gold splitting alone (T4_oracle−T1), the constraint on
+# split text (T6−T4_oracle) and the proposed method against the plain baseline (T6−T1).
+paired_deltas:
+  - [T5_morphbpe_raw_32k_dcs, T1_bpe_raw_32k_dcs]
+  - [T5_morphbpe_raw_64k_dcs, T1_bpe_raw_64k_dcs]
+  - [T4_bpe_split_32k_oracle_dcs, T1_bpe_raw_32k_dcs]
+  - [T4_bpe_split_64k_oracle_dcs, T1_bpe_raw_64k_dcs]
+  - [T6_morphbpe_split_32k_dcs, T4_bpe_split_32k_oracle_dcs]
+  - [T6_morphbpe_split_64k_dcs, T4_bpe_split_64k_oracle_dcs]
+  - [T6_morphbpe_split_32k_dcs, T1_bpe_raw_32k_dcs]
+  - [T6_morphbpe_split_64k_dcs, T1_bpe_raw_64k_dcs]
+
+# The out-of-sample constraint audit: each arm is run over the *held-out* marked text it
+# never saw, and the per-boundary violation rate is the mechanism number. Raw arms are
+# audited against `t5_marked` (segment and projected stem boundaries in the sandhied
+# surface), split arms against `t6_marked` (stem boundaries in the oracle split). Each
+# constrained arm sits beside the unconstrained arm trained on the same sentences at the
+# same vocabulary size.
+violation_arms:
+  raw:
+    - T1_bpe_raw_32k_dcs
+    - T1_bpe_raw_64k_dcs
+    - T5_morphbpe_raw_32k_dcs
+    - T5_morphbpe_raw_64k_dcs
+  split:
+    - T4_bpe_split_32k_oracle_dcs
+    - T4_bpe_split_64k_oracle_dcs
+    - T6_morphbpe_split_32k_dcs
+    - T6_morphbpe_split_64k_dcs
+violation_sample: 30150          # the whole held-out split; a strided sample below it
+
+# How many held-out sentences the `spans_cover_text` contract check runs over, per arm and
+# per text form. A failure aborts that arm's MorphScore rather than reporting an F1 built
+# from a boundary set that is not a segmentation.
+spans_coverage_sentences: 500
+
+# Neither pivot is a matched control for a DCS-trained arm: `E1_bpe_64k` was trained on the
+# English side of the *parallel* corpora, so it is labelled cross-corpus, and `T0_o200k` is
+# deployed practice at a 200k general-domain vocabulary. Both are reported as context; the
+# verdict comes from the paired deltas above, where the English side cancels.
+english_pivots:
+  controlled: E1_bpe_64k
+  deployed: T0_o200k
+
+n_bootstrap: 1000
+seed: 0
+ci: 0.95
+
+exclusion_path: data/exclusion_hashes.txt
+exclusion_path_en: data/exclusion_hashes_en.txt
+output_dir: outputs/04_morph_constrained
