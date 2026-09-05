@@ -9,14 +9,28 @@ each arm T0..T7 (CLAUDE.md §6); the metrics never import the registry.
 `value`, `n` and `unit`. `DetailedMetricResult` adds the optional per-item distributions
 that individual metrics attach on top of it.
 
+`TokenizerWithSpans` is `Tokenizer` plus character offsets, which MorphScore needs and no
+count-based metric does (docs/decisions.md, "Token spans for MorphScore deferred to
+Experiment 04"). It is a separate protocol rather than an extra method on `Tokenizer`
+because not every arm can answer it: offsets require a *fast* tokenizer, and a slow
+SentencePiece load can count tokens perfectly well while having no offsets at all.
+
 `require_texts` is the one piece of validation every metric shares, and it exists because
 `str` is itself a `Sequence[str]`: passing a single sentence where a corpus is expected
 type-checks, runs, and silently measures the text one *character* at a time.
 """
 
+from collections.abc import Sequence
 from typing import Protocol, TypedDict, runtime_checkable
 
-__all__ = ["DetailedMetricResult", "MetricResult", "Tokenizer", "require_texts"]
+__all__ = [
+    "DetailedMetricResult",
+    "MetricResult",
+    "Tokenizer",
+    "TokenizerWithSpans",
+    "require_texts",
+    "spans_cover_text",
+]
 
 
 @runtime_checkable
@@ -30,6 +44,55 @@ class Tokenizer(Protocol):
     name: str
 
     def encode(self, text: str) -> list[int]: ...
+
+
+@runtime_checkable
+class TokenizerWithSpans(Tokenizer, Protocol):
+    """A `Tokenizer` that can also say *where* in the text each of its tokens came from.
+
+    `spans(text)` returns half-open character offsets `(start, end)` into `text`, one per
+    token, in order and non-overlapping, whose union covers every non-whitespace character
+    of `text` exactly once (`spans_cover_text` is that invariant, executable). Tokens that
+    carry no characters of their own — a bare `Metaspace` marker, a token that is only the
+    whitespace attached to the next word, a byte-level fragment that lands entirely inside
+    a character an earlier token already covered — are dropped, so `len(spans(text))` is
+    generally *not* `len(encode(text))` and must never be used as a token count.
+
+    Offsets are characters, not bytes: MorphScore compares them against gold morpheme
+    boundaries, which the DCS ingestion records as character indices into the SLP1 surface
+    (docs/decisions.md, "Gold boundaries: segment boundaries from DCS"). A byte-level
+    tokenizer's boundary that falls inside a multi-byte character therefore has to be
+    rounded to a character boundary; `registry.py` documents the rule it uses.
+    """
+
+    def spans(self, text: str) -> list[tuple[int, int]]: ...
+
+
+def spans_cover_text(text: str, spans: Sequence[tuple[int, int]]) -> bool:
+    """Whether `spans` satisfies the `TokenizerWithSpans` contract on `text`.
+
+    True when the spans are in order, non-overlapping, within bounds, and together cover
+    every non-whitespace character of `text` exactly once. Whitespace is not required to
+    be covered — the adapters trim it off the edge of a token — but a span is allowed to
+    *contain* whitespace, because real vocabularies hold multi-word tokens.
+
+    This is the invariant MorphScore depends on: a boundary set built from span starts is
+    only a segmentation of the word if the spans tile it. Exposed rather than inlined so
+    the same check runs against fakes offline and against every real arm under the network
+    gate.
+    """
+    covered = [False] * len(text)
+    cursor = 0
+    for start, end in spans:
+        if start < cursor or end < start or start < 0 or end > len(text):
+            return False
+        for index in range(start, end):
+            covered[index] = True
+        cursor = end
+    return all(
+        is_covered or character.isspace()
+        for is_covered, character in zip(covered, text, strict=True)
+    )
 
 
 class MetricResult(TypedDict):
@@ -51,12 +114,22 @@ class DetailedMetricResult(MetricResult, total=False):
     Every extra key is optional: a caller that only needs the headline number can consume
     this as a plain `MetricResult`. Each metric documents which keys it populates.
 
-    Three groups. The `per_*` lists are the distributions, one entry per word, text or
+    Four groups. The `per_*` lists are the distributions, one entry per word, text or
     aligned pair. `n_undefined` counts how many of those entries are `nan` because the
     ratio does not exist (a zero denominator); it is reported rather than papered over,
     because an undefined item is a property of the corpus, not a measurement of zero.
     `ci_low`/`ci_high`/`n_bootstrap`/`seed` and `source_tokens`/`pivot_tokens` are the
     bootstrap interval and the two token totals behind a ratio metric such as `tpp`.
+
+    The last group belongs to `morphscore`, whose headline `value` is an F1 and therefore
+    needs both of its components (`precision`, `recall`), the three pooled counts they are
+    computed from (`n_matched`, `n_token_boundaries`, `n_gold_boundaries`), the
+    `tolerance` the matching used, its own per-item distribution (`per_word_f1`), and the
+    three populations it did *not* score: `n_excluded_single_token` and
+    `n_excluded_single_morpheme` are Arnett & Bergen's exclusions and
+    `n_skipped_unaligned` the words with no gold segmentation at all. Those three are
+    reported rather than folded into `n`, because how much of a corpus a MorphScore was
+    computed on is part of the number.
     """
 
     per_word: list[int]
@@ -69,6 +142,16 @@ class DetailedMetricResult(MetricResult, total=False):
     seed: int
     source_tokens: int
     pivot_tokens: int
+    precision: float
+    recall: float
+    per_word_f1: list[float]
+    n_matched: int
+    n_token_boundaries: int
+    n_gold_boundaries: int
+    n_excluded_single_token: int
+    n_excluded_single_morpheme: int
+    n_skipped_unaligned: int
+    tolerance: int
 
 
 def require_texts(texts: object) -> None:

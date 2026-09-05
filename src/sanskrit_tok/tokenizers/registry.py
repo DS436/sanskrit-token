@@ -15,6 +15,21 @@ Two shims stand between the upstream libraries and `Tokenizer` (`base.py`):
   be counted once per *word* and inflate every number; `add_special_tokens=False` removes
   them.
 
+**Token spans.** MorphScore needs to know which characters each token covers, not just
+how many tokens there were, so every adapter here also implements `spans(text)` and
+`LoadedTokenizer` carries whichever provider its loader could build. `LoadedTokenizer`
+structurally satisfies `TokenizerWithSpans` (`base.py`) either way, since it always *has*
+a `spans` method; `supports_spans` is the question worth asking, and `spans` on an arm
+that has no provider raises rather than inventing offsets. The three adapter kinds get
+there three different ways — `tokenizers` offsets,
+`transformers` `return_offsets_mapping`, and a byte cursor over tiktoken's token bytes —
+and all three are pushed through `_normalise_spans`, which is where the shared contract
+(in order, non-overlapping, every non-whitespace character covered exactly once) is
+actually enforced. A slow `transformers` tokenizer has no offsets at all; rather than
+dropping the arm, `_FastReloadSpans` reloads the same model id with `use_fast=True` the
+first time spans are asked for, and records the reload by suffixing `source_id` with
+`+fast` (docs/decisions.md, "Token spans for MorphScore deferred to Experiment 04").
+
 The T0 arms are "existing practice" (CLAUDE.md §2.5), never a controlled comparison: their
 vocabulary sizes differ, so their fertilities are read as evidence about deployed
 tokenizers, not as a matched experiment. `T3_*` (off-the-shelf Indic tokenizers) are the
@@ -53,7 +68,7 @@ arm under `unavailable_arms` rather than aborting the whole run over one missing
 import functools
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -142,6 +157,15 @@ class LoadedTokenizer:
     every candidate id (or, for a file-backed arm, the one file path) tried before the
     winner, winner last — a one-element tuple whenever an arm has only ever had one
     candidate. Both default to empty so hand-built fakes in tests need not set them.
+
+    `_spans` is the arm's character-offset provider, or `None` for an arm that has none —
+    a hand-built fake, or a loader tier that cannot produce offsets. `supports_spans` is
+    the question a caller should ask before handing the arm to MorphScore; `spans` raises
+    `TokenizerUnavailable` rather than returning something wrong when the answer is no,
+    which is the same failure mode as an arm that could not be downloaded at all. An arm
+    whose provider is a lazy fast reload reports `supports_spans` `True` before that
+    reload has been attempted: whether it will succeed is not knowable without doing it,
+    and the failure surfaces from `spans` itself.
     """
 
     name: str
@@ -150,10 +174,28 @@ class LoadedTokenizer:
     _encode: Callable[[str], list[int]] = field(repr=False)
     family: str = ""
     attempted: tuple[str, ...] = ()
+    _spans: Callable[[str], list[tuple[int, int]]] | None = field(default=None, repr=False)
 
     def encode(self, text: str) -> list[int]:
         """Token ids for `text`, with no special tokens added."""
         return self._encode(text)
+
+    @property
+    def supports_spans(self) -> bool:
+        """Whether this arm can report character offsets (`TokenizerWithSpans`)."""
+        return self._spans is not None
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Half-open character offsets of each token of `text` (`base.TokenizerWithSpans`).
+
+        Raises `TokenizerUnavailable` if this arm has no offsets to give.
+        """
+        if self._spans is None:
+            raise TokenizerUnavailable(
+                f"{self.name}: this arm reports no character spans, so it cannot be scored "
+                "with morphscore; it can still be counted with every other metric"
+            )
+        return self._spans(text)
 
 
 class TokenizerUnavailable(RuntimeError):
@@ -178,6 +220,91 @@ def _family(name: str) -> str:
     return name.split("_", 1)[0]
 
 
+def _normalise_spans(text: str, raw: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Turn one tokenizer's raw offsets into spans satisfying `base.spans_cover_text`.
+
+    Three repairs, in this order, and every adapter goes through them so the contract has
+    one implementation rather than three:
+
+    1. **Clip to the previous span's end.** Raw offsets can overlap. A byte-level BPE may
+       split one multi-byte character across two tokens, and both then report the same
+       character range; the earlier token keeps the character and the later one collapses.
+    2. **Trim whitespace off both edges.** `Metaspace` and byte-level pre-tokenizers
+       attach the space *before* a word to that word's first token, so raw offsets tile
+       the whole string including its spaces. Whitespace is not part of any morpheme and
+       a boundary sitting on a space would be scored as a segmentation decision, so it is
+       trimmed away. Whitespace *inside* a span survives: multi-word tokens are real.
+    3. **Drop what is left empty.** A token that was only a space, only a `Metaspace`
+       marker, or only the tail of a character an earlier token already covered carries
+       no characters, so it has no span. This is why `len(spans(text))` is not a token
+       count.
+
+    Not a validator: it produces a conforming result from any input rather than rejecting
+    a non-conforming one, which is what lets a single implementation serve three upstream
+    libraries. The invariant itself is asserted in the tests, against `spans_cover_text`.
+    """
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for raw_start, raw_end in raw:
+        start = max(int(raw_start), cursor)
+        end = min(int(raw_end), len(text))
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start >= end:
+            continue
+        spans.append((start, end))
+        cursor = end
+    return spans
+
+
+def _byte_boundaries_to_char_spans(
+    text: str, token_byte_lengths: Sequence[int]
+) -> list[tuple[int, int]]:
+    """Character spans for a byte-level tokenizer that reports only token byte lengths.
+
+    tiktoken has no offsets API: `decode_single_token_bytes` gives each token's bytes, and
+    their lengths accumulate into a byte cursor over `text.encode("utf-8")`. Every byte
+    position is then mapped back to a character position.
+
+    **A boundary that falls inside a multi-byte character is rounded up to that
+    character's end.** UTF-8 continuation bytes are not character boundaries, so a token
+    that ends mid-character has no exact character offset; rounding up means the character
+    belongs to whichever token holds its *first* byte, and the token that holds only its
+    tail collapses to an empty span and is dropped by `_normalise_spans`. Rounding down
+    instead would give two tokens the same character and break the covered-exactly-once
+    half of the contract. It does not arise on SLP1, which is ASCII; it can on Devanagari,
+    where every character is three bytes.
+    """
+    encoded = text.encode("utf-8")
+    char_of_byte = [len(text)] * (len(encoded) + 1)
+    is_char_start = [False] * (len(encoded) + 1)
+    position = 0
+    for index, character in enumerate(text):
+        width = len(character.encode("utf-8"))
+        is_char_start[position] = True
+        for offset in range(width):
+            char_of_byte[position + offset] = index
+        position += width
+    is_char_start[len(encoded)] = True
+
+    def boundary(byte_index: int) -> int:
+        if is_char_start[byte_index]:
+            return char_of_byte[byte_index]
+        return char_of_byte[byte_index] + 1
+
+    raw: list[tuple[int, int]] = []
+    cursor = 0
+    for length in token_byte_lengths:
+        if cursor >= len(encoded):
+            break
+        end = min(cursor + length, len(encoded))
+        raw.append((boundary(cursor), boundary(end)))
+        cursor = end
+    return _normalise_spans(text, raw)
+
+
 class TiktokenAdapter:
     """Wraps a `tiktoken.Encoding` as a plain `str -> list[int]` callable.
 
@@ -191,6 +318,12 @@ class TiktokenAdapter:
     def __call__(self, text: str) -> list[int]:
         ids: list[int] = list(self._encoding.encode(text, disallowed_special=()))
         return ids
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Character spans, via each token's byte length (`_byte_boundaries_to_char_spans`)."""
+        ids = self._encoding.encode(text, disallowed_special=())
+        lengths = [len(self._encoding.decode_single_token_bytes(token_id)) for token_id in ids]
+        return _byte_boundaries_to_char_spans(text, lengths)
 
 
 class HFAdapter:
@@ -206,6 +339,21 @@ class HFAdapter:
     def __call__(self, text: str) -> list[int]:
         ids: list[int] = list(self._tokenizer.encode(text, add_special_tokens=False))
         return ids
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Character spans from `return_offsets_mapping`, which only a *fast* tokenizer has.
+
+        Raises `TokenizerUnavailable` on a slow (pure-Python) tokenizer: it can count
+        tokens but has no offsets at all, and a caller that got an empty list back would
+        read it as "this text has no tokens". `_FastReloadSpans` is the recovery path.
+        """
+        if not getattr(self._tokenizer, "is_fast", False):
+            raise TokenizerUnavailable(
+                "this transformers tokenizer loaded slow (pure-Python) and reports no "
+                "character offsets; reload the same model id with use_fast=True"
+            )
+        encoding = self._tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        return _normalise_spans(text, encoding["offset_mapping"])
 
 
 class TokenizersAdapter:
@@ -226,6 +374,11 @@ class TokenizersAdapter:
         ids: list[int] = list(self._tokenizer.encode(text, add_special_tokens=False).ids)
         return ids
 
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """Character spans from `Encoding.offsets`, which this library always provides."""
+        encoding = self._tokenizer.encode(text, add_special_tokens=False)
+        return _normalise_spans(text, encoding.offsets)
+
 
 def _hf_from_pretrained(model_id: str, token: str | None) -> Any:
     """`AutoTokenizer.from_pretrained`, imported lazily and monkeypatchable in tests.
@@ -238,6 +391,96 @@ def _hf_from_pretrained(model_id: str, token: str | None) -> Any:
 
     kwargs: dict[str, Any] = {"token": token} if token else {}
     return AutoTokenizer.from_pretrained(model_id, **kwargs)
+
+
+def _hf_from_pretrained_fast(model_id: str, token: str | None) -> Any:
+    """`AutoTokenizer.from_pretrained(..., use_fast=True)`, separately monkeypatchable.
+
+    Deliberately *not* a keyword argument on `_hf_from_pretrained`: that function is the
+    seam every existing test monkeypatches with a two-argument fake, and widening its
+    signature would make those fakes silently wrong the day a caller started passing the
+    third argument. Two names, two seams.
+    """
+    from transformers import AutoTokenizer
+
+    kwargs: dict[str, Any] = {"token": token} if token else {}
+    return AutoTokenizer.from_pretrained(model_id, use_fast=True, **kwargs)
+
+
+class _FastReloadSpans:
+    """Spans for an HF arm whose tokenizer loaded slow: reload it fast, once, on demand.
+
+    `T0_gemma3` is the arm this exists for (docs/decisions.md, "Token spans for MorphScore
+    deferred to Experiment 04"): a SentencePiece model can load as a slow tokenizer, which
+    counts tokens correctly — so every Experiment 01-03 metric is unaffected — but reports
+    no character offsets. Reloading is deferred to the first `spans` call so that an
+    experiment which only counts tokens never pays for it, and cached afterwards.
+
+    A successful reload is a change of what is being measured, so it is logged at WARNING
+    and reported through `on_reload`, which suffixes the arm's `source_id` with `+fast`;
+    `results.json` then says `"<model id>+fast"` and the substitution is visible in the
+    results rather than only in the log.
+
+    A failed reload raises `TokenizerUnavailable` from `spans` — the arm keeps working for
+    every count-based metric and is unavailable only for MorphScore. `OSError` covers the
+    hub failures, `ValueError` the "couldn't instantiate the backend tokenizer" a model
+    with no fast converter raises, and `ImportError` the missing `sentencepiece`/`protobuf`
+    conversion dependencies; anything else is a defect here and propagates.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        model_id: str,
+        token: str | None,
+        on_reload: Callable[[str], None],
+    ) -> None:
+        self._name = name
+        self._model_id = model_id
+        self._token = token
+        self._on_reload = on_reload
+        self._delegate: HFAdapter | None = None
+
+    def __call__(self, text: str) -> list[tuple[int, int]]:
+        if self._delegate is None:
+            self._delegate = self._reload()
+        return self._delegate.spans(text)
+
+    def _reload(self) -> HFAdapter:
+        try:
+            tokenizer = _hf_from_pretrained_fast(self._model_id, self._token)
+        except (OSError, ValueError, ImportError) as exc:
+            raise TokenizerUnavailable(
+                f"{self._name}: {self._model_id} loaded as a slow tokenizer and could not be "
+                f"reloaded with use_fast=True, so it has no character spans: "
+                f"{_first_line(str(exc))}"
+            ) from exc
+        if not getattr(tokenizer, "is_fast", False):
+            raise TokenizerUnavailable(
+                f"{self._name}: {self._model_id} is still a slow tokenizer after "
+                "use_fast=True, so it has no character spans"
+            )
+        logger.warning(
+            "%s: reloaded %s with use_fast=True for token spans; recorded as %s+fast",
+            self._name,
+            self._model_id,
+            self._model_id,
+        )
+        self._on_reload(f"{self._model_id}+fast")
+        return HFAdapter(tokenizer)
+
+
+def _hf_spans_provider(
+    loaded: LoadedTokenizer, adapter: HFAdapter, tokenizer: Any, model_id: str, token: str | None
+) -> Callable[[str], list[tuple[int, int]]]:
+    """The adapter's own offsets when `tokenizer` is fast, else a lazy fast reload of it."""
+    if getattr(tokenizer, "is_fast", False):
+        return adapter.spans
+
+    def record(source_id: str) -> None:
+        loaded.source_id = source_id
+
+    return _FastReloadSpans(loaded.name, model_id, token, record)
 
 
 def _hf_vocab_size(tokenizer: Any) -> int:
@@ -266,14 +509,16 @@ def _load_tiktoken_arm(name: str, encoding_name: str) -> LoadedTokenizer:
     import tiktoken
 
     encoding = tiktoken.get_encoding(encoding_name)
+    adapter = TiktokenAdapter(encoding)
     logger.info("%s: loaded tiktoken encoding %s", name, encoding_name)
     return LoadedTokenizer(
         name=name,
         source_id=encoding_name,
         vocab_size=int(encoding.n_vocab),
-        _encode=TiktokenAdapter(encoding),
+        _encode=adapter,
         family=_family(name),
         attempted=(encoding_name,),
+        _spans=adapter.spans,
     )
 
 
@@ -319,14 +564,17 @@ def _load_hf_arm(name: str, candidates: tuple[str, ...]) -> LoadedTokenizer:
                 candidates[0],
             )
         logger.info("%s: loaded %s", name, model_id)
-        return LoadedTokenizer(
+        adapter = HFAdapter(tokenizer)
+        loaded = LoadedTokenizer(
             name=name,
             source_id=model_id,
             vocab_size=_hf_vocab_size(tokenizer),
-            _encode=HFAdapter(tokenizer),
+            _encode=adapter,
             family=_family(name),
             attempted=tuple(attempted),
         )
+        loaded._spans = _hf_spans_provider(loaded, adapter, tokenizer, model_id, token)
+        return loaded
     raise TokenizerUnavailable(
         f"{name}: no candidate tokenizer could be loaded. Tried:\n  " + "\n  ".join(failures)
     )
@@ -368,14 +616,17 @@ def _load_brahmic131k_arm(name: str) -> LoadedTokenizer:
         failures.append(f"AutoTokenizer({model_id}): {_first_line(str(exc))}")
     else:
         logger.info("%s: loaded %s via AutoTokenizer", name, model_id)
-        return LoadedTokenizer(
+        adapter = HFAdapter(tokenizer)
+        loaded = LoadedTokenizer(
             name=name,
             source_id=model_id,
             vocab_size=_hf_vocab_size(tokenizer),
-            _encode=HFAdapter(tokenizer),
+            _encode=adapter,
             family=_family(name),
             attempted=tuple(attempted),
         )
+        loaded._spans = _hf_spans_provider(loaded, adapter, tokenizer, model_id, token)
+        return loaded
 
     attempted.append(model_id)
     try:
@@ -387,13 +638,15 @@ def _load_brahmic131k_arm(name: str) -> LoadedTokenizer:
         failures.append(f"tokenizers.Tokenizer({model_id}): {_first_line(str(exc))}")
     else:
         logger.info("%s: loaded %s via tokenizers.Tokenizer", name, model_id)
+        raw_adapter = TokenizersAdapter(fast_tokenizer)
         return LoadedTokenizer(
             name=name,
             source_id=model_id,
             vocab_size=int(fast_tokenizer.get_vocab_size()),
-            _encode=TokenizersAdapter(fast_tokenizer),
+            _encode=raw_adapter,
             family=_family(name),
             attempted=tuple(attempted),
+            _spans=raw_adapter.spans,
         )
 
     attempted.append(model_id)
@@ -404,13 +657,15 @@ def _load_brahmic131k_arm(name: str) -> LoadedTokenizer:
         failures.append(f".tiktoken({model_id}): {_first_line(str(exc))}")
     else:
         logger.info("%s: loaded %s/%s via tiktoken.Encoding", name, model_id, ranks_file)
+        tiktoken_adapter = TiktokenAdapter(encoding)
         return LoadedTokenizer(
             name=name,
             source_id=model_id,
             vocab_size=int(encoding.n_vocab),
-            _encode=TiktokenAdapter(encoding),
+            _encode=tiktoken_adapter,
             family=_family(name),
             attempted=tuple(attempted),
+            _spans=tiktoken_adapter.spans,
         )
 
     raise TokenizerUnavailable(
@@ -494,14 +749,16 @@ def _load_trained_arm(name: str) -> LoadedTokenizer:
     from tokenizers import Tokenizer as _RawTokenizer
 
     tokenizer = _RawTokenizer.from_file(str(path))
+    adapter = TokenizersAdapter(tokenizer)
     logger.info("%s: loaded trained tokenizer from %s", name, path)
     return LoadedTokenizer(
         name=name,
         source_id=str(path),
         vocab_size=int(tokenizer.get_vocab_size()),
-        _encode=TokenizersAdapter(tokenizer),
+        _encode=adapter,
         family=_family(name),
         attempted=(str(path),),
+        _spans=adapter.spans,
     )
 
 

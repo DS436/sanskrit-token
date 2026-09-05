@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sanskrit_tok.tokenizers.base import Tokenizer
+from sanskrit_tok.tokenizers.base import Tokenizer, TokenizerWithSpans, spans_cover_text
 from sanskrit_tok.tokenizers.registry import (
     REGISTRY,
     T0_GEMMA3_CANDIDATES,
@@ -524,3 +524,209 @@ def test_each_t3_arm_loads_or_is_reported_unavailable(arm: str) -> None:
     assert tok.family == "T3"
     assert tok.encode(DEVANAGARI)
     assert tok.encode(ENGLISH)
+
+
+# ------------------------------------------------------------------------------ spans
+
+
+#: The Experiment 04 spans sanity sentence: one sandhi-fused word (`tadapi` = `tad` +
+#: `api`) and two unfused ones, in SLP1 and in the Devanagari it round-trips from.
+SPANS_SLP1 = "tadapi rAmaH gacCati"
+SPANS_DEVANAGARI = "तदपि रामः गच्छति"
+
+#: Every arm whose spans the Experiment 04 plan names, across all three adapter kinds.
+SPANS_ARMS = (
+    "T0_o200k",
+    "T0_gemma3",
+    "T0_llama4",
+    "T3_sarvam",
+    "T1_bpe_raw_64k",
+    "T4_bpe_split_64k",
+)
+
+
+class _FakeFastHF:
+    """A `transformers` fast tokenizer, as far as `HFAdapter.spans` can tell.
+
+    `__call__` is the offsets path (`return_offsets_mapping=True`); `encode` is the id
+    path. The offsets deliberately include the space before `world`, which is what a
+    byte-level fast tokenizer really returns and what the adapter has to trim.
+    """
+
+    is_fast = True
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, text: str, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append((text, kwargs))
+        return {"input_ids": [4, 5], "offset_mapping": [(0, 5), (5, 11)]}
+
+    def encode(self, text: str, **kwargs: Any) -> list[int]:
+        return [4, 5]
+
+
+def test_loaded_tokenizer_without_spans_reports_it_and_raises() -> None:
+    tok = LoadedTokenizer(name="T_fake", source_id="fake/id", vocab_size=1, _encode=lambda _: [0])
+    assert tok.supports_spans is False
+    with pytest.raises(TokenizerUnavailable):
+        tok.spans("abc")
+
+
+def test_loaded_tokenizer_with_spans_satisfies_the_spans_protocol() -> None:
+    tok = LoadedTokenizer(
+        name="T_fake",
+        source_id="fake/id",
+        vocab_size=1,
+        _encode=lambda _: [0],
+        _spans=lambda text: [(0, len(text))],
+    )
+    assert tok.supports_spans is True
+    assert isinstance(tok, TokenizerWithSpans)
+    assert tok.spans("abc") == [(0, 3)]
+
+
+def test_hf_adapter_spans_trims_whitespace_and_passes_the_offsets_flag() -> None:
+    fake = _FakeFastHF()
+    adapter = HFAdapter(fake)
+    assert adapter.spans("hello world") == [(0, 5), (6, 11)]
+    assert fake.calls == [
+        ("hello world", {"add_special_tokens": False, "return_offsets_mapping": True})
+    ]
+
+
+def test_hf_adapter_spans_refuses_a_slow_tokenizer() -> None:
+    class _SlowHF:
+        is_fast = False
+
+        def encode(self, text: str, **kwargs: Any) -> list[int]:
+            return [1]
+
+    with pytest.raises(TokenizerUnavailable):
+        HFAdapter(_SlowHF()).spans("hello")
+
+
+def test_slow_hf_arm_reloads_fast_for_spans_and_records_the_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`T0_gemma3` is the arm this path exists for (docs/decisions.md, "Token spans for
+    MorphScore deferred to Experiment 04"): a slow SentencePiece load can count tokens but
+    cannot report offsets, so the first `spans` call reloads the same id with
+    `use_fast=True` and suffixes `source_id` with `+fast`."""
+    import sanskrit_tok.tokenizers.registry as registry
+
+    class _SlowHF:
+        is_fast = False
+
+        def encode(self, text: str, **kwargs: Any) -> list[int]:
+            return [1]
+
+    reloaded: list[str] = []
+
+    def fake_fast(model_id: str, token: str | None) -> Any:
+        reloaded.append(model_id)
+        return _FakeFastHF()
+
+    monkeypatch.setattr(registry, "_hf_from_pretrained", lambda model_id, token: _SlowHF())
+    monkeypatch.setattr(registry, "_hf_from_pretrained_fast", fake_fast)
+    monkeypatch.setattr(registry, "_hf_vocab_size", lambda _: 256000)
+
+    tok = load_tokenizer("T0_gemma3")
+    assert tok.source_id == T0_GEMMA3_CANDIDATES[0]
+    assert tok.supports_spans is True
+
+    assert tok.spans("hello world") == [(0, 5), (6, 11)]
+    assert reloaded == [T0_GEMMA3_CANDIDATES[0]]
+    assert tok.source_id == f"{T0_GEMMA3_CANDIDATES[0]}+fast"
+
+    # The reload happens once and is cached.
+    assert tok.spans("hello world") == [(0, 5), (6, 11)]
+    assert reloaded == [T0_GEMMA3_CANDIDATES[0]]
+
+
+def test_slow_hf_arm_reports_spans_unavailable_when_the_fast_reload_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sanskrit_tok.tokenizers.registry as registry
+
+    class _SlowHF:
+        is_fast = False
+
+        def encode(self, text: str, **kwargs: Any) -> list[int]:
+            return [1]
+
+    def fails(model_id: str, token: str | None) -> Any:
+        raise ValueError("Couldn't instantiate the backend tokenizer")
+
+    monkeypatch.setattr(registry, "_hf_from_pretrained", lambda model_id, token: _SlowHF())
+    monkeypatch.setattr(registry, "_hf_from_pretrained_fast", fails)
+    monkeypatch.setattr(registry, "_hf_vocab_size", lambda _: 256000)
+
+    tok = load_tokenizer("T0_gemma3")
+    with pytest.raises(TokenizerUnavailable) as excinfo:
+        tok.spans("hello")
+    assert "backend tokenizer" in str(excinfo.value)
+    # Counting tokens still works; only spans are unavailable.
+    assert tok.encode("hello") == [1]
+
+
+def test_tokenizers_adapter_spans_trims_the_metaspace_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A `Metaspace` pre-tokenizer attaches the preceding space to the following token, so
+    its raw offsets tile the whole string; the adapter trims that space away."""
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    path = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
+    _write_tiny_bpe_tokenizer(path, vocab_size=80)
+
+    tok = load_tokenizer("T1_bpe_raw_32k")
+
+    text = "rAmaH gacCati"
+    assert tok.supports_spans is True
+    spans = tok.spans(text)
+    assert spans_cover_text(text, spans)
+    assert spans[0][0] == 0
+    assert spans[-1][1] == len(text)
+
+
+def test_tiktoken_adapter_spans_cover_hello_world() -> None:
+    tok = _skip_if_tiktoken_is_offline()
+    assert tok.supports_spans is True
+    spans = tok.spans("hello world")
+    assert spans_cover_text("hello world", spans)
+    assert spans == [(0, 5), (6, 11)]
+
+
+def test_tiktoken_adapter_spans_cover_multibyte_text() -> None:
+    """Devanagari is three UTF-8 bytes per character, so the byte cursor and the character
+    cursor diverge; the map from one to the other is what this pins."""
+    tok = _skip_if_tiktoken_is_offline()
+    assert spans_cover_text(SPANS_DEVANAGARI, tok.spans(SPANS_DEVANAGARI))
+
+
+def test_tiktoken_span_of_a_token_ending_mid_character_extends_to_the_character_end() -> None:
+    """A byte-level token can end inside a multi-byte character. The byte->character map
+    rounds such a boundary *up* to the character's end, so the character is covered once
+    (by the earlier token) and the later token's span is empty and dropped."""
+    from sanskrit_tok.tokenizers.registry import _byte_boundaries_to_char_spans
+
+    text = "अb"  # 3 bytes + 1 byte
+    # Three "tokens": bytes [0,1), [1,3), [3,4) — the first two split the Devanagari char.
+    spans = _byte_boundaries_to_char_spans(text, [1, 2, 1])
+    assert spans == [(0, 1), (1, 2)]
+    assert spans_cover_text(text, spans)
+
+
+@NETWORK_TESTS
+@pytest.mark.parametrize("arm", SPANS_ARMS)
+@pytest.mark.parametrize("text", [SPANS_SLP1, SPANS_DEVANAGARI])
+def test_every_spans_arm_covers_the_sanity_sentence(arm: str, text: str) -> None:
+    try:
+        tok = load_tokenizer(arm)
+    except TokenizerUnavailable as exc:
+        pytest.skip(f"{arm}: not available ({exc})")
+        return
+    assert tok.supports_spans is True
+    spans = tok.spans(text)
+    assert spans, f"{arm} produced no spans"
+    assert spans_cover_text(text, spans), f"{arm} spans do not cover {text!r}: {spans}"
