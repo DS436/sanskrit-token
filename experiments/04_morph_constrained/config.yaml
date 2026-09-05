@@ -99,6 +99,8 @@ violation_arms:
     - T1_bpe_raw_64k_dcs
     - T5_morphbpe_raw_32k_dcs
     - T5_morphbpe_raw_64k_dcs
+    - T5_morphbpe_rawseg_32k_dcs
+    - T5_morphbpe_rawseg_64k_dcs
   split:
     - T4_bpe_split_32k_oracle_dcs
     - T4_bpe_split_64k_oracle_dcs
