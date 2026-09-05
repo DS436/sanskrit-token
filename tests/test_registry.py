@@ -84,6 +84,7 @@ ALL_ARMS = (
     "T4_bpe_split_64k",
     "T4_unigram_split_32k",
     "T4_unigram_split_64k",
+    "T7_byt5",
     *DCS_ARMS,
 )
 
@@ -196,8 +197,8 @@ def test_list_tokenizers_filters_by_family() -> None:
     assert list_tokenizers(family="T3") == sorted(T3_ARMS)
 
 
-def test_registry_carries_thirty_four_arms() -> None:
-    assert len(list_tokenizers()) == 34
+def test_registry_carries_thirty_five_arms() -> None:
+    assert len(list_tokenizers()) == 35
 
 
 def test_list_tokenizers_filters_the_english_control_family() -> None:
@@ -250,6 +251,59 @@ def test_dcs_arm_loads_from_tokenizer_json_with_its_family_and_variant(
     assert tok.source_id == str(path)
     assert tok.supports_spans
     assert tok.encode("tad api")
+
+
+# --------------------------------------------------------------------------- T7 bytes
+
+
+def test_byt5_arm_is_registered_with_a_byte_vocabulary() -> None:
+    tok = load_tokenizer("T7_byt5")
+
+    assert tok.name == "T7_byt5"
+    assert tok.family == "T7"
+    assert tok.variant == ""
+    assert tok.vocab_size == 256
+    assert tok.source_id == "bytes/utf-8"
+    assert tok.attempted == ("bytes",)
+
+
+def test_byt5_arm_encodes_utf8_byte_values() -> None:
+    tok = load_tokenizer("T7_byt5")
+
+    assert tok.encode("tad api") == list(b"tad api")
+    assert tok.encode(DEVANAGARI) == list(DEVANAGARI.encode("utf-8"))
+    assert max(tok.encode(DEVANAGARI)) < 256
+
+
+def test_byt5_arm_needs_no_files_and_no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike every other arm, `T7_byt5` is a rule, not an artefact: no `tokenizer.json`
+    to find and no repository to download, so it loads under any tokenizer directory."""
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", "/nonexistent")
+
+    assert load_tokenizer("T7_byt5").vocab_size == 256
+
+
+def test_byt5_arm_reports_one_span_per_character() -> None:
+    tok = load_tokenizer("T7_byt5")
+    text = "tad api"
+
+    spans = tok.spans(text)
+
+    assert tok.supports_spans
+    assert spans_cover_text(text, spans)
+    assert spans == [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7)]
+
+
+def test_byt5_arm_groups_the_bytes_of_a_multibyte_character_into_one_span() -> None:
+    """Three UTF-8 bytes make one Devanagari character, and a boundary inside a character
+    is not a segmentation decision, so the character is one span rather than three."""
+    tok = load_tokenizer("T7_byt5")
+
+    spans = tok.spans(DEVANAGARI)
+
+    assert spans_cover_text(DEVANAGARI, spans)
+    assert spans == [(index, index + 1) for index in range(len(DEVANAGARI))]
+    assert len(tok.encode(DEVANAGARI)) == 3 * len(DEVANAGARI)
 
 
 def test_a_non_dcs_arm_has_an_empty_variant(

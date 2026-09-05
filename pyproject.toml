@@ -46,6 +46,13 @@ src = ["src", "tests", "experiments"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+# `src/sanskrit_tok/lm/model.py` is nanoGPT vendored byte-for-byte (its header records the
+# upstream commit and file sha256). Linting it would mean reformatting it, which would
+# destroy the correspondence that makes that provenance checkable, so every selected rule
+# is waived for that one file and no other.
+[tool.ruff.lint.per-file-ignores]
+"src/sanskrit_tok/lm/model.py" = ["E", "F", "I", "UP", "B"]
+
 [tool.mypy]
 strict = true
 files = ["src"]
@@ -63,6 +70,14 @@ module = [
     "transformers.*",
 ]
 ignore_missing_imports = true
+
+# Vendored nanoGPT: unannotated upstream code, kept byte-for-byte (see the ruff waiver
+# above and the file's own header). Everything this project wrote around it is strict.
+[[tool.mypy.overrides]]
+module = ["sanskrit_tok.lm.model"]
+ignore_errors = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

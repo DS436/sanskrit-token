@@ -93,6 +93,8 @@ __all__ = [
     "T3_INDICSUPER_CANDIDATES",
     "T3_SARVAM_CANDIDATES",
     "T3_SUTRA_CANDIDATES",
+    "T7_BYTE_VOCAB_SIZE",
+    "ByteAdapter",
     "HFAdapter",
     "LoadedTokenizer",
     "TiktokenAdapter",
@@ -150,6 +152,14 @@ T3_INDICSUPER_CANDIDATES: tuple[str, ...] = (
     "ai4bharat/IndicSuperTokenizer",
     "ai4bharat/indic-super-tokenizer",
 )
+
+
+#: `T7_byt5` has no vocabulary file and no repository: its ids are the 256 possible UTF-8
+#: byte values, so it is the tokenizer-free floor every subword arm is measured against
+#: (docs/decisions.md, 2026-09-05, "Experiment 05 runs in two tracks"). The name keeps the
+#: `byt5` label of CLAUDE.md §6 because ByT5 is the published model of this vocabulary, but
+#: nothing is downloaded: `T7_byt5` is UTF-8 itself.
+T7_BYTE_VOCAB_SIZE = 256
 
 
 @dataclass
@@ -413,6 +423,31 @@ class TokenizersAdapter:
         """Character spans from `Encoding.offsets`, which this library always provides."""
         encoding = self._tokenizer.encode(text, add_special_tokens=False)
         return _normalise_spans(text, encoding.offsets)
+
+
+class ByteAdapter:
+    """UTF-8 bytes as token ids: the `T7_byt5` arm's whole implementation.
+
+    `__call__` is `list(text.encode("utf-8"))` — 256 possible ids, no vocabulary, no
+    training corpus, nothing that can be unavailable.
+
+    `spans` is the reason this is a class rather than a lambda. One *byte* is not a
+    segmentation decision: two of the three bytes of a Devanagari character fall strictly
+    inside it, and a boundary there would be scored by MorphScore as a claim about
+    morphology that no tokenizer made. `_byte_boundaries_to_char_spans` therefore rounds
+    every boundary up to a character edge, which collapses the continuation bytes into
+    empty spans that `_normalise_spans` drops, leaving exactly one span per non-whitespace
+    character. On SLP1, which is ASCII, one byte *is* one character and the two coincide.
+    So `len(spans(text))` is a character count and `len(encode(text))` a byte count, and
+    for Devanagari the second is three times the first.
+    """
+
+    def __call__(self, text: str) -> list[int]:
+        return list(text.encode("utf-8"))
+
+    def spans(self, text: str) -> list[tuple[int, int]]:
+        """One span per non-whitespace character (see the class docstring)."""
+        return _byte_boundaries_to_char_spans(text, [1] * len(text.encode("utf-8")))
 
 
 def _hf_from_pretrained(model_id: str, token: str | None) -> Any:
@@ -798,6 +833,26 @@ def _load_trained_arm(name: str) -> LoadedTokenizer:
     )
 
 
+def _load_byte_arm(name: str) -> LoadedTokenizer:
+    """Load the byte-level `T7_byt5` arm, which is constructed rather than fetched.
+
+    Never raises `TokenizerUnavailable`: there is no file to be missing and no repository
+    to be gated, which is precisely what makes this arm the floor of every comparison —
+    it is available on any machine, offline, at every vocabulary size, forever.
+    """
+    adapter = ByteAdapter()
+    return LoadedTokenizer(
+        name=name,
+        source_id="bytes/utf-8",
+        vocab_size=T7_BYTE_VOCAB_SIZE,
+        _encode=adapter,
+        family=_family(name),
+        variant=_variant(name),
+        attempted=("bytes",),
+        _spans=adapter.spans,
+    )
+
+
 #: The fourteen Experiment 04 arms, every one trained by this project on the DCS training
 #: split (docs/decisions.md, 2026-09-05, "Experiment 04: DCS is the gold source and the
 #: first monolingual training corpus"). File-backed like T1/T2/E1/T4 and loaded by the same
@@ -851,6 +906,7 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "T4_bpe_split_64k": functools.partial(_load_trained_arm, "T4_bpe_split_64k"),
     "T4_unigram_split_32k": functools.partial(_load_trained_arm, "T4_unigram_split_32k"),
     "T4_unigram_split_64k": functools.partial(_load_trained_arm, "T4_unigram_split_64k"),
+    "T7_byt5": functools.partial(_load_byte_arm, "T7_byt5"),
     **{name: functools.partial(_load_trained_arm, name) for name in DCS_ARMS},
 }
 
