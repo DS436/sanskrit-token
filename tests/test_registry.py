@@ -33,6 +33,30 @@ from sanskrit_tok.tokenizers.registry import (
 
 ARMS = ("T0_gemma3", "T0_llama4", "T0_o200k")
 
+#: The twelve Experiment 04 arms, all trained on the DCS training split (docs/decisions.md,
+#: 2026-09-05, "Experiment 04: DCS is the gold source ..."). `_dcs` marks the corpus,
+#: `_oracle_dcs` marks the gold-segmented variant of it; `T5`/`T6` are the
+#: morpheme-constrained (MorphBPE-hard) families.
+T5_ARMS = ("T5_morphbpe_raw_32k_dcs", "T5_morphbpe_raw_64k_dcs")
+T6_ARMS = ("T6_morphbpe_split_32k_dcs", "T6_morphbpe_split_64k_dcs")
+DCS_ARMS = (
+    "T1_bpe_raw_32k_dcs",
+    "T1_bpe_raw_64k_dcs",
+    "T2_unigram_raw_32k_dcs",
+    "T2_unigram_raw_64k_dcs",
+    "T4_bpe_split_32k_oracle_dcs",
+    "T4_bpe_split_64k_oracle_dcs",
+    "T4_unigram_split_32k_oracle_dcs",
+    "T4_unigram_split_64k_oracle_dcs",
+    *T5_ARMS,
+    *T6_ARMS,
+)
+
+#: Arm -> the `variant` label its `LoadedTokenizer` must carry.
+DCS_VARIANTS = {
+    name: ("oracle_dcs" if name.endswith("_oracle_dcs") else "dcs") for name in DCS_ARMS
+}
+
 #: Every arm the registry must carry after this task (CLAUDE.md §6, exp02 plan Tasks 2/6).
 ALL_ARMS = (
     "E1_bpe_32k",
@@ -55,6 +79,7 @@ ALL_ARMS = (
     "T4_bpe_split_64k",
     "T4_unigram_split_32k",
     "T4_unigram_split_64k",
+    *DCS_ARMS,
 )
 
 T3_ARMS = ("T3_brahmic131k", "T3_indicsuper", "T3_sarvam", "T3_sutra")
@@ -166,8 +191,8 @@ def test_list_tokenizers_filters_by_family() -> None:
     assert list_tokenizers(family="T3") == sorted(T3_ARMS)
 
 
-def test_registry_carries_twenty_arms() -> None:
-    assert len(list_tokenizers()) == 20
+def test_registry_carries_thirty_two_arms() -> None:
+    assert len(list_tokenizers()) == 32
 
 
 def test_list_tokenizers_filters_the_english_control_family() -> None:
@@ -175,7 +200,60 @@ def test_list_tokenizers_filters_the_english_control_family() -> None:
 
 
 def test_list_tokenizers_filters_the_sandhi_split_family() -> None:
-    assert list_tokenizers(family="T4") == sorted(T4_ARMS)
+    """`T4` now spans both the Experiment 03 arms (ByT5-split parallel corpora) and the
+    Experiment 04 oracle arms (gold-split DCS); the `variant` filter separates them."""
+    assert list_tokenizers(family="T4") == sorted(
+        (*T4_ARMS, *[n for n in DCS_ARMS if n.startswith("T4_")])
+    )
+    assert list_tokenizers(family="T4", variant="") == sorted(T4_ARMS)
+
+
+def test_list_tokenizers_filters_the_morpheme_constrained_families() -> None:
+    assert list_tokenizers(family="T5") == sorted(T5_ARMS)
+    assert list_tokenizers(family="T6") == sorted(T6_ARMS)
+
+
+def test_list_tokenizers_filters_by_variant() -> None:
+    assert list_tokenizers(variant="oracle_dcs") == sorted(
+        n for n in DCS_ARMS if n.endswith("_oracle_dcs")
+    )
+    assert list_tokenizers(variant="dcs") == sorted(
+        n for n in DCS_ARMS if not n.endswith("_oracle_dcs")
+    )
+
+
+@pytest.mark.parametrize("arm", DCS_ARMS)
+def test_every_dcs_arm_is_registered(arm: str) -> None:
+    assert arm in REGISTRY
+
+
+@pytest.mark.parametrize("arm", DCS_ARMS)
+def test_dcs_arm_loads_from_tokenizer_json_with_its_family_and_variant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arm: str
+) -> None:
+    """The twelve Experiment 04 arms are file-backed exactly like T1/T2/E1/T4: same
+    loader, same directory layout, absent until `experiments/04_morph_constrained/
+    train_tokenizers.py` has written a `tokenizer.json`."""
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    path = tmp_path / arm / "tokenizer.json"
+    _write_tiny_bpe_tokenizer(path, vocab_size=50)
+
+    tok = load_tokenizer(arm)
+
+    assert tok.family == arm.split("_", 1)[0]
+    assert tok.variant == DCS_VARIANTS[arm]
+    assert tok.source_id == str(path)
+    assert tok.supports_spans
+    assert tok.encode("tad api")
+
+
+def test_a_non_dcs_arm_has_an_empty_variant(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
+    _write_tiny_bpe_tokenizer(tmp_path / "T4_bpe_split_32k" / "tokenizer.json", vocab_size=50)
+
+    assert load_tokenizer("T4_bpe_split_32k").variant == ""
 
 
 def test_no_subset_arms_are_registered() -> None:

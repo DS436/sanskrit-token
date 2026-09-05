@@ -27,7 +27,7 @@ from sanskrit_tok.data.exclusion import (
     sentence_hash_en,
 )
 from sanskrit_tok.encoding import from_slp1, to_slp1
-from sanskrit_tok.tokenizers.corpus import build_training_corpus
+from sanskrit_tok.tokenizers.corpus import build_training_corpus, filter_leaked_sentences
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
 from sanskrit_tok.tokenizers.train_unigram import train_unigram
@@ -152,7 +152,7 @@ def test_filter_leaked_sentences_drops_only_colliding_texts() -> None:
         "b": ["बालकः पठति"],
     }
 
-    filtered, dropped_counts = train_tokenizers.filter_leaked_sentences(sources, excluded)
+    filtered, dropped_counts = filter_leaked_sentences(sources, excluded)
 
     assert filtered == {"a": ["सीता वदति"], "b": ["बालकः पठति"]}
     assert dropped_counts == {"a": 1, "b": 0}
@@ -161,37 +161,10 @@ def test_filter_leaked_sentences_drops_only_colliding_texts() -> None:
 def test_filter_leaked_sentences_is_a_no_op_for_a_clean_exclusion_set() -> None:
     sources = {"a": ["रामः गच्छति", "सीता वदति"]}
 
-    filtered, dropped_counts = train_tokenizers.filter_leaked_sentences(sources, frozenset())
+    filtered, dropped_counts = filter_leaked_sentences(sources, frozenset())
 
     assert filtered == sources
     assert dropped_counts == {"a": 0}
-
-
-# ---------------------------------------------------------------- ensure_training_corpus
-
-
-def test_ensure_training_corpus_records_raw_and_leaked_counts_in_the_manifest(
-    tmp_path: Path,
-) -> None:
-    excluded = frozenset({sentence_hash("रामः गच्छति")})
-    sources = {
-        "a": ["रामः गच्छति", "सीता वदति"],  # first sentence is leaked, dropped before build
-        "b": ["बालकः पठति"],
-    }
-    corpus_path = tmp_path / "corpus.txt"
-
-    manifest = train_tokenizers.ensure_training_corpus(sources, corpus_path, excluded)
-
-    # post-filter counts, as fed to build_training_corpus (unchanged key from Task 4)
-    assert manifest["n_in"] == {"a": 1, "b": 1}
-    # new keys: pre-filter counts and the per-source leaked-and-dropped counts
-    assert manifest["n_in_raw"] == {"a": 2, "b": 1}
-    assert manifest["n_leaked_dropped"] == {"a": 1, "b": 0}
-
-    # and both new keys are actually persisted to manifest.json, not just returned
-    written = json.loads((tmp_path / "manifest.json").read_text(encoding="utf-8"))
-    assert written["n_in_raw"] == {"a": 2, "b": 1}
-    assert written["n_leaked_dropped"] == {"a": 1, "b": 0}
 
 
 # ------------------------------------------------- English control side (E1, exp02 Task 6)
@@ -261,27 +234,17 @@ def test_build_training_corpus_forwards_the_hash_fn(tmp_path: Path) -> None:
         )
 
 
-def test_ensure_training_corpus_writes_the_manifest_it_is_given(tmp_path: Path) -> None:
-    """The Sanskrit and English corpora live side by side in `data/processed/`, so the
-    English one needs its own manifest name (`manifest_en.json`) rather than overwriting
-    the Sanskrit corpus's `manifest.json`."""
-    from sanskrit_tok.tokenizers.corpus import identity_transform
+def test_the_exp02_script_uses_the_shared_training_machinery() -> None:
+    """The corpus-currency, arm-selection and per-arm-results logic moved into
+    `sanskrit_tok.tokenizers.training` so Experiment 04 could reuse it; this script must go
+    on using *that* implementation rather than keeping a second copy (its own tests moved
+    to `tests/test_tokenizer_training.py`)."""
+    from sanskrit_tok.tokenizers import training
 
-    corpus_path = tmp_path / "tok_train_en.txt"
-    manifest_path = tmp_path / "manifest_en.json"
-
-    manifest = train_tokenizers.ensure_training_corpus(
-        {"a": ["Rama goes", "Sita speaks"]},
-        corpus_path,
-        frozenset(),
-        manifest_path=manifest_path,
-        transform=identity_transform,
-        hash_fn=sentence_hash_en,
-    )
-
-    assert manifest_path.exists()
-    assert not (tmp_path / "manifest.json").exists()
-    assert json.loads(manifest_path.read_text(encoding="utf-8"))["n_out"] == manifest["n_out"]
+    assert train_tokenizers.ensure_training_corpus is training.ensure_training_corpus
+    assert train_tokenizers.select_arms_to_train is training.select_arms_to_train
+    assert train_tokenizers.train_arm is training.train_arm
+    assert train_tokenizers.SideSpec is training.SideSpec
 
 
 def test_english_train_split_loaders_are_registered() -> None:
@@ -304,34 +267,6 @@ def test_arm_side_reads_the_configured_side() -> None:
 def test_arm_side_rejects_an_unknown_side() -> None:
     with pytest.raises(ValueError, match="side"):
         train_tokenizers.arm_side({"name": "E1_bpe_32k", "side": "de"})
-
-
-def test_select_arms_to_train_skips_an_already_trained_arm(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
-    trained = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
-    trained.parent.mkdir(parents=True)
-    trained.write_text("{}", encoding="utf-8")
-    arms = [{"name": "T1_bpe_raw_32k"}, {"name": "E1_bpe_32k"}]
-
-    selected = train_tokenizers.select_arms_to_train(arms, retrain=False)
-
-    assert [arm["name"] for arm in selected] == ["E1_bpe_32k"]
-
-
-def test_select_arms_to_train_retrains_everything_when_asked(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("SANSKRIT_TOK_TOKENIZER_DIR", str(tmp_path))
-    trained = tmp_path / "T1_bpe_raw_32k" / "tokenizer.json"
-    trained.parent.mkdir(parents=True)
-    trained.write_text("{}", encoding="utf-8")
-    arms = [{"name": "T1_bpe_raw_32k"}, {"name": "E1_bpe_32k"}]
-
-    selected = train_tokenizers.select_arms_to_train(arms, retrain=True)
-
-    assert [arm["name"] for arm in selected] == ["T1_bpe_raw_32k", "E1_bpe_32k"]
 
 
 def test_tokenizers_yaml_declares_the_english_control_arms_and_sides() -> None:
@@ -547,23 +482,6 @@ def test_sanskrit_and_english_sides_have_no_precheck(tmp_path: Path) -> None:
     assert train_tokenizers.side_spec("en", config, tmp_path).precheck is None
 
 
-def test_ensure_training_corpus_runs_the_precheck_before_building(tmp_path: Path) -> None:
-    calls: list[int] = []
-
-    def precheck(sources: object) -> None:
-        calls.append(1)
-
-    train_tokenizers.ensure_training_corpus(
-        {"a": ["रामः गच्छति"]},
-        tmp_path / "corpus.txt",
-        frozenset(),
-        manifest_path=tmp_path / "manifest.json",
-        precheck=precheck,
-    )
-
-    assert calls == [1]
-
-
 def test_tokenizers_yaml_declares_the_four_split_arms() -> None:
     config = yaml.safe_load(TOKENIZERS_YAML.read_text(encoding="utf-8"))
 
@@ -662,35 +580,6 @@ def test_the_split_side_precheck_uses_the_same_selection_as_the_splitter(
 
     with pytest.raises(train_tokenizers.MissingSplitError, match="1 of 2"):
         spec.precheck({"a": list(SAME_SLP1_PAIR)})
-
-
-def test_ensure_training_corpus_deduplicates_on_the_original_before_transforming(
-    tmp_path: Path,
-) -> None:
-    """The corpus builder is fed the *selected* sentences, so the split side's transform
-    is never asked for a sentence the split run did not split. The written corpus is
-    unchanged: `build_training_corpus` still dedups on the transformed text, so the two
-    spellings collapse to one SLP1 line."""
-    transformed: list[str] = []
-
-    def transform(text: str) -> str:
-        transformed.append(text)
-        return to_slp1(text, "devanagari")
-
-    first, second = SAME_SLP1_PAIR
-    manifest = train_tokenizers.ensure_training_corpus(
-        {"a": [first, second, first]},
-        tmp_path / "corpus.txt",
-        frozenset(),
-        manifest_path=tmp_path / "manifest.json",
-        transform=transform,
-    )
-
-    assert transformed == [first, second]  # the exact repeat never reaches the transform
-    assert manifest["n_out"] == 1  # ... and the two spellings still collapse to one line
-    assert (tmp_path / "corpus.txt").read_text(encoding="utf-8").splitlines() == [
-        to_slp1(first, "devanagari")
-    ]
 
 
 # ------------------------------------------------ single-sourced reconcile threshold

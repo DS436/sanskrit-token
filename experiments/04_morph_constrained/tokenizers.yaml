@@ -1,0 +1,131 @@
+# The twelve Experiment 04 tokenizer arms, all trained on the DCS training split.
+#
+# Every arm here is trained on the same 720,510 DCS sentences with the same trainer at the
+# same two vocabulary sizes (CLAUDE.md §2.5), so the paired deltas Experiment 04 reports —
+# T5 - T1_dcs (the constraint alone), T4_oracle - T1_dcs (gold splitting alone),
+# T6 - T4_oracle (the constraint on split text) and T6 - T1_dcs (the proposed method) —
+# hold everything but the one thing under test constant (docs/decisions.md, 2026-09-05,
+# "Experiment 04 headline is the paired TPP delta between constrained and unconstrained
+# DCS arms"). They are NOT comparable to the Experiment 02/03 arms of the same family
+# names, which were trained on the Sanskrit sides of the parallel corpora; that is what the
+# `_dcs` / `_oracle_dcs` suffix and the registry's `variant` field exist to keep apart.
+#
+# Four corpora, all streamed from `data/processed/dcs/train.jsonl`, one line per
+# `GoldSentence` field, each asserted sentence-by-sentence against the committed exclusion
+# list on its *sandhied* SLP1 text (CLAUDE.md §2.4) so all four are checked against exactly
+# the same strings:
+#
+#   dcs_raw          text_slp1           the sandhied sentence
+#   dcs_oracle_split oracle_split_slp1   the same sentence, gold segments space-separated
+#   dcs_raw_marked   t5_marked           text_slp1 + U+001F at every gold boundary
+#   dcs_split_marked t6_marked           oracle_split_slp1 + U+001F at every stem boundary
+#
+# The two marked corpora are training text only: the marker never survives into a vocabulary
+# and never appears at inference (docs/decisions.md, "MorphBPE-hard implemented as
+# boundary-marker pre-tokenisation; inference unchanged").
+#
+# `check_corpus` names the marked corpus each BPE arm's merge constraint is audited against
+# after training. For T5/T6 that is the arm's own training text; for the unconstrained
+# T1/T4 BPE arms it is the same marked corpus, which makes them the control the constrained
+# number is read against. Unigram arms have no merges and so no `check_corpus`.
+#
+# Relative paths are resolved against the repository root, not the working directory.
+
+dcs_train_jsonl: data/processed/dcs/train.jsonl
+dcs_manifest_path: data/processed/dcs/manifest.json
+exclusion_path: data/exclusion_hashes.txt
+
+corpora:
+  dcs_raw:
+    field: text_slp1
+    corpus_path: data/processed/tok_train_dcs_raw.txt
+    manifest_path: data/processed/manifest_dcs_raw.json
+    marked: false
+  dcs_oracle_split:
+    field: oracle_split_slp1
+    corpus_path: data/processed/tok_train_dcs_oracle_split.txt
+    manifest_path: data/processed/manifest_dcs_oracle_split.json
+    marked: false
+  dcs_raw_marked:
+    field: t5_marked
+    corpus_path: data/processed/tok_train_dcs_raw_marked.txt
+    manifest_path: data/processed/manifest_dcs_raw_marked.json
+    marked: true
+  dcs_split_marked:
+    field: t6_marked
+    corpus_path: data/processed/tok_train_dcs_split_marked.txt
+    manifest_path: data/processed/manifest_dcs_split_marked.json
+    marked: true
+
+arms:
+  # --- unconstrained baselines on the sandhied text (the T5 control) ---
+  - name: T1_bpe_raw_32k_dcs
+    algo: bpe
+    vocab_size: 32000
+    corpus: dcs_raw
+    check_corpus: dcs_raw_marked
+  - name: T1_bpe_raw_64k_dcs
+    algo: bpe
+    vocab_size: 64000
+    corpus: dcs_raw
+    check_corpus: dcs_raw_marked
+  - name: T2_unigram_raw_32k_dcs
+    algo: unigram
+    vocab_size: 32000
+    corpus: dcs_raw
+  - name: T2_unigram_raw_64k_dcs
+    algo: unigram
+    vocab_size: 64000
+    corpus: dcs_raw
+
+  # --- gold-split text, unconstrained (ablation A3's oracle; the T6 control) ---
+  - name: T4_bpe_split_32k_oracle_dcs
+    algo: bpe
+    vocab_size: 32000
+    corpus: dcs_oracle_split
+    check_corpus: dcs_split_marked
+  - name: T4_bpe_split_64k_oracle_dcs
+    algo: bpe
+    vocab_size: 64000
+    corpus: dcs_oracle_split
+    check_corpus: dcs_split_marked
+  - name: T4_unigram_split_32k_oracle_dcs
+    algo: unigram
+    vocab_size: 32000
+    corpus: dcs_oracle_split
+  - name: T4_unigram_split_64k_oracle_dcs
+    algo: unigram
+    vocab_size: 64000
+    corpus: dcs_oracle_split
+
+  # --- morpheme-constrained merges on the sandhied text (T5) ---
+  - name: T5_morphbpe_raw_32k_dcs
+    algo: morph_bpe
+    vocab_size: 32000
+    corpus: dcs_raw_marked
+    check_corpus: dcs_raw_marked
+  - name: T5_morphbpe_raw_64k_dcs
+    algo: morph_bpe
+    vocab_size: 64000
+    corpus: dcs_raw_marked
+    check_corpus: dcs_raw_marked
+
+  # --- morpheme-constrained merges on the gold-split text (T6, the proposed tokenizer) ---
+  - name: T6_morphbpe_split_32k_dcs
+    algo: morph_bpe
+    vocab_size: 32000
+    corpus: dcs_split_marked
+    check_corpus: dcs_split_marked
+  - name: T6_morphbpe_split_64k_dcs
+    algo: morph_bpe
+    vocab_size: 64000
+    corpus: dcs_split_marked
+    check_corpus: dcs_split_marked
+
+#: How many sentences the post-training cross-boundary audit samples, strided over the
+#: whole marked corpus.
+cross_boundary_sample: 2000
+
+seed: 0
+
+output_dir: outputs/tokenizers

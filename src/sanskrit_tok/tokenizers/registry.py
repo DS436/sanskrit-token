@@ -53,10 +53,19 @@ model generation and its mirror. `HF_TOKEN` is passed when the environment sets 
 load below the first candidate is a substitution and is recorded in `docs/decisions.md`
 (CLAUDE.md §11), because the tokenizer measured is then not the one the arm is named for.
 
-**`family`.** Every `LoadedTokenizer` carries the arm-name prefix before its first
-underscore (`"T0_gpt2"` -> `"T0"`), so an experiment or a metric summary can group or
-filter arms without parsing the name itself; `list_tokenizers(family=...)` filters the
-registry the same way.
+`T5_*`/`T6_*` are the morpheme-constrained families (Experiment 04), and they arrive with
+ten more file-backed arms: every Experiment 04 arm — including the `T1`/`T2`/`T4` ones it
+compares against — is trained on the DCS training split and carries a `_dcs` or
+`_oracle_dcs` suffix to say so (`DCS_ARMS`). Same loader, same directory layout as every
+other trained arm.
+
+**`family` and `variant`.** Every `LoadedTokenizer` carries the arm-name prefix before its
+first underscore (`"T0_gpt2"` -> `"T0"`), so an experiment or a metric summary can group or
+filter arms without parsing the name itself; a file-backed arm also carries the
+training-corpus suffix its name ends in (`"T5_morphbpe_raw_32k_dcs"` -> `"dcs"`, `""` for an
+arm with none). `list_tokenizers(family=..., variant=...)` filters the registry the same
+way, and both filters are needed for a family that spans experiments: `T4` is four
+ByT5-split arms from Experiment 03 and four gold-split DCS arms from Experiment 04.
 
 **`TokenizerUnavailable`.** A registered arm can still fail to produce a tokenizer this
 run — every HF candidate is gated or unpublished, or a trained arm's `tokenizer.json` has
@@ -74,6 +83,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "DCS_ARMS",
     "REGISTRY",
     "T0_GEMMA3_CANDIDATES",
     "T0_GPT2_CANDIDATES",
@@ -153,7 +163,13 @@ class LoadedTokenizer:
     added special tokens.
 
     `family` is the arm-name prefix before its first underscore (`"T0"`, `"T3"`, ...),
-    computed once at load time so callers never re-derive it from `name`. `attempted` is
+    computed once at load time so callers never re-derive it from `name`. `variant` is the
+    other half of that split: the training-corpus label a file-backed arm's name ends in
+    (`"dcs"`, `"oracle_dcs"`) and `""` for every arm whose name carries none. Family and
+    variant together are what separate `T4_bpe_split_32k` (Experiment 03, ByT5-split
+    parallel corpora) from `T4_bpe_split_32k_oracle_dcs` (Experiment 04, gold-split DCS),
+    which are the same algorithm at the same vocabulary size on different text and must
+    never be pooled. `attempted` is
     every candidate id (or, for a file-backed arm, the one file path) tried before the
     winner, winner last — a one-element tuple whenever an arm has only ever had one
     candidate. Both default to empty so hand-built fakes in tests need not set them.
@@ -173,6 +189,7 @@ class LoadedTokenizer:
     vocab_size: int
     _encode: Callable[[str], list[int]] = field(repr=False)
     family: str = ""
+    variant: str = ""
     attempted: tuple[str, ...] = ()
     _spans: Callable[[str], list[tuple[int, int]]] | None = field(default=None, repr=False)
 
@@ -218,6 +235,24 @@ class TokenizerUnavailable(RuntimeError):
 def _family(name: str) -> str:
     """The arm-name prefix before its first underscore: `"T0_gpt2"` -> `"T0"`."""
     return name.split("_", 1)[0]
+
+
+#: Arm-name suffixes that name a training corpus rather than an algorithm or a vocabulary
+#: size, longest first so `_oracle_dcs` is recognised before the `_dcs` it ends with.
+_VARIANT_SUFFIXES = ("_oracle_dcs", "_dcs")
+
+
+def _variant(name: str) -> str:
+    """The training-corpus label an arm name ends in: `"T5_morphbpe_raw_32k_dcs"` -> `"dcs"`.
+
+    `""` for an arm with no such suffix, which is every arm predating Experiment 04. Only
+    file-backed arms can carry one — an off-the-shelf arm is not trained on anything of
+    this project's choosing — so only `_load_trained_arm` sets it.
+    """
+    for suffix in _VARIANT_SUFFIXES:
+        if name.endswith(suffix):
+            return suffix[1:]
+    return ""
 
 
 def _normalise_spans(text: str, raw: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -757,9 +792,34 @@ def _load_trained_arm(name: str) -> LoadedTokenizer:
         vocab_size=int(tokenizer.get_vocab_size()),
         _encode=adapter,
         family=_family(name),
+        variant=_variant(name),
         attempted=(str(path),),
         _spans=adapter.spans,
     )
+
+
+#: The twelve Experiment 04 arms, every one trained by this project on the DCS training
+#: split (docs/decisions.md, 2026-09-05, "Experiment 04: DCS is the gold source and the
+#: first monolingual training corpus"). File-backed like T1/T2/E1/T4 and loaded by the same
+#: loader; what the names say is which of the four DCS corpora each was trained on —
+#: `_dcs` the sandhied text (or, for T5/T6, its marked form), `_oracle_dcs` the gold
+#: segmentation. `T5`/`T6` are the morpheme-constrained (MorphBPE-hard) families, and their
+#: matched unconstrained controls are the `T1_*_dcs` / `T4_*_oracle_dcs` arms beside them:
+#: same corpus sentences, same vocabulary size, same trainer, no boundary marker.
+DCS_ARMS: tuple[str, ...] = (
+    "T1_bpe_raw_32k_dcs",
+    "T1_bpe_raw_64k_dcs",
+    "T2_unigram_raw_32k_dcs",
+    "T2_unigram_raw_64k_dcs",
+    "T4_bpe_split_32k_oracle_dcs",
+    "T4_bpe_split_64k_oracle_dcs",
+    "T4_unigram_split_32k_oracle_dcs",
+    "T4_unigram_split_64k_oracle_dcs",
+    "T5_morphbpe_raw_32k_dcs",
+    "T5_morphbpe_raw_64k_dcs",
+    "T6_morphbpe_split_32k_dcs",
+    "T6_morphbpe_split_64k_dcs",
+)
 
 
 #: Arm key -> zero-argument loader. Loading is deferred: an experiment that needs one arm
@@ -785,12 +845,25 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "T4_bpe_split_64k": functools.partial(_load_trained_arm, "T4_bpe_split_64k"),
     "T4_unigram_split_32k": functools.partial(_load_trained_arm, "T4_unigram_split_32k"),
     "T4_unigram_split_64k": functools.partial(_load_trained_arm, "T4_unigram_split_64k"),
+    **{name: functools.partial(_load_trained_arm, name) for name in DCS_ARMS},
 }
 
 
-def list_tokenizers(family: str | None = None) -> list[str]:
-    """Every registered arm key, sorted; `family` (e.g. `"T3"`) narrows to that prefix."""
-    names = REGISTRY if family is None else (n for n in REGISTRY if _family(n) == family)
+def list_tokenizers(family: str | None = None, variant: str | None = None) -> list[str]:
+    """Every registered arm key, sorted.
+
+    `family` (e.g. `"T3"`) narrows to that name prefix; `variant` (`"dcs"`, `"oracle_dcs"`,
+    or `""` for the arms carrying no corpus suffix) narrows to that training corpus. Both
+    are needed together whenever a family spans experiments: `list_tokenizers(family="T4")`
+    is eight arms, four trained on ByT5-split parallel text (Experiment 03, variant `""`)
+    and four on gold-split DCS (Experiment 04, variant `"oracle_dcs"`).
+    """
+    names = [
+        name
+        for name in REGISTRY
+        if (family is None or _family(name) == family)
+        and (variant is None or _variant(name) == variant)
+    ]
     return sorted(names)
 
 
