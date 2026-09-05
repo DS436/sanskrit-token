@@ -39,6 +39,7 @@ __all__ = [
     "load_exclusion_hashes",
     "sentence_hash",
     "sentence_hash_en",
+    "sentence_hash_slp1",
 ]
 
 logger = logging.getLogger(__name__)
@@ -81,12 +82,32 @@ def sentence_hash_en(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
+def sentence_hash_slp1(text_slp1: str) -> str:
+    """sha256 of `text_slp1.strip()`, as hex — for text that is *already* SLP1.
+
+    `sentence_hash(devanagari) == sentence_hash_slp1(to_slp1(devanagari, "devanagari"))`:
+    the two are the same function of the same bytes, differing only in whether the caller
+    or the callee does the transliteration. A digest written by either is interchangeable
+    with one written by the other, so `data/exclusion_hashes.txt` can hold both without
+    ambiguity and its header line ("sha256 of the SLP1 form of every evaluation sentence")
+    stays literally true.
+
+    This exists for DCS, which is annotated in IAST and ingested to SLP1
+    (`sanskrit_tok.data.dcs`): its held-out sentences never have a Devanagari form to hand
+    to `sentence_hash`, and round-tripping SLP1 -> Devanagari -> SLP1 purely to reuse that
+    function would make the hash depend on the transliterator's fixed points.
+    """
+    return hashlib.sha256(text_slp1.strip().encode("utf-8")).hexdigest()
+
+
 #: Which header line describes which hash function, so a written list says on its first
 #: line what its digests are *of*. An unrecognised `hash_fn` gets the generic line rather
 #: than a wrong one.
 _HEADER_FOR_HASH_FN: dict[Callable[[str], str], str] = {
     sentence_hash: _HEADER_HASH_LINE,
     sentence_hash_en: _HEADER_HASH_LINE_EN,
+    # Same digests of the same SLP1 bytes as `sentence_hash`, so the same header line.
+    sentence_hash_slp1: _HEADER_HASH_LINE,
 }
 
 
@@ -95,6 +116,7 @@ def build_exclusion_list(
     path: Path,
     *,
     hash_fn: Callable[[str], str] = sentence_hash,
+    hash_fns: Mapping[str, Callable[[str], str]] | None = None,
 ) -> int:
     """Hash every sentence in `sources` and write the sorted, deduplicated list to `path`.
 
@@ -104,11 +126,21 @@ def build_exclusion_list(
     `# sources: <name>=<count>, ...` in the order `sources` was given, recording how many
     sentences each source contributed (before deduplication, so the counts are honest about
     what was hashed even when sources overlap). Returns the number of unique hashes written.
+
+    `hash_fns` overrides `hash_fn` for named sources, for a list whose sources do not all
+    arrive in the same script: DCS is annotated in IAST and stored in SLP1, so its
+    sentences are hashed with `sentence_hash_slp1` while the Devanagari corpora beside it
+    keep `sentence_hash`. The two produce identical digests of identical SLP1 bytes, so a
+    mixed list is still one homogeneous set of hashes with one true header line; the
+    override exists to avoid a lossy Devanagari round-trip, not to mix hash *formats*.
+    Mixing formats — an English source into a Sanskrit list — is the caller's error.
     """
+    overrides = {} if hash_fns is None else hash_fns
     hashes: set[str] = set()
-    for sentences in sources.values():
+    for name, sentences in sources.items():
+        source_hash_fn = overrides.get(name, hash_fn)
         for sentence in sentences:
-            hashes.add(hash_fn(sentence))
+            hashes.add(source_hash_fn(sentence))
 
     source_summary = ", ".join(f"{name}={len(sentences)}" for name, sentences in sources.items())
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,41 @@
+## text: Acintyastava
+## text_id: 415
+## chapter: Acintyastava, 1
+## chapter_id: 8248
+# text = pratītyajānāṃ bhāvānāṃ naiḥsvābhāvyaṃ jagāda yaḥ
+# sent_id = 555547
+# sent_counter = 1
+# sent_subcounter = 1
+1-2	pratītyajānāṃ	_	_	_	_	_	_	_	_
+1	pratītya	pratī	VERB	_	VerbForm=Conv	_	_	_	LemmaId=162718|OccId=3304416|Unsandhied=pratītya|UnsandhiedReconstructed=True
+2	jānām	ja	ADJ	_	Case=Gen|Gender=Masc|Number=Plur	_	_	_	LemmaId=52879|OccId=3304417|Unsandhied=jānām|UnsandhiedReconstructed=True
+3	bhāvānāṃ	bhāva	NOUN	_	Case=Gen|Gender=Masc|Number=Plur	_	_	_	LemmaId=49850|OccId=3304418|Unsandhied=bhāvānām|UnsandhiedReconstructed=True
+4	naiḥsvābhāvyaṃ	naiḥsvābhāvya	NOUN	_	Case=Acc|Gender=Neut|Number=Sing	_	_	_	LemmaId=213181|OccId=3304556|Unsandhied=naiḥsvābhāvyam|UnsandhiedReconstructed=True
+5	jagāda	gad	VERB	_	Tense=Past|Mood=Ind|Person=3|Number=Sing	_	_	_	LemmaId=156213|OccId=3304419|Unsandhied=jagāda
+6	yaḥ	yad	PRON	_	Case=Nom|Gender=Masc|Number=Sing	_	_	_	LemmaId=37877|OccId=3304420|Unsandhied=yaḥ|UnsandhiedReconstructed=True
+
+# text = taṃ namāmy asamajñānam acintyam anidarśanam
+# sent_id = 555548
+# sent_counter = 1
+# sent_subcounter = 2
+1	taṃ	tad	PRON	_	Case=Acc|Gender=Masc|Number=Sing	_	_	_	LemmaId=37875|OccId=3304421|Unsandhied=tam|UnsandhiedReconstructed=True
+2	namāmy	nam	VERB	_	Tense=Pres|Mood=Ind|Person=1|Number=Sing	_	_	_	LemmaId=157381|OccId=3304422|Unsandhied=namāmi
+3-5	asamajñānam	_	_	_	_	_	_	_	_
+3	a	a	PART	_		_	_	_	LemmaId=213048|OccId=5546895|Unsandhied=a
+4	sama	sama	PRON	_	Case=Cpd	_	_	_	LemmaId=166107|OccId=5546896|Unsandhied=sama
+5	jñānam	jñāna	NOUN	_	Case=Acc|Gender=Masc|Number=Sing	_	_	_	LemmaId=89644|OccId=5546897|Unsandhied=jñānam
+6-7	acintyam	_	_	_	_	_	_	_	_
+6	a	a	PART	_		_	_	_	LemmaId=213048|OccId=5546898|Unsandhied=a
+7	cintyam	cintay	VERB	_	Case=Acc|Gender=Masc|Number=Sing|VerbForm=Gdv	_	_	_	LemmaId=156256|OccId=5546899|Unsandhied=cintyam
+8-9	anidarśanam	_	_	_	_	_	_	_	_
+8	a	a	PART	_		_	_	_	LemmaId=213048|OccId=5546900|Unsandhied=a
+9	nidarśanam	nidarśana	NOUN	_	Case=Acc|Gender=Masc|Number=Sing	_	_	_	LemmaId=35131|OccId=5546901|Unsandhied=nidarśanam
+
+# text = yathā tvayā mahāyāne dharmanairātmyam ātmanā
+# sent_id = 555549
+# sent_counter = 2
+# sent_subcounter = 1
+1	yathā	yathā	PART	_		_	_	_	LemmaId=73250|OccId=3304426|Unsandhied=yathā|UnsandhiedReconstructed=True
+2	tvayā	tvad	PRON	_	Case=Ins|Number=Sing	_	_	_	LemmaId=37880|OccId=3304427|Unsandhied=tvayā|UnsandhiedReconstructed=True
+3	mahāyāne	mahāyāna	NOUN	_	Case=Loc|Gender=Neut|Number=Sing	_	_	_	LemmaId=77455|OccId=3304428|Unsandhied=mahāyāne|UnsandhiedReconstructed=True
+

@@ -1,0 +1,33 @@
+# DCS ingestion (Experiment 04, Task 1).
+#
+# Turns the pinned DCS CoNLL-U checkout into `data/processed/dcs/{train,heldout}.jsonl`:
+# one SLP1 sentence per line with its gold segment boundaries located in the sandhied
+# surface, the derived (heuristic) stem/ending boundaries, and both boundary-marked
+# training variants. See `docs/decisions.md`, 2026-09-05, "DCS is the gold source and the
+# first monolingual training corpus" and "Gold boundaries: segment boundaries from DCS...".
+#
+#   uv run python experiments/04_morph_constrained/ingest_dcs.py --config \
+#       experiments/04_morph_constrained/dcs.yaml
+
+repo: OliverHellwig/sanskrit
+
+# Head of `master` observed 2026-09-05; the checkout is detached here. Changing it means
+# re-running the ingestion and re-training every `_dcs` arm.
+commit: 8aeed5a1343d0e48b64eb32af8c00e8c6eb29359
+
+# Gitignored; the sparse, blobless checkout lands in `<raw_dir>/repo`.
+raw_dir: data/raw/dcs
+out_dir: data/processed/dcs
+
+# Held out by whole text (`text_id`), never by sentence: two sentences of one work share
+# vocabulary and phrasing, so a sentence-level split would leak across itself.
+heldout_fraction: 0.05
+seed: 0
+
+# A one-word sentence has no word boundary to tokenise around and no proposition to count.
+min_words: 2
+
+# Sentences colliding with an existing evaluation sentence are dropped from both splits
+# (CLAUDE.md §2.4). DCS's own held-out hashes are subtracted first, so re-running is
+# idempotent rather than progressively emptying the held-out split.
+exclusion_path: data/exclusion_hashes.txt
