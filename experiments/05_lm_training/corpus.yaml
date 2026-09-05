@@ -1,0 +1,77 @@
+# Experiment 05 (phase A), Task 1 — the LM training corpora and their held-out texts.
+#
+#   nohup uv run python experiments/05_lm_training/build_corpus.py --config \
+#       experiments/05_lm_training/corpus.yaml \
+#       > outputs/05_lm_training/build_corpus.log 2>&1 &
+#
+# Cold, this downloads ~4.2 GB of Sangraha parquet and streams several billion characters
+# through transliteration and both leakage layers; warm, it re-reads what is already under
+# `data/raw/`. Relative paths resolve against the repository root, not the working
+# directory. Every output is gitignored; the manifests are the record.
+
+out_dir: data/processed/lm
+
+# Layer one of the leakage filter (CLAUDE.md §2.4): sha256 of the SLP1 line.
+exclusion_path: data/exclusion_hashes.txt
+
+# Layer two: a training line is dropped when any window of this many letters of its
+# letter-normalised SLP1 form occurs in any evaluation sentence (FLORES devtest, Sāmayik
+# dev/test/test_ood, Itihāsa dev/test, DCS held-out). Must match the value the `_dcs`
+# tokenizer arms were built under (`experiments/04_morph_constrained/dcs.yaml`).
+shingle_k: 24
+
+# The one evaluation source with no downloader of its own; the other five come from
+# `load_samayik` / `load_itihasa`, which cache under `data/raw/`.
+flores_devtest_jsonl: data/raw/flores/devtest.jsonl
+
+dcs:
+  train_jsonl: data/processed/dcs/train.jsonl
+  heldout_jsonl: data/processed/dcs/heldout.jsonl
+  raw_field: text_slp1            # the sandhied surface: Track 1's raw arms
+  split_field: oracle_split_slp1  # the gold split of the same sentence: Track 1's split arms
+
+sangraha:
+  cache_dir: data/raw/sangraha
+  # `HfApi().dataset_info("ai4bharat/sangraha").sha`, observed 2026-09-05.
+  revision: 8b813c3f62d37b2fa174d68c31e8b35ae2fe85e8
+  # null -> `list_verified_sanskrit_files()` over the pinned revision (11 files under
+  # `verified/san/`). `synthetic/` is machine-translated and is excluded by the loader,
+  # not by this config.
+  files: null
+  # null -> every verified Sanskrit file. Set an integer to build a shortened corpus.
+  max_files: null
+
+wikipedia:
+  cache_dir: data/raw/wikipedia_sa
+  # `HfApi().dataset_info("wikimedia/wikipedia").sha`, observed 2026-09-05.
+  revision: b04c8d1ceb2f5cd4588862100d08de323dccfbaa
+
+# Corpus M1, in assembly order. The order is binding: it decides which copy of a line that
+# occurs in two sources is the one kept. DCS first (the gold corpus), then prose before
+# verse (CLAUDE.md §7), then the two web sources.
+track2_sources:
+  - dcs_train
+  - samayik_train_sa
+  - itihasa_train_sa
+  - sangraha_verified_san
+  - wikipedia_sa
+
+# The out-of-domain evaluation sets, raw and ByT5-reconciled split, from Experiment 03's
+# output. `corpus` is the loader the split file's alignment is checked against.
+heldout_parallel:
+  - name: samayik_test
+    split_jsonl: data/processed/split/samayik_test.jsonl
+    corpus: {name: samayik_test, loader: samayik, split: test}
+  - name: samayik_test_ood
+    split_jsonl: data/processed/split/samayik_test_ood.jsonl
+    corpus: {name: samayik_test_ood, loader: samayik, split: test_ood}
+  - name: itihasa_test
+    split_jsonl: data/processed/split/itihasa_test.jsonl
+    corpus: {name: itihasa_test, loader: itihasa, split: test}
+  - name: flores_devtest
+    split_jsonl: data/processed/split/flores_devtest.jsonl
+    corpus: {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
+
+# The arm each corpus's "≈ tokens available" figure is counted under. Track 1's raw
+# baseline, so the number is directly comparable to the token budgets the sweep will set.
+token_count_arm: T1_bpe_raw_64k_dcs

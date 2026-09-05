@@ -49,9 +49,11 @@ from sanskrit_tok.encoding import to_slp1
 __all__ = [
     "EXCLUSION_PATH",
     "EXCLUSION_PATH_EN",
+    "PARALLEL_EVALUATION_SPLITS",
     "SHINGLE_K",
     "LeakageError",
     "assert_not_excluded",
+    "build_evaluation_shingle_index",
     "build_exclusion_list",
     "build_shingle_index",
     "has_shingle_overlap",
@@ -292,6 +294,86 @@ def has_shingle_overlap(
         return letters in index
     return any(shingle in index for shingle in shingles(letters, k))
 
+
+#: The Sanskrit side of every parallel evaluation split the two leakage layers guard, in
+#: the order `experiments/02_tpp_parallel/build_exclusion.py` hashes them. `(loader,
+#: split)`; FLORES is handled separately because its devtest jsonl is a cached file rather
+#: than a loader call.
+PARALLEL_EVALUATION_SPLITS: tuple[tuple[str, str, str], ...] = (
+    ("samayik_dev", "samayik", "dev"),
+    ("samayik_test", "samayik", "test"),
+    ("samayik_test_ood", "samayik", "test_ood"),
+    ("itihasa_dev", "itihasa", "dev"),
+    ("itihasa_test", "itihasa", "test"),
+)
+
+#: The FLORES-200 language code every corpus in this project keys its Sanskrit by.
+_SANSKRIT_LANGUAGE = "san_Deva"
+
+
+def build_evaluation_shingle_index(
+    flores_devtest_jsonl: Path,
+    k: int = SHINGLE_K,
+    *,
+    extra_sources: Mapping[str, Iterable[str]] | None = None,
+) -> dict[str, frozenset[str]]:
+    """One shingle index per evaluation source, built from its Sanskrit side in SLP1.
+
+    The six parallel-corpus splits `experiments/02_tpp_parallel/build_exclusion.py` hashes
+    — FLORES devtest, Sāmayik dev/test/test_ood, Itihāsa dev/test — loaded through the same
+    loaders, so the two leakage layers are guarding the same text. They store Devanagari, so
+    each sentence is transliterated with `to_slp1(text, "devanagari")` before normalisation.
+
+    `extra_sources` maps a name to already-SLP1 evaluation text, for the sources that have
+    no loader of their own: the DCS held-out split, which `ingest_dcs.py` adds after its
+    first pass has written it and `experiments/05_lm_training/build_corpus.py` reads from
+    `data/processed/dcs/heldout.jsonl`.
+
+    One index per source rather than one union, because every manifest that uses this
+    records drops per source and a union cannot say which evaluation set a dropped
+    sentence came from. The counts therefore overlap: a sentence quoting two evaluation
+    sets is counted under both.
+
+    This is the one definition of "the evaluation sets", shared by the DCS ingestion and
+    the Experiment 05 corpus build so the two cannot drift apart.
+    """
+    from sanskrit_tok.data.flores import load_jsonl
+    from sanskrit_tok.data.itihasa import load_itihasa
+    from sanskrit_tok.data.samayik import load_samayik
+
+    devanagari_sources: dict[str, Sequence[str]] = {
+        "flores_devtest": load_jsonl(
+            flores_devtest_jsonl, name="flores200", split="devtest"
+        ).sentences[_SANSKRIT_LANGUAGE]
+    }
+    for name, loader, split in PARALLEL_EVALUATION_SPLITS:
+        corpus = (
+            load_samayik(split)  # type: ignore[arg-type]
+            if loader == "samayik"
+            else load_itihasa(split)  # type: ignore[arg-type]
+        )
+        devanagari_sources[name] = corpus.sentences[_SANSKRIT_LANGUAGE]
+
+    indices: dict[str, frozenset[str]] = {}
+    for name, sentences in devanagari_sources.items():
+        texts = [to_slp1(text, "devanagari") for text in sentences]
+        indices[name] = build_shingle_index(texts, k)
+        logger.info(
+            "shingle index %s: %d sentence(s) -> %d shingle(s)",
+            name,
+            len(texts),
+            len(indices[name]),
+        )
+    for name, slp1_texts in (extra_sources or {}).items():
+        texts = list(slp1_texts)
+        indices[name] = build_shingle_index(texts, k)
+        logger.info(
+            "shingle index %s: %d sentence(s) -> %d shingle(s)",
+            name,
+            len(texts),
+            len(indices[name]),
+        )
+    return indices
 
 
 class LeakageError(RuntimeError):

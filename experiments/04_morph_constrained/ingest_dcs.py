@@ -89,21 +89,15 @@ from sanskrit_tok.data.dcs import (
 from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
     SHINGLE_K,
+    build_evaluation_shingle_index,
     build_shingle_index,
     has_shingle_overlap,
     load_exclusion_hashes,
     sentence_hash_slp1,
 )
-from sanskrit_tok.data.flores import load_jsonl
-from sanskrit_tok.data.itihasa import load_itihasa
-from sanskrit_tok.data.samayik import load_samayik
-from sanskrit_tok.encoding import to_slp1
 from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, sanitize_json
 
 logger = logging.getLogger("ingest_dcs")
-
-#: The Sanskrit side of every parallel evaluation corpus, as the loaders key it.
-SANSKRIT_LANGUAGE = "san_Deva"
 
 #: How often the file loop logs progress.
 _PROGRESS_EVERY = 50
@@ -425,45 +419,6 @@ def ingest(
     return manifest
 
 
-def evaluation_shingle_indices(
-    root: Path, flores_jsonl: Path, k: int = SHINGLE_K
-) -> dict[str, frozenset[str]]:
-    """One shingle index per evaluation source, built from its Sanskrit side in SLP1.
-
-    The six parallel-corpus splits `experiments/02_tpp_parallel/build_exclusion.py` hashes
-    — FLORES devtest, Sāmayik dev/test/test_ood, Itihāsa dev/test — loaded through the same
-    loaders, so the two leakage layers are guarding the same text. They store Devanagari, so
-    each sentence is transliterated with `to_slp1(text, "devanagari")` before normalisation;
-    the DCS side is already SLP1 and needs none. The seventh source, the DCS held-out split,
-    is added by `ingest` itself once pass 1 has written it.
-
-    One index per source rather than one union, because the manifest records drops per
-    source and a union cannot say which evaluation set a dropped sentence came from.
-    """
-    del root  # the loaders resolve their own cache paths; kept for call-site symmetry
-    corpora = {
-        "flores_devtest": load_jsonl(flores_jsonl, name="flores200", split="devtest"),
-        "samayik_dev": load_samayik("dev"),
-        "samayik_test": load_samayik("test"),
-        "samayik_test_ood": load_samayik("test_ood"),
-        "itihasa_dev": load_itihasa("dev"),
-        "itihasa_test": load_itihasa("test"),
-    }
-    indices: dict[str, frozenset[str]] = {}
-    for name, corpus in corpora.items():
-        texts = [
-            to_slp1(text, "devanagari") for text in corpus.sentences[SANSKRIT_LANGUAGE]
-        ]
-        indices[name] = build_shingle_index(texts, k)
-        logger.info(
-            "shingle index %s: %d sentence(s) -> %d shingle(s)",
-            name,
-            len(texts),
-            len(indices[name]),
-        )
-    return indices
-
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -488,8 +443,8 @@ def main() -> None:
     logger.info("%d exclusion hashes in force (from %s)", len(excluded), exclusion_path)
 
     shingle_k = int(config.get("shingle_k", SHINGLE_K))
-    shingle_indices = evaluation_shingle_indices(
-        root, resolve_path(str(config["flores_devtest_jsonl"]), root), shingle_k
+    shingle_indices = build_evaluation_shingle_index(
+        resolve_path(str(config["flores_devtest_jsonl"]), root), shingle_k
     )
 
     manifest = ingest(
