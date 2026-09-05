@@ -52,6 +52,7 @@ import logging
 import math
 import random
 import sys
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -310,15 +311,74 @@ def pair_key(first: str, second: str) -> str:
     return f"{first}/{second}"
 
 
+def arm_tag(name: str) -> str:
+    """`"T5seg"` from `"T5_morphbpe_rawseg_32k_dcs"`: one arm's short name on the axis.
+
+    The family prefix is what a tick label wants, but it does not always name one arm: `T5`
+    is both the arm constrained on gold segments *and* heuristic stems (`..._raw_...`) and
+    the arm constrained on the gold segments alone (`..._rawseg_...`), and a label reading
+    `T5−T1 64k` for both says nothing about which. The distinction lives in the text field,
+    as a qualifier on the text kind (`rawseg` = `raw` + `seg`), so whatever follows the kind
+    is appended to the prefix and the two arms read as `T5` and `T5seg`.
+    """
+    fields = _fields(name)
+    field = fields[2] if len(fields) >= 3 else ""
+    qualifier = ""
+    for kind in (SPLIT_ARM, RAW_ARM):
+        if field.startswith(kind):
+            qualifier = field[len(kind) :]
+            break
+    return name.split("_", 1)[0] + qualifier
+
+
+def _qualified_arm_label(name: str) -> str:
+    """`"T5 morphbpe dcs"` — `arm_tag` plus the two tokens `pair_label` drops.
+
+    The collision fallback, not a label anyone should read by default: it adds the
+    algorithm and the training-corpus variant, which are the only other things two arms of
+    one family can differ in once the vocabulary size is pinned.
+    """
+    variant = strip_variant_suffix(name)[1]
+    return " ".join(part for part in (arm_tag(name), arm_algorithm(name), variant) if part)
+
+
 def pair_label(first: str, second: str) -> str:
     """The figure's x-tick label for one pair: `"T6−T1 32k"`.
 
-    The two family prefixes say which contrast it is (the constraint, the splitting, or
-    both) and the shared vocabulary size says at which size; the rest of the arm names is
-    what the two sides have in common and would only crowd the axis.
+    The two arm tags say which contrast it is (the constraint, the splitting, or both) and
+    the shared vocabulary size says at which size; the rest of the arm names is what the two
+    sides have in common and would only crowd the axis. `pair_labels` is what the figure and
+    `results.json` use — it is this label, checked to be unique across the configured pairs.
     """
     check_paired_arms(first, second)
-    return f"{first.split('_', 1)[0]}−{second.split('_', 1)[0]} {arm_vocab(first)}"
+    return f"{arm_tag(first)}−{arm_tag(second)} {arm_vocab(first)}"
+
+
+def pair_labels(pairs: Sequence[tuple[str, str]]) -> list[str]:
+    """One label per pair, in the pairs' order, unique across `pairs`.
+
+    Two bars carrying the same label is a figure that cannot be read, and the arm tag alone
+    does not guarantee otherwise for a pairing this config does not currently hold: any pair
+    whose short label is shared falls back to a longer one naming each side's algorithm and
+    training corpus as well. If even that collides the pairs are genuinely indistinguishable
+    by anything the label can carry, which is a config defect and raises.
+    """
+    short = [pair_label(first, second) for first, second in pairs]
+    counts = Counter(short)
+    labels = [
+        label
+        if counts[label] == 1
+        else f"{_qualified_arm_label(first)}−{_qualified_arm_label(second)} "
+        f"{arm_vocab(first)}"
+        for (first, second), label in zip(pairs, short, strict=True)
+    ]
+    repeated = sorted(label for label, count in Counter(labels).items() if count > 1)
+    if repeated:
+        raise ValueError(
+            f"config['paired_deltas'] yields duplicate figure labels {repeated}: two pairs "
+            "differ in nothing the label can name"
+        )
+    return labels
 
 
 def select_pairs(
@@ -1260,6 +1320,7 @@ def compute_tpp_delta(
     not as "zero".
     """
     pivot = arms.get(pivot_name)
+    labels = dict(zip(pairs, pair_labels(pairs), strict=True))
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for corpus in corpora:
         pair_results: dict[str, dict[str, Any]] = {}
@@ -1284,7 +1345,7 @@ def compute_tpp_delta(
             entry["variant_b"] = variant_b
             entry["pivot"] = pivot_name
             entry["pivot_cross_corpus"] = True
-            entry["label"] = pair_label(first, second)
+            entry["label"] = labels[(first, second)]
             saving = counts_b.source_total - counts_a.source_total
             entry["source_tokens_saved"] = saving
             if variant_a == variant_b:
@@ -1410,11 +1471,11 @@ def _delta_series(
     labels: list[str] = []
     values: list[float] = []
     errors: tuple[list[float], list[float]] = ([], [])
-    for first, second in pairs:
+    for (first, second), fallback in zip(pairs, pair_labels(pairs), strict=True):
         entry = corpus_delta.get(pair_key(first, second))
         if entry is None:
             continue
-        labels.append(str(entry.get("label", pair_label(first, second))))
+        labels.append(str(entry.get("label", fallback)))
         value = entry.get("delta")
         value = math.nan if value is None else float(value)
         values.append(value)

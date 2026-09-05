@@ -333,6 +333,46 @@ def test_pair_label_names_the_two_families_and_the_shared_vocab() -> None:
     )
 
 
+def test_pair_label_separates_the_two_t5_arms() -> None:
+    """`T5` and `T5seg` are two different constraints and must not share a tick label."""
+    assert run.arm_tag("T5_morphbpe_rawseg_64k_dcs") == "T5seg"
+    assert run.arm_tag("T5_morphbpe_raw_64k_dcs") == "T5"
+    assert (
+        run.pair_label("T5_morphbpe_rawseg_64k_dcs", "T1_bpe_raw_64k_dcs") == "T5seg−T1 64k"
+    )
+    assert run.pair_label("T5_morphbpe_raw_64k_dcs", "T1_bpe_raw_64k_dcs") == "T5−T1 64k"
+
+
+def test_shipped_config_pair_labels_are_unique() -> None:
+    """Every configured pair gets its own tick label: two bars with one label is a figure
+    that cannot be read, and `results.json`'s `label` field is the same string."""
+    config = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
+    pairs = [(str(first), str(second)) for first, second in config["paired_deltas"]]
+    labels = run.pair_labels(pairs)
+    assert len(labels) == len(pairs)
+    assert len(set(labels)) == len(labels)
+    assert "T5seg−T1 64k" in labels
+
+
+def test_pair_labels_fall_back_to_algorithm_and_corpus_on_a_collision() -> None:
+    """A pairing whose arm tags collide is labelled with the algorithm and the training
+    corpus rather than silently duplicated."""
+    labels = run.pair_labels(
+        [
+            ("T5_morphbpe_raw_32k_dcs", "T1_bpe_raw_32k_dcs"),
+            ("T5_unigram_raw_32k_dcs", "T1_unigram_raw_32k_dcs"),
+        ]
+    )
+    assert len(set(labels)) == 2
+    assert labels[1] == "T5 unigram dcs−T1 unigram dcs 32k"
+
+
+def test_pair_labels_rejects_two_indistinguishable_pairs() -> None:
+    pair = ("T5_morphbpe_raw_32k_dcs", "T1_bpe_raw_32k_dcs")
+    with pytest.raises(ValueError, match="duplicate figure labels"):
+        run.pair_labels([pair, pair])
+
+
 def test_select_pairs_keeps_a_pair_whose_both_sides_loaded() -> None:
     arms = {name: _char_arm(name) for name in ("T5_morphbpe_raw_32k_dcs", "T1_bpe_raw_32k_dcs")}
     assert run.select_pairs([PAIRS[0]], arms) == [
