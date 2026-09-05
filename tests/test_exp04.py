@@ -63,8 +63,9 @@ MARKER = "\x1f"
 
 #: Three synthetic DCS held-out records. Every field is consistent with the others: the
 #: markers in `t5_marked` are the segment offsets plus the stem offsets projected into the
-#: sandhied surface, and the markers in `t6_marked` are the stem offsets as absolute indices
-#: into `oracle_split_slp1`, which is exactly the invariant the real ingestion maintains.
+#: sandhied surface, the markers in `t5seg_marked` are the segment offsets alone, and the
+#: markers in `t6_marked` are the stem offsets as absolute indices into
+#: `oracle_split_slp1`, which is exactly the invariant the real ingestion maintains.
 #:
 #: Record 1 (verified): `tadapi` = `tat|api` with a stem boundary inside `tat` at 2, and
 #: `satyam` with a stem boundary at 2. Record 2 (unverified): `rAmaH` = `rAma|H`, and
@@ -79,6 +80,7 @@ GOLD_RECORDS: list[dict[str, Any]] = [
         "segment_offsets": [[3], []],
         "stem_offsets": [[2], [10]],
         "t5_marked": f"ta{MARKER}d{MARKER}api sa{MARKER}tyam",
+        "t5seg_marked": f"tad{MARKER}api satyam",
         "t6_marked": f"ta{MARKER}t api sa{MARKER}tyam",
         "n_words": 2,
         "n_words_aligned": 2,
@@ -92,6 +94,7 @@ GOLD_RECORDS: list[dict[str, Any]] = [
         "segment_offsets": [[], None],
         "stem_offsets": [[4], []],
         "t5_marked": f"rAma{MARKER}H gacCati",
+        "t5seg_marked": "rAmaH gacCati",
         "t6_marked": f"rAma{MARKER}H gacCati",
         "n_words": 2,
         "n_words_aligned": 1,
@@ -105,6 +108,7 @@ GOLD_RECORDS: list[dict[str, Any]] = [
         "segment_offsets": [[], []],
         "stem_offsets": [[], [11]],
         "t5_marked": f"gacCati van{MARKER}am",
+        "t5seg_marked": "gacCati vanam",
         "t6_marked": f"gacCati van{MARKER}am",
         "n_words": 2,
         "n_words_aligned": 2,
@@ -766,7 +770,11 @@ def experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
         "morphscore_bootstrap": 25,
         "morphscore_bootstrap_seed": 0,
         "arms_indomain": [*RAW_ARMS, *SPLIT_ARMS],
-        "violation_arms": {run.RAW_ARM: RAW_ARMS, run.SPLIT_ARM: SPLIT_ARMS},
+        "violation_arms": {
+            run.RAW_ARM: RAW_ARMS,
+            "rawseg": RAW_ARMS,
+            run.SPLIT_ARM: SPLIT_ARMS,
+        },
         "violation_sample": 10,
         "spans_coverage_sentences": 3,
         "english_pivots": {"controlled": "E1_bpe_64k", "deployed": "T0_o200k"},
@@ -879,6 +887,12 @@ def test_run_end_to_end_writes_strict_json_a_config_and_both_figures(
     assert indomain["T6_morphbpe_split_32k_dcs"]["variant"] == run.SPLIT
     assert indomain["T1_bpe_raw_32k_dcs"]["n_tokens"] > 0
 
+    # the violation audit keys: the arm's own boundary set keeps the bare name, a second
+    # denominator is suffixed with the boundary set it was measured against
+    assert "T1_bpe_raw_32k_dcs" in results["violations"]
+    assert "T1_bpe_raw_32k_dcs@rawseg" in results["violations"]
+    assert results["violations"]["T1_bpe_raw_32k_dcs@rawseg"]["arm"] == "T1_bpe_raw_32k_dcs"
+
 
 def test_run_checks_the_heldout_sentences_are_in_the_exclusion_list(
     experiment: dict[str, Any], tmp_path: Path
@@ -937,3 +951,30 @@ def test_run_measures_a_whole_word_arm_without_crashing(
     )["morphscore"]["T1_bpe_raw_32k_dcs"][run.GRANULARITY_SEGMENT][run.SUBSET_ALL]["exact"][
         "value"
     ] is None
+
+
+def test_violation_key_names_the_boundary_set_only_when_it_is_not_the_arms_own() -> None:
+    assert run.violation_key(run.RAW_ARM, "T1_bpe_raw_32k_dcs") == "T1_bpe_raw_32k_dcs"
+    assert (
+        run.violation_key("rawseg", "T1_bpe_raw_32k_dcs") == "T1_bpe_raw_32k_dcs@rawseg"
+    )
+    assert (
+        run.violation_key(run.SPLIT_ARM, "T6_morphbpe_split_64k_dcs")
+        == "T6_morphbpe_split_64k_dcs"
+    )
+
+
+def test_violation_fields_name_a_gold_sentence_field_for_every_boundary_set() -> None:
+    assert run.VIOLATION_FIELDS == {
+        run.RAW_ARM: "t5_marked",
+        "rawseg": "t5seg_marked",
+        run.SPLIT_ARM: "t6_marked",
+    }
+
+
+def test_shipped_config_audits_every_raw_arm_against_both_raw_boundary_sets() -> None:
+    config = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
+    groups = config["violation_arms"]
+    assert set(groups) == set(run.VIOLATION_FIELDS)
+    assert groups["raw"] == groups["rawseg"]
+    assert "T5_morphbpe_rawseg_64k_dcs" in groups["raw"]

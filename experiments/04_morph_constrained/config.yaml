@@ -88,13 +88,24 @@ paired_deltas:
   - [T6_morphbpe_split_64k_dcs, T1_bpe_raw_64k_dcs]
 
 # The out-of-sample constraint audit: each arm is run over the *held-out* marked text it
-# never saw, and the per-boundary violation rate is the mechanism number. Raw arms are
-# audited against `t5_marked` (segment and projected stem boundaries in the sandhied
-# surface), split arms against `t6_marked` (stem boundaries in the oracle split). Each
-# constrained arm sits beside the unconstrained arm trained on the same sentences at the
-# same vocabulary size.
+# never saw, and the per-boundary violation rate is the mechanism number. The key names the
+# boundary set, not the arm: `raw` is `t5_marked` (gold segments AND projected heuristic
+# stems in the sandhied surface — what T5 is constrained on), `rawseg` is `t5seg_marked`
+# (gold segments only — what T5seg is constrained on), `split` is `t6_marked` (heuristic
+# stems inside the oracle split — what T6 is constrained on). Every raw arm is audited
+# against both raw denominators, because "did it keep the constraint it was given" and "did
+# the constraint generalise to boundaries it never saw" are different questions and T5 and
+# T5seg answer them differently. Each constrained arm sits beside the unconstrained arm
+# trained on the same sentences at the same vocabulary size.
 violation_arms:
   raw:
+    - T1_bpe_raw_32k_dcs
+    - T1_bpe_raw_64k_dcs
+    - T5_morphbpe_raw_32k_dcs
+    - T5_morphbpe_raw_64k_dcs
+    - T5_morphbpe_rawseg_32k_dcs
+    - T5_morphbpe_rawseg_64k_dcs
+  rawseg:
     - T1_bpe_raw_32k_dcs
     - T1_bpe_raw_64k_dcs
     - T5_morphbpe_raw_32k_dcs

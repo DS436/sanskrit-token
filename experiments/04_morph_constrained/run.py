@@ -113,6 +113,31 @@ SPLIT = "reconciled"
 RAW_ARM = "raw"
 SPLIT_ARM = "split"
 
+#: The three boundary sets the out-of-sample violation audit can be run against, and the
+#: `GoldSentence` field each is written from. They are *audit denominators*, not arm kinds:
+#: a raw arm can be audited against `raw` (gold segments plus projected heuristic stems, the
+#: union `T5` is constrained on) and against `rawseg` (gold segments only, what `T5seg` is
+#: constrained on), and the two answer different questions about the same tokenizer. A
+#: constrained arm measured against boundaries it was never constrained on is being asked
+#: how far the constraint generalises, which is worth knowing and is not the same number as
+#: how well it kept the constraint it was given.
+VIOLATION_FIELDS: dict[str, str] = {
+    RAW_ARM: "t5_marked",
+    "rawseg": "t5seg_marked",
+    SPLIT_ARM: "t6_marked",
+}
+
+
+def violation_key(kind: str, name: str) -> str:
+    """`results.json`'s `violations` key: `"<arm>"`, or `"<arm>@<kind>"` off the default.
+
+    An arm is audited against more than one boundary set — every raw arm is measured against
+    both `raw` and `rawseg` — so the arm name alone is not a key. The arm's *own* kind
+    (`arm_text_kind`) keeps the bare name so every pre-existing key still reads as before,
+    and any other denominator is suffixed with the boundary set it was measured against.
+    """
+    return name if kind == arm_text_kind(name) else f"{name}@{kind}"
+
 #: The two boundary granularities, and only one of them is gold. `segment` is DCS's own
 #: word/compound segmentation located in the sandhied surface — the primary, the one H3/H4's
 #: MorphScore claims use, and the only one that is annotation. `stem` is the stem/ending
@@ -344,6 +369,7 @@ class GoldRecord:
     segment_offsets: list[list[int] | None]
     stem_offsets: list[list[int]]
     t5_marked: str
+    t5seg_marked: str
     t6_marked: str
     n_words: int
     n_words_aligned: int
@@ -364,6 +390,7 @@ class GoldRecord:
                 [int(offset) for offset in offsets] for offsets in record["stem_offsets"]
             ],
             t5_marked=str(record["t5_marked"]),
+            t5seg_marked=str(record["t5seg_marked"]),
             t6_marked=str(record["t6_marked"]),
             n_words=int(record["n_words"]),
             n_words_aligned=int(record["n_words_aligned"]),
@@ -989,10 +1016,11 @@ def compute_violations(
     for kind, names in violation_arms.items():
         corpus = marked_corpora[kind]
         for name in names:
+            key = violation_key(kind, name)
             tokenizer = arms.get(name)
             if tokenizer is None:
                 logger.warning("%s: unavailable this run; no violation audit", name)
-                reports[name] = {"skipped": "arm unavailable this run", "kind": kind}
+                reports[key] = {"skipped": "arm unavailable this run", "kind": kind, "arm": name}
                 continue
             path = Path(tokenizer.source_id)
             if not path.is_file():
@@ -1001,15 +1029,16 @@ def compute_violations(
                     name,
                     tokenizer.source_id,
                 )
-                reports[name] = {
+                reports[key] = {
                     "skipped": f"source_id {tokenizer.source_id!r} is not a file",
                     "kind": kind,
+                    "arm": name,
                 }
                 continue
             report = violation_report(path, corpus, sample)
             report["kind"] = kind
             report["arm"] = name
-            reports[name] = report
+            reports[key] = report
             logger.info(
                 "%s: %d violating token(s) over %d gold boundary/boundaries "
                 "(%.4f per boundary) on held-out %s text",
@@ -1664,12 +1693,10 @@ def run(config: Mapping[str, Any], config_src: Path | None = None) -> dict[str, 
     )
 
     marked_corpora = {
-        RAW_ARM: write_marked_corpus(
-            all_records, "t5_marked", out_dir / "marked" / "heldout_t5_marked.txt"
-        ),
-        SPLIT_ARM: write_marked_corpus(
-            all_records, "t6_marked", out_dir / "marked" / "heldout_t6_marked.txt"
-        ),
+        kind: write_marked_corpus(
+            all_records, field, out_dir / "marked" / f"heldout_{field}.txt"
+        )
+        for kind, field in VIOLATION_FIELDS.items()
     }
     violations = compute_violations(
         arms, violation_arms, marked_corpora, int(config.get("violation_sample", 2000))
