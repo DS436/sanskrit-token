@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
-from sanskrit_tok.tokenizers._train_common import save_trained_tokenizer
+from sanskrit_tok.tokenizers._train_common import iter_corpus_lines, save_trained_tokenizer
 
 __all__ = ["train_unigram"]
 
@@ -19,6 +19,10 @@ def train_unigram(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: in
     `models.Unigram()` with a `Metaspace` pre-tokenizer and matching decoder, trained with
     `trainers.UnigramTrainer(vocab_size=vocab_size, unk_token="[UNK]",
     special_tokens=["[UNK]"], show_progress=False)`.
+
+    **Line breaks never reach the pre-tokenizer**, exactly as in `train_bpe`: the corpus is
+    streamed through `_train_common.iter_corpus_lines` and trained with
+    `train_from_iterator`, so no vocabulary entry carries a `\n`.
 
     The EM-based Unigram trainer can settle on fewer pieces than `vocab_size` when the
     corpus does not support the full request; `tokenizer.get_vocab_size()` after training
@@ -58,6 +62,6 @@ def train_unigram(corpus_path: Path, vocab_size: int, out_dir: Path, *, seed: in
         show_progress=False,
     )
 
-    tokenizer.train([str(corpus_path)], trainer=trainer)
+    tokenizer.train_from_iterator(iter_corpus_lines(corpus_path), trainer=trainer)
 
     return save_trained_tokenizer(tokenizer, out_dir, corpus_path, vocab_size, "train_unigram")

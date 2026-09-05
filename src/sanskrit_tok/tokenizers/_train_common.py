@@ -8,13 +8,44 @@ specific to BPE vs. Unigram.
 """
 
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 from tokenizers import Tokenizer
 
-__all__ = ["save_trained_tokenizer"]
+__all__ = ["iter_corpus_lines", "save_trained_tokenizer"]
 
 logger = logging.getLogger(__name__)
+
+
+def iter_corpus_lines(corpus_path: Path) -> Iterator[str]:
+    """Every non-blank line of `corpus_path`, with its line break stripped.
+
+    This exists because `Tokenizer.train([path])` hands each line to the pre-tokenizer with
+    its trailing `\n` still attached, and `Metaspace` treats that newline as an ordinary
+    character: a line-final word is learned as `word\n`, so 5–15% of a BPE vocabulary ends
+    up as entries carrying a newline that no inference-time string can ever contain. They
+    are dead ids, and they are not distributed evenly across arms — a constrained arm's
+    marker `Split` shatters the line-final word and leaves it far fewer of them — so
+    "matched vocabulary size" (CLAUDE.md §2.5) was off by about 7% of live entries in the
+    unconstrained controls' disfavour (docs/decisions.md, 2026-09-05, "Trainers strip
+    newlines; every trained arm is retrained and Experiments 02–04 re-run").
+
+    Both trainers therefore call `train_from_iterator` over this rather than
+    `train([path])`. That is the fix which leaves the *saved* tokenizer byte-identical in
+    everything but its learned vocabulary: adding a `Split("\n")` to the pre-tokenizer
+    would also change the pre-tokenizer the file records, and so change how the arm behaves
+    at inference for no reason.
+
+    A line that is empty once its break is removed is skipped: it contributes nothing, and
+    an empty string handed to `train_from_iterator` is one more thing for the trainer to
+    count as a sequence.
+    """
+    with corpus_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            stripped = line.rstrip("\r\n")
+            if stripped:
+                yield stripped
 
 
 def save_trained_tokenizer(

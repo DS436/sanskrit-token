@@ -798,14 +798,18 @@ def _load_trained_arm(name: str) -> LoadedTokenizer:
     )
 
 
-#: The twelve Experiment 04 arms, every one trained by this project on the DCS training
+#: The fourteen Experiment 04 arms, every one trained by this project on the DCS training
 #: split (docs/decisions.md, 2026-09-05, "Experiment 04: DCS is the gold source and the
 #: first monolingual training corpus"). File-backed like T1/T2/E1/T4 and loaded by the same
 #: loader; what the names say is which of the four DCS corpora each was trained on —
 #: `_dcs` the sandhied text (or, for T5/T6, its marked form), `_oracle_dcs` the gold
 #: segmentation. `T5`/`T6` are the morpheme-constrained (MorphBPE-hard) families, and their
 #: matched unconstrained controls are the `T1_*_dcs` / `T4_*_oracle_dcs` arms beside them:
-#: same corpus sentences, same vocabulary size, same trainer, no boundary marker.
+#: same corpus sentences, same vocabulary size, same trainer, no boundary marker. The
+#: `T5_morphbpe_rawseg_*` pair is the same constraint marked at DCS's gold **segment**
+#: boundaries only, so it is the arm whose result owes nothing to the stem heuristic
+#: (docs/decisions.md, 2026-09-05, "Stem boundaries are heuristic ... gold-segment-only
+#: constrained arm added").
 DCS_ARMS: tuple[str, ...] = (
     "T1_bpe_raw_32k_dcs",
     "T1_bpe_raw_64k_dcs",
@@ -817,6 +821,8 @@ DCS_ARMS: tuple[str, ...] = (
     "T4_unigram_split_64k_oracle_dcs",
     "T5_morphbpe_raw_32k_dcs",
     "T5_morphbpe_raw_64k_dcs",
+    "T5_morphbpe_rawseg_32k_dcs",
+    "T5_morphbpe_rawseg_64k_dcs",
     "T6_morphbpe_split_32k_dcs",
     "T6_morphbpe_split_64k_dcs",
 )

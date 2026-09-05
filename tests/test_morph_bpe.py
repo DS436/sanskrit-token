@@ -185,6 +185,8 @@ EXPECTED_ARMS = {
     "T4_unigram_split_64k_oracle_dcs": ("unigram", "dcs_oracle_split", 64000),
     "T5_morphbpe_raw_32k_dcs": ("morph_bpe", "dcs_raw_marked", 32000),
     "T5_morphbpe_raw_64k_dcs": ("morph_bpe", "dcs_raw_marked", 64000),
+    "T5_morphbpe_rawseg_32k_dcs": ("morph_bpe", "dcs_raw_segmarked", 32000),
+    "T5_morphbpe_rawseg_64k_dcs": ("morph_bpe", "dcs_raw_segmarked", 64000),
     "T6_morphbpe_split_32k_dcs": ("morph_bpe", "dcs_split_marked", 32000),
     "T6_morphbpe_split_64k_dcs": ("morph_bpe", "dcs_split_marked", 64000),
 }
@@ -194,6 +196,7 @@ EXPECTED_CORPUS_FIELDS = {
     "dcs_raw": "text_slp1",
     "dcs_oracle_split": "oracle_split_slp1",
     "dcs_raw_marked": "t5_marked",
+    "dcs_raw_segmarked": "t5seg_marked",
     "dcs_split_marked": "t6_marked",
 }
 
@@ -203,7 +206,7 @@ def exp04_config() -> dict[str, object]:
     return dict(yaml.safe_load(EXP04_TOKENIZERS_YAML.read_text(encoding="utf-8")))
 
 
-def test_exp04_config_declares_the_four_dcs_corpora(exp04_config: dict[str, object]) -> None:
+def test_exp04_config_declares_the_five_dcs_corpora(exp04_config: dict[str, object]) -> None:
     corpora = exp04_config["corpora"]
     assert isinstance(corpora, dict)
     assert set(corpora) == set(EXPECTED_CORPUS_FIELDS)
@@ -212,7 +215,7 @@ def test_exp04_config_declares_the_four_dcs_corpora(exp04_config: dict[str, obje
         assert corpora[name]["corpus_path"] == f"data/processed/tok_train_{name}.txt"
 
 
-def test_exp04_config_declares_the_twelve_arms(exp04_config: dict[str, object]) -> None:
+def test_exp04_config_declares_the_fourteen_arms(exp04_config: dict[str, object]) -> None:
     arms = exp04_config["arms"]
     assert isinstance(arms, list)
     declared = {
@@ -229,6 +232,10 @@ def test_exp04_config_gives_every_bpe_arm_a_marked_corpus_to_check_against(
     BPE arms are checked against the matching *marked* corpus as the control."""
     arms = {str(arm["name"]): arm for arm in exp04_config["arms"]}
     assert arms["T5_morphbpe_raw_32k_dcs"]["check_corpus"] == "dcs_raw_marked"
+    # T5seg trains on segment-only marks but is audited against the same boundaries as
+    # T1 and T5, so all three raw arms' violation rates share a denominator.
+    assert arms["T5_morphbpe_rawseg_32k_dcs"]["corpus"] == "dcs_raw_segmarked"
+    assert arms["T5_morphbpe_rawseg_32k_dcs"]["check_corpus"] == "dcs_raw_marked"
     assert arms["T6_morphbpe_split_32k_dcs"]["check_corpus"] == "dcs_split_marked"
     assert arms["T1_bpe_raw_32k_dcs"]["check_corpus"] == "dcs_raw_marked"
     assert arms["T4_bpe_split_64k_oracle_dcs"]["check_corpus"] == "dcs_split_marked"

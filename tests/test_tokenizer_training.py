@@ -332,3 +332,34 @@ def test_train_arm_puts_extra_keys_straight_after_the_algo(
 def test_train_arm_rejects_an_unknown_algo(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="algo"):
         train_arm({"name": "X", "algo": "nope", "vocab_size": 10}, tmp_path / "c.txt", 0)
+
+
+# ------------------------------------------------------- line breaks never reach a vocab
+
+
+@pytest.mark.parametrize("algo", sorted(ALGO_TRAINERS))
+def test_no_trained_vocabulary_entry_contains_a_newline(algo: str, tmp_path: Path) -> None:
+    """`Tokenizer.train([path])` leaves each line's `\n` attached and `Metaspace` learns it.
+
+    Both trainers therefore stream the corpus through `iter_corpus_lines` and call
+    `train_from_iterator`. Every line here ends in a distinct, frequent word, which is
+    exactly the position the dead `word\n` entries used to be learned in
+    (docs/decisions.md, 2026-09-05, "Trainers strip newlines").
+    """
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text(
+        "\n".join(["rAmaH gacCati vanam"] * 40 + ["sItA gacCati vanam"] * 40) + "\n",
+        encoding="utf-8",
+    )
+    path = ALGO_TRAINERS[algo](corpus, 60, tmp_path / algo, seed=0)
+    vocab = json.loads(path.read_text(encoding="utf-8"))["model"]["vocab"]
+    entries = vocab if isinstance(vocab, dict) else [piece for piece, _ in vocab]
+    assert not [token for token in entries if "\n" in token or "\r" in token]
+
+
+def test_blank_corpus_lines_are_skipped_rather_than_trained_on(tmp_path: Path) -> None:
+    from sanskrit_tok.tokenizers._train_common import iter_corpus_lines
+
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("rAmaH\n\n   \nsItA\r\n", encoding="utf-8")
+    assert list(iter_corpus_lines(corpus)) == ["rAmaH", "   ", "sItA"]

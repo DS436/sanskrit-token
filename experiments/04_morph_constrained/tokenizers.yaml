@@ -1,4 +1,4 @@
-# The twelve Experiment 04 tokenizer arms, all trained on the DCS training split.
+# The fourteen Experiment 04 tokenizer arms, all trained on the DCS training split.
 #
 # Every arm here is trained on the same 720,510 DCS sentences with the same trainer at the
 # same two vocabulary sizes (CLAUDE.md §2.5), so the paired deltas Experiment 04 reports —
@@ -15,10 +15,17 @@
 # list on its *sandhied* SLP1 text (CLAUDE.md §2.4) so all four are checked against exactly
 # the same strings:
 #
-#   dcs_raw          text_slp1           the sandhied sentence
-#   dcs_oracle_split oracle_split_slp1   the same sentence, gold segments space-separated
-#   dcs_raw_marked   t5_marked           text_slp1 + U+001F at every gold boundary
-#   dcs_split_marked t6_marked           oracle_split_slp1 + U+001F at every stem boundary
+#   dcs_raw            text_slp1           the sandhied sentence
+#   dcs_oracle_split   oracle_split_slp1   the same sentence, gold segments space-separated
+#   dcs_raw_marked     t5_marked           text_slp1 + U+001F at segment AND stem boundaries
+#   dcs_raw_segmarked  t5seg_marked        text_slp1 + U+001F at gold SEGMENT boundaries only
+#   dcs_split_marked   t6_marked           oracle_split_slp1 + U+001F at every stem boundary
+#
+# `dcs_raw_segmarked` is what the `T5_morphbpe_rawseg_*` arms train on, and it is the clean
+# "MorphBPE with gold boundaries" condition: its constraint comes from DCS's own annotation
+# and owes nothing to the stem heuristic, which the T5/T6 arms' marked text also carries
+# (docs/decisions.md, 2026-09-05, "Stem boundaries are heuristic ... gold-segment-only
+# constrained arm added").
 #
 # The two marked corpora are training text only: the marker never survives into a vocabulary
 # and never appears at inference (docs/decisions.md, "MorphBPE-hard implemented as
@@ -50,6 +57,11 @@ corpora:
     field: t5_marked
     corpus_path: data/processed/tok_train_dcs_raw_marked.txt
     manifest_path: data/processed/manifest_dcs_raw_marked.json
+    marked: true
+  dcs_raw_segmarked:
+    field: t5seg_marked
+    corpus_path: data/processed/tok_train_dcs_raw_segmarked.txt
+    manifest_path: data/processed/manifest_dcs_raw_segmarked.json
     marked: true
   dcs_split_marked:
     field: t6_marked
@@ -108,6 +120,22 @@ arms:
     algo: morph_bpe
     vocab_size: 64000
     corpus: dcs_raw_marked
+    check_corpus: dcs_raw_marked
+
+  # --- gold-SEGMENT-constrained merges on the sandhied text (T5seg, the clean arm) ---
+  # Same constraint mechanism as T5, marked only at DCS's own segment boundaries, so no
+  # number it produces depends on the stem heuristic. Audited against `dcs_raw_marked` —
+  # the same boundaries T1 and T5 are audited against — so all three raw arms' violation
+  # rates share a denominator.
+  - name: T5_morphbpe_rawseg_32k_dcs
+    algo: morph_bpe
+    vocab_size: 32000
+    corpus: dcs_raw_segmarked
+    check_corpus: dcs_raw_marked
+  - name: T5_morphbpe_rawseg_64k_dcs
+    algo: morph_bpe
+    vocab_size: 64000
+    corpus: dcs_raw_segmarked
     check_corpus: dcs_raw_marked
 
   # --- morpheme-constrained merges on the gold-split text (T6, the proposed tokenizer) ---

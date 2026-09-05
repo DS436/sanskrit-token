@@ -684,9 +684,36 @@ def test_shipped_config_pairs_are_all_controlled() -> None:
     family and training corpus — checked here so a config typo fails in CI, not after an
     hour of bootstrapping."""
     config = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
-    assert len(config["paired_deltas"]) == 8
+    assert len(config["paired_deltas"]) == 10
     for first, second in config["paired_deltas"]:
         run.check_paired_arms(first, second)
+
+
+def test_shipped_config_morphscore_deltas_are_controlled_and_same_population() -> None:
+    """Every MorphScore contrast must be matched the same way a TPP pair is *and* score the
+    same population of units: a raw arm at segment granularity against a raw arm, a split
+    arm at stem granularity against a split arm."""
+    config = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
+    contrasts = config["morphscore_deltas"]
+    assert len(contrasts) == 6
+    for contrast in contrasts:
+        run.check_paired_arms(contrast["a"], contrast["b"])
+        kinds = {run.arm_text_kind(contrast["a"]), run.arm_text_kind(contrast["b"])}
+        assert len(kinds) == 1
+        assert contrast["granularity"] in run.granularities_for(kinds.pop())
+    # `T4_oracle − T1_dcs` compares two populations of units and must never be listed.
+    assert not [
+        contrast
+        for contrast in contrasts
+        if run.arm_text_kind(contrast["a"]) != run.arm_text_kind(contrast["b"])
+    ]
+
+
+def test_shipped_config_indomain_arms_are_all_dcs_trained() -> None:
+    config = yaml.safe_load(CONFIG_YAML.read_text(encoding="utf-8"))
+    assert len(config["arms_indomain"]) == 14
+    for name in config["arms_indomain"]:
+        assert run.strip_variant_suffix(name)[1] in {"dcs", "oracle_dcs"}
 
 
 def test_shipped_config_lists_prose_before_verse() -> None:
@@ -724,6 +751,21 @@ def experiment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict
         "arms_morphscore": [*RAW_ARMS, *SPLIT_ARMS],
         "arms_tpp": [*RAW_ARMS, *SPLIT_ARMS],
         "paired_deltas": [list(pair) for pair in PAIRS],
+        "morphscore_deltas": [
+            {
+                "a": "T5_morphbpe_raw_32k_dcs",
+                "b": "T1_bpe_raw_32k_dcs",
+                "granularity": run.GRANULARITY_SEGMENT,
+            },
+            {
+                "a": "T6_morphbpe_split_32k_dcs",
+                "b": "T4_bpe_split_32k_oracle_dcs",
+                "granularity": run.GRANULARITY_STEM,
+            },
+        ],
+        "morphscore_bootstrap": 25,
+        "morphscore_bootstrap_seed": 0,
+        "arms_indomain": [*RAW_ARMS, *SPLIT_ARMS],
         "violation_arms": {run.RAW_ARM: RAW_ARMS, run.SPLIT_ARM: SPLIT_ARMS},
         "violation_sample": 10,
         "spans_coverage_sentences": 3,
@@ -784,6 +826,8 @@ def test_run_end_to_end_writes_strict_json_a_config_and_both_figures(
         "exclusion_check",
         "exclusion_check_en",
         "morphscore",
+        "morphscore_delta",
+        "compression_indomain",
         "spans_coverage",
         "violations",
         "tpp",
@@ -815,6 +859,25 @@ def test_run_end_to_end_writes_strict_json_a_config_and_both_figures(
     assert results["exclusion_check_en"]["corpus_a"] == {"n": 4, "n_missing": 0}
     assert results["tokenizer_sources"]["T6_morphbpe_split_32k_dcs"]["variant"] == "dcs"
     assert results["text_invariants"]["dcs_heldout_oracle_vs_raw"]["letter_chars_raw"] > 0
+
+    # the MorphScore paired deltas: both subsets, both tolerances, delta = F1(a) - F1(b)
+    ms_delta = results["morphscore_delta"][
+        run.pair_key("T5_morphbpe_raw_32k_dcs", "T1_bpe_raw_32k_dcs")
+    ]
+    assert set(ms_delta) == {run.SUBSET_ALL, run.SUBSET_HUMAN}
+    entry = ms_delta[run.SUBSET_ALL]["exact"]
+    assert entry["delta"] == pytest.approx(entry["f1_a"] - entry["f1_b"])
+    assert entry["ci_low"] <= entry["ci_high"]
+    assert entry["n_sentences"] == 3
+    assert entry["granularity"] == run.GRANULARITY_SEGMENT
+    assert ms_delta[run.SUBSET_HUMAN]["exact"]["n_sentences"] == 2
+
+    # in-domain compression on the held-out split, on the text form each arm tokenizes
+    indomain = results["compression_indomain"]
+    assert set(indomain) == {*RAW_ARMS, *SPLIT_ARMS}
+    assert indomain["T1_bpe_raw_32k_dcs"]["variant"] == run.RAW
+    assert indomain["T6_morphbpe_split_32k_dcs"]["variant"] == run.SPLIT
+    assert indomain["T1_bpe_raw_32k_dcs"]["n_tokens"] > 0
 
 
 def test_run_checks_the_heldout_sentences_are_in_the_exclusion_list(

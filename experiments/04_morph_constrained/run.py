@@ -8,13 +8,16 @@ that is tested with the *gold* split rather than a model's — the `T4_*_oracle_
 trained on DCS's own segmentation — so it is the upper bound on what splitting can buy,
 measured on held-out DCS sentences with gold boundaries.
 
-**H4, TPP half**: a morpheme-constrained vocabulary (`T5` on raw text, `T6` on gold-split
-text) buys tokens. H4's own wording is about *tokens to a reference bits-per-character*,
-which needs a trained language model and belongs to Experiment 05; what this script can
-answer is whether the constrained arm spends fewer tokens per unit of meaning than the
-unconstrained arm trained on the same sentences at the same vocabulary size
-(docs/decisions.md, 2026-09-05, "Experiment 04 headline is the paired TPP delta between
-constrained and unconstrained DCS arms; MorphScore is the mechanism check").
+**H4, TPP half**: a morpheme-constrained vocabulary (`T5` and `T5seg` on raw text, `T6`
+on gold-split text) buys tokens. `T5` is constrained on gold segment boundaries *and*
+heuristic stem boundaries; `T5seg` on the gold segment boundaries alone, so it is the
+arm whose result owes nothing to the stem heuristic. H4's own wording is about *tokens
+to a reference bits-per-character*, which needs a trained language model and belongs to
+Experiment 05; what this script can answer is whether the constrained arm spends fewer
+tokens per unit of meaning than the unconstrained arm trained on the same sentences at
+the same vocabulary size (docs/decisions.md, 2026-09-05, "Experiment 04 headline is the
+paired TPP delta between constrained and unconstrained DCS arms; MorphScore is the
+mechanism check").
 
 **The headline is the paired delta, not the level.** Every arm here is trained on DCS,
 which has no matched English side — `E1_bpe_64k` was trained on the English half of the
@@ -110,12 +113,13 @@ SPLIT = "reconciled"
 RAW_ARM = "raw"
 SPLIT_ARM = "split"
 
-#: The two gold-boundary granularities. `segment` is DCS's own word/compound segmentation
-#: located in the sandhied surface — the primary, the one H3/H4's MorphScore claims use.
-#: `stem` is the stem/ending split derived as the longest common prefix of a segment and
-#: its lemma: a heuristic, labelled as one everywhere it is reported (docs/decisions.md,
-#: "Gold boundaries: segment boundaries from DCS, stem/ending boundary derived from the
-#: lemma and labelled heuristic").
+#: The two boundary granularities, and only one of them is gold. `segment` is DCS's own
+#: word/compound segmentation located in the sandhied surface — the primary, the one H3/H4's
+#: MorphScore claims use, and the only one that is annotation. `stem` is the stem/ending
+#: split *derived* from the segment and its lemma by the sandhi-aware rule in
+#: `sanskrit_tok.data.boundaries.stem_boundary`: a **heuristic**, never called gold, and
+#: labelled "heuristic stem" everywhere it is reported (docs/decisions.md, 2026-09-05,
+#: "Stem boundaries are heuristic; sandhi-aware rule with part-of-speech exclusions").
 GRANULARITY_SEGMENT = "segment"
 GRANULARITY_STEM = "stem"
 
@@ -156,14 +160,16 @@ FIGURE_SUBTITLE = (
 FIGURE_CAPTION = (
     "All `_dcs` arms are trained on the DCS training split; `oracle` arms are trained on "
     "DCS's own gold segmentation, which is an upper bound on what splitting can buy, while "
-    "split arms are *evaluated* on ByT5-reconciled text. Arms marked provisional (*) are "
-    "trained on the parallel corpora, not on DCS, and are shown for continuity with "
-    "Experiments 02–03 only. MorphScore for raw arms uses DCS segment boundaries; for split "
-    "arms it uses the stem/ending boundary derived from the lemma, which is heuristic, so "
-    "the two columns are not one series. Thin markers are the ±1-character tolerant "
-    "variant. The English pivot is cross-corpus (E1 was trained on the parallel English "
-    "side, not on DCS), which is why the deltas — where the English side cancels — carry "
-    "the verdict and the levels do not."
+    "split arms are *evaluated* on ByT5-reconciled text. `T5` is constrained on gold "
+    "segment boundaries and heuristic stem boundaries, `T5seg` on the gold segment "
+    "boundaries alone, `T6` on heuristic stem boundaries inside the gold split. Arms marked "
+    "provisional (*) are trained on the parallel corpora, not on DCS, and are shown for "
+    "continuity with Experiments 02–03 only. MorphScore for raw arms uses DCS segment "
+    "boundaries; for split arms it uses the **heuristic stem** boundary derived from the "
+    "lemma, which is not annotation, so the two columns are not one series. Thin markers "
+    "are the ±1-character tolerant variant. The English pivot is cross-corpus (E1 was "
+    "trained on the parallel English side, not on DCS), which is why the deltas — where the "
+    "English side cancels — carry the verdict and the levels do not."
 )
 FIGURE_Y_PAD_FRACTION = 0.15
 
@@ -488,9 +494,10 @@ def morphscore_inputs(
       boundaries located inside them. The primary.
     * raw + `stem` — the same words against the stem/ending boundaries projected into the
       surface, available only where the word's segment alignment succeeded. Heuristic.
-    * split + `stem` — each gold **segment** of the oracle split against the stem boundary
-      inside it. Heuristic, and a different unit population from the two above: a raw word
-      may hold several segments, so the split rows have more units and shorter ones.
+    * split + `stem` — each gold **segment** of the oracle split against the heuristic stem
+      boundary inside it. The units are gold; the boundaries scored against are not, and a
+      different unit population from the two above: a raw word may hold several segments, so
+      the split rows have more units and shorter ones.
 
     raw + `segment` is what a split arm has no analogue of: in the oracle split the segment
     boundaries *are* whitespace, so there is nothing left inside a unit to find.
@@ -662,6 +669,260 @@ def compute_morphscore(
                 )
             arm_result[granularity] = subset_result
         results[name] = arm_result
+    return results
+
+
+# ------------------------------------------------- MorphScore paired deltas with a CI
+
+
+def per_sentence_boundary_counts(
+    tokenizer: LoadedTokenizer,
+    records: Sequence[GoldRecord],
+    kind: str,
+    granularity: str,
+    tolerance: int,
+) -> np.ndarray:
+    """`(n_sentences, 3)` of `(matched, token boundaries, gold boundaries)` per sentence.
+
+    MorphScore is a *pooled* F1 — one ratio over the whole corpus, not a mean of per-word
+    scores — so a bootstrap over it has to resample the counts and re-pool, not resample the
+    F1s. These three per-sentence sums are exactly what re-pooling needs, and they come from
+    `morphscore` itself (called once per sentence) rather than from a reimplementation, so
+    the resampled statistic and the reported level are the same function of the same inputs
+    by construction.
+
+    Sentences are the resampling unit rather than words because words inside one sentence
+    are not independent: a formulaic line contributes several words that stand or fall
+    together.
+    """
+    rows = np.zeros((len(records), 3), dtype=np.int64)
+    for index, record in enumerate(records):
+        words, gold = morphscore_inputs([record], kind, granularity)
+        raw = morphscore(tokenizer, words, gold, tolerance=tolerance)
+        rows[index] = (
+            int(raw["n_matched"]),
+            int(raw["n_token_boundaries"]),
+            int(raw["n_gold_boundaries"]),
+        )
+    return rows
+
+
+def pooled_boundary_f1(totals: np.ndarray) -> tuple[float, float, float]:
+    """`(f1, precision, recall)` from a `(matched, token boundaries, gold boundaries)` sum."""
+    matched, token_boundaries, gold_boundaries = (float(value) for value in totals)
+    precision = matched / token_boundaries if token_boundaries else 0.0
+    recall = matched / gold_boundaries if gold_boundaries else 0.0
+    total = precision + recall
+    return (2 * precision * recall / total if total else 0.0, precision, recall)
+
+
+def morphscore_paired_delta(
+    counts_a: np.ndarray,
+    counts_b: np.ndarray,
+    *,
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+) -> dict[str, Any]:
+    """`F1(a) − F1(b)` with a sentence-level paired bootstrap interval.
+
+    Paired: each resample draws one set of sentence indices and re-pools *both* arms over
+    it, so the sentence-to-sentence variation the two arms share cancels from the delta,
+    exactly as in `tpp_paired_delta`. An interval excluding 0 is the claim "the constraint
+    changed boundary F1"; the README reports it beside the levels, because a difference of
+    +0.02 on 4,600 words and one on 40,000 are not the same evidence.
+
+    Returns the delta, its interval, both arms' F1/precision/recall, and the bookkeeping
+    (`n_sentences`, `n_bootstrap`, `seed`, `ci`).
+    """
+    if counts_a.shape != counts_b.shape:
+        raise ValueError(
+            f"paired MorphScore counts must cover the same sentences: {counts_a.shape} "
+            f"vs {counts_b.shape}"
+        )
+    f1_a, precision_a, recall_a = pooled_boundary_f1(counts_a.sum(axis=0))
+    f1_b, precision_b, recall_b = pooled_boundary_f1(counts_b.sum(axis=0))
+    n_sentences = counts_a.shape[0]
+    generator = np.random.default_rng(seed)
+    draws = np.empty(n_bootstrap, dtype=float)
+    for index in range(n_bootstrap):
+        chosen = generator.integers(0, n_sentences, n_sentences)
+        draws[index] = (
+            pooled_boundary_f1(counts_a[chosen].sum(axis=0))[0]
+            - pooled_boundary_f1(counts_b[chosen].sum(axis=0))[0]
+        )
+    tail = (1.0 - ci) / 2.0
+    low, high = np.percentile(draws, [100 * tail, 100 * (1 - tail)])
+    return {
+        "delta": f1_a - f1_b,
+        "ci_low": float(low),
+        "ci_high": float(high),
+        "f1_a": f1_a,
+        "f1_b": f1_b,
+        "precision_a": precision_a,
+        "precision_b": precision_b,
+        "recall_a": recall_a,
+        "recall_b": recall_b,
+        "n_sentences": n_sentences,
+        "n_bootstrap": n_bootstrap,
+        "seed": seed,
+        "ci": ci,
+        "unit": "F1",
+    }
+
+
+def compute_morphscore_deltas(
+    records: Sequence[GoldRecord],
+    arms: Mapping[str, LoadedTokenizer],
+    contrasts: Sequence[Mapping[str, Any]],
+    coverage: Mapping[str, Mapping[str, Mapping[str, int]]],
+    *,
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """`"<a>/<b>" -> subset -> tolerance -> delta`: the clean MorphScore contrasts, with CIs.
+
+    Only the contrasts that score the **same population of units** are here: `T5 − T1_dcs`
+    and `T5seg − T1_dcs` at segment granularity (both raw arms, both scored on the sandhied
+    surface's words) and `T6 − T4_oracle` at stem granularity (both split arms, both scored
+    on the oracle split's segments). `T4_oracle − T1_dcs` is *not* a MorphScore contrast at
+    all and is deliberately absent: a raw arm is scored on surface words and a split arm on
+    gold segments, so their difference is a difference of populations.
+
+    A contrast whose arms are not both available, or either of whose arms failed the spans
+    coverage check, is skipped with a WARNING rather than reported from one side.
+
+    The per-sentence counts are computed once per `(arm, granularity, tolerance)` over
+    *all* records and the human-verified subset is then a row selection, so the two subsets
+    cost one pass rather than two.
+    """
+    verified = np.array([record.human_verified for record in records], dtype=bool)
+    cache: dict[tuple[str, str, int], np.ndarray] = {}
+
+    def counts_for(name: str, granularity: str, tolerance: int) -> np.ndarray | None:
+        key = (name, granularity, tolerance)
+        if key in cache:
+            return cache[key]
+        tokenizer = arms.get(name)
+        if tokenizer is None or not tokenizer.supports_spans:
+            return None
+        checked = coverage.get(name, {}).get(_coverage_form(arm_text_kind(name)))
+        if checked is not None and checked.get("n_failed", 0):
+            return None
+        cache[key] = per_sentence_boundary_counts(
+            tokenizer, records, arm_text_kind(name), granularity, tolerance
+        )
+        return cache[key]
+
+    results: dict[str, dict[str, dict[str, Any]]] = {}
+    for contrast in contrasts:
+        first, second = str(contrast["a"]), str(contrast["b"])
+        granularity = str(contrast["granularity"])
+        check_paired_arms(first, second)
+        for name in (first, second):
+            if granularity not in granularities_for(arm_text_kind(name)):
+                raise ValueError(
+                    f"morphscore_deltas entry {first}/{second}: granularity "
+                    f"{granularity!r} is not defined for {name!r}"
+                )
+        subset_result: dict[str, dict[str, Any]] = {}
+        for tolerance_name, tolerance in TOLERANCES.items():
+            counts_a = counts_for(first, granularity, tolerance)
+            counts_b = counts_for(second, granularity, tolerance)
+            if counts_a is None or counts_b is None:
+                logger.warning(
+                    "MorphScore delta %s/%s is skipped: an arm is unavailable or failed "
+                    "the spans coverage check",
+                    first,
+                    second,
+                )
+                break
+            for subset_name, rows in (
+                (SUBSET_ALL, slice(None)),
+                (SUBSET_HUMAN, verified),
+            ):
+                entry = morphscore_paired_delta(
+                    counts_a[rows], counts_b[rows], n_bootstrap=n_bootstrap, seed=seed, ci=ci
+                )
+                entry["arm_a"] = first
+                entry["arm_b"] = second
+                entry["granularity"] = granularity
+                entry["heuristic"] = granularity == GRANULARITY_STEM
+                entry["tolerance"] = tolerance
+                subset_result.setdefault(subset_name, {})[tolerance_name] = entry
+                logger.info(
+                    "MorphScore delta %s − %s (%s, %s, %s): %+.4f [%+.4f, %+.4f]",
+                    first,
+                    second,
+                    granularity,
+                    subset_name,
+                    tolerance_name,
+                    entry["delta"],
+                    entry["ci_low"],
+                    entry["ci_high"],
+                )
+        if subset_result:
+            results[pair_key(first, second)] = subset_result
+    return results
+
+
+# ---------------------------------------------------- in-domain compression on held-out
+
+
+def compute_indomain_compression(
+    records: Sequence[GoldRecord],
+    arms: Mapping[str, LoadedTokenizer],
+    names: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    """`arm -> summary`: bytes per token and tokens per raw word on **held-out DCS**.
+
+    Every `_dcs` arm is trained on DCS and evaluated, in the TPP tables, on parallel corpora
+    it has never seen. That domain mismatch is identical for both sides of every pair and so
+    cannot manufacture a delta — but it can *shrink* one, and a reader is entitled to see
+    what the same contrast costs in domain. This is that measurement: the same arms on the
+    held-out DCS sentences, on whatever text form each arm tokenizes (the sandhied surface
+    for a raw arm, the oracle split for a split one), with the raw sentence's whitespace-word
+    count as the common fertility denominator.
+
+    It is not a TPP: DCS has no English side. What it supports is the sentence "the
+    constraint costs tokens in domain too", which the cross-corpus TPP deltas alone cannot.
+    """
+    texts = {
+        RAW: [record.text_slp1 for record in records],
+        SPLIT: [record.oracle_split_slp1 for record in records],
+    }
+    results: dict[str, dict[str, Any]] = {}
+    for name in names:
+        tokenizer = arms.get(name)
+        if tokenizer is None:
+            continue
+        variant = variant_for(name)
+        raw = compression(tokenizer, texts[variant])
+        entry: dict[str, Any] = dict(summarise_metric(raw))
+        entry["variant"] = variant
+        entry["n_tokens"] = int(raw["n"])
+        entry["n_sentences"] = len(records)
+        entry["fertility_vs_raw_words"] = summarise_metric(
+            fertility_against_reference(tokenizer, texts[variant], texts[RAW])
+            if variant == SPLIT
+            else fertility(tokenizer, texts[RAW])
+        )["value"]
+        # `variant` here means the *text form* the arm tokenizes, as in the `compression`
+        # block, so the arm's training-corpus label is carried under its own key rather
+        # than colliding with it.
+        labels = arm_labels(name)
+        entry["corpus_variant"] = labels["variant"]
+        entry["oracle"] = labels["oracle"]
+        results[name] = entry
+        logger.info(
+            "%s: in-domain held-out DCS %.4f bytes/token over %d token(s), "
+            "%.4f tokens/raw word",
+            name,
+            entry["value"],
+            entry["n_tokens"],
+            entry["fertility_vs_raw_words"],
+        )
     return results
 
 
@@ -1251,7 +1512,7 @@ def _build_figure(results: Mapping[str, Any]) -> Any:
     panel.invert_yaxis()
     panel.set_xlabel("MorphScore F1, human-verified held-out DCS", fontsize=8)
     panel.set_title(
-        "raw arms: segment boundaries · split arms: stem boundaries (heuristic)",
+        "raw arms: gold segment boundaries · split arms: heuristic stem boundaries",
         fontsize=8,
         loc="left",
     )
@@ -1294,6 +1555,9 @@ def _all_arm_names(config: Mapping[str, Any]) -> list[str]:
     names.update(str(name) for name in config["arms_tpp"])
     for pair in config["paired_deltas"]:
         names.update(str(name) for name in pair)
+    for contrast in config.get("morphscore_deltas", []):
+        names.update({str(contrast["a"]), str(contrast["b"])})
+    names.update(str(name) for name in config.get("arms_indomain", []))
     for group in config["violation_arms"].values():
         names.update(str(name) for name in group)
     names.update(str(name) for name in config["english_pivots"].values())
@@ -1386,6 +1650,18 @@ def run(config: Mapping[str, Any], config_src: Path | None = None) -> dict[str, 
         records, arms, arms_morphscore, int(config.get("spans_coverage_sentences", 500))
     )
     morphscore_results = compute_morphscore(records, arms, arms_morphscore, coverage)
+    morphscore_delta = compute_morphscore_deltas(
+        records,
+        arms,
+        [dict(contrast) for contrast in config.get("morphscore_deltas", [])],
+        coverage,
+        n_bootstrap=int(config.get("morphscore_bootstrap", n_bootstrap)),
+        seed=int(config.get("morphscore_bootstrap_seed", seed)),
+        ci=ci,
+    )
+    indomain_compression = compute_indomain_compression(
+        records, arms, [str(name) for name in config.get("arms_indomain", [])]
+    )
 
     marked_corpora = {
         RAW_ARM: write_marked_corpus(
@@ -1456,6 +1732,8 @@ def run(config: Mapping[str, Any], config_src: Path | None = None) -> dict[str, 
         "exclusion_check_en": exclusion_check_en,
         "spans_coverage": coverage,
         "morphscore": morphscore_results,
+        "morphscore_delta": morphscore_delta,
+        "compression_indomain": indomain_compression,
         "violations": violations,
         "tpp": tpp_results,
         "tpp_delta": tpp_delta,

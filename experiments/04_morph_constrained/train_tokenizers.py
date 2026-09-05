@@ -1,10 +1,11 @@
-"""Train the twelve DCS-trained Experiment 04 arms, T5/T6 included (exp04 Task 3).
+"""Train the fourteen DCS-trained Experiment 04 arms, T5/T5seg/T6 included (exp04 Task 3).
 
-Four training corpora are streamed out of `data/processed/dcs/train.jsonl` — the sandhied
-text, its gold "oracle" segmentation, and the boundary-marked form of each — and twelve arms
-are trained from them at matched 32k/64k vocabulary sizes (CLAUDE.md §2.5): the T5/T6
-morpheme-constrained arms and, from the same sentences with the same trainer, the
-unconstrained T1/T2/T4 arms they are compared against. `tokenizers.yaml` is the authority on
+Five training corpora are streamed out of `data/processed/dcs/train.jsonl` — the sandhied
+text, its gold "oracle" segmentation, and the boundary-marked forms (segment + heuristic
+stem, segment only, and stem-in-the-split) — and fourteen arms are trained from them at
+matched 32k/64k vocabulary sizes (CLAUDE.md §2.5): the T5/T5seg/T6 morpheme-constrained arms
+and, from the same sentences with the same trainer, the unconstrained T1/T2/T4 arms they are
+compared against. `tokenizers.yaml` is the authority on
 which corpus each arm trains on and why; this script is the plumbing.
 
 Everything reusable is `sanskrit_tok.tokenizers.training`, shared with
@@ -32,7 +33,7 @@ residue rather than a guaranteed zero.
 
 Run it with `uv run python experiments/04_morph_constrained/train_tokenizers.py`. Relative
 paths in the config are resolved against the repository root, so the working directory does
-not matter. Training all twelve arms from scratch is a long job (the Unigram arms
+not matter. Training all fourteen arms from scratch is a long job (the Unigram arms
 especially); it is resumable, since an arm whose `tokenizer.json` exists is skipped.
 """
 

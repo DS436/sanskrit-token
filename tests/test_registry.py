@@ -37,7 +37,12 @@ ARMS = ("T0_gemma3", "T0_llama4", "T0_o200k")
 #: 2026-09-05, "Experiment 04: DCS is the gold source ..."). `_dcs` marks the corpus,
 #: `_oracle_dcs` marks the gold-segmented variant of it; `T5`/`T6` are the
 #: morpheme-constrained (MorphBPE-hard) families.
-T5_ARMS = ("T5_morphbpe_raw_32k_dcs", "T5_morphbpe_raw_64k_dcs")
+T5_ARMS = (
+    "T5_morphbpe_raw_32k_dcs",
+    "T5_morphbpe_raw_64k_dcs",
+    "T5_morphbpe_rawseg_32k_dcs",
+    "T5_morphbpe_rawseg_64k_dcs",
+)
 T6_ARMS = ("T6_morphbpe_split_32k_dcs", "T6_morphbpe_split_64k_dcs")
 DCS_ARMS = (
     "T1_bpe_raw_32k_dcs",
@@ -191,8 +196,8 @@ def test_list_tokenizers_filters_by_family() -> None:
     assert list_tokenizers(family="T3") == sorted(T3_ARMS)
 
 
-def test_registry_carries_thirty_two_arms() -> None:
-    assert len(list_tokenizers()) == 32
+def test_registry_carries_thirty_four_arms() -> None:
+    assert len(list_tokenizers()) == 34
 
 
 def test_list_tokenizers_filters_the_english_control_family() -> None:

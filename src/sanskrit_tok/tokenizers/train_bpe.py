@@ -15,7 +15,7 @@ from pathlib import Path
 
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 
-from sanskrit_tok.tokenizers._train_common import save_trained_tokenizer
+from sanskrit_tok.tokenizers._train_common import iter_corpus_lines, save_trained_tokenizer
 
 __all__ = ["train_bpe"]
 
@@ -68,6 +68,13 @@ def train_bpe(
     becomes a rule and can then apply across a boundary elsewhere. Measuring exactly that
     residue is what `morph_bpe.assert_no_cross_boundary_merges` is for.
 
+    **Line breaks never reach the pre-tokenizer.** The corpus is streamed through
+    `_train_common.iter_corpus_lines` and trained with `train_from_iterator`, not
+    `train([path])`, because the latter leaves each line's `\n` attached and `Metaspace`
+    learns line-final words as `word\n` — dead vocabulary entries, unevenly distributed
+    across arms (see that function's docstring). The saved tokenizer's pre-tokenizer is
+    unchanged by this, which is why the fix is here and not in the pre-tokenizer.
+
     HF `tokenizers`' BPE trainer has no random step, so training is deterministic given the
     corpus and these settings; `seed` is accepted only so the caller can record it against
     the reproducibility protocol (CLAUDE.md §8) and is not otherwise used.
@@ -97,7 +104,7 @@ def train_bpe(
         initial_alphabet=[],
     )
 
-    tokenizer.train([str(corpus_path)], trainer=trainer)
+    tokenizer.train_from_iterator(iter_corpus_lines(corpus_path), trainer=trainer)
 
     if boundary_marker is not None:
         _assert_marker_absent_from_vocab(tokenizer, boundary_marker, corpus_path)
