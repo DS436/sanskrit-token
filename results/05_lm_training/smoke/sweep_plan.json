@@ -1,0 +1,45 @@
+{
+  "tokens_per_s": 13000.0,
+  "gpu_speedup": 50.0,
+  "rows": [
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T1_bpe_raw_64k_dcs",
+      "seed": 0,
+      "bytes_per_token": 4.630867122848742,
+      "bytes_per_token_estimated": false,
+      "max_bytes": null,
+      "max_tokens": 614400,
+      "params": 8626816,
+      "flops_est": 31801894502400.0
+    },
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T5_morphbpe_rawseg_64k_dcs",
+      "seed": 0,
+      "bytes_per_token": 4.483433304770066,
+      "bytes_per_token_estimated": true,
+      "max_bytes": null,
+      "max_tokens": 614400,
+      "params": 8626816,
+      "flops_est": 31801894502400.0
+    },
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T7_byt5",
+      "seed": 0,
+      "bytes_per_token": 0.9796230418773014,
+      "bytes_per_token_estimated": true,
+      "max_bytes": null,
+      "max_tokens": 614400,
+      "params": 467584,
+      "flops_est": 1723701657600.0
+    }
+  ],
+  "git_commit": "bbe43cc33572ba531bf2f54798b50f3eca253aaa",
+  "git_dirty": true,
+  "timestamp": "2026-09-06T04:50:48+00:00"
+}

@@ -19,6 +19,12 @@ here settles H2 in general.
 
 **Run:** `uv run python experiments/02_tpp_parallel/run.py`
 
+**Committed snapshot:** `outputs/` is gitignored; the `results.json`, `config.yaml` and
+figures of the run this file reports are tracked at
+[`results/02_tpp_parallel/`](../../results/02_tpp_parallel/) — see
+[`results/README.md`](../../results/README.md). Re-running writes to `outputs/` and leaves
+the snapshot untouched.
+
 > **Re-run 2026-09-05 at commit `b7302a8`, clean tree.** Every trained arm was retrained
 > after the trainers stopped letting line breaks reach the pre-tokenizer, so every number
 > on this page moved slightly and four of them are new

@@ -785,3 +785,7 @@ outputs/04_morph_constrained/
 `exclusion_check_en`, `spans_coverage`, `morphscore`, `morphscore_delta`,
 `compression_indomain`, `violations`, `tpp`, `tpp_delta`, `fertility_primary`,
 `fertility_secondary`, `compression`, `text_invariants`.
+
+`outputs/` is gitignored. `results.json`, `config.yaml` and both figures from the run this
+file reports are tracked at [`results/04_morph_constrained/`](../../results/04_morph_constrained/)
+(`run.log` and `marked/` are not) — see [`results/README.md`](../../results/README.md).

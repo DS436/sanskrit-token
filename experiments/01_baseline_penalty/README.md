@@ -14,6 +14,12 @@ Hugging Face tokenizer downloads plus `T0_o200k`'s tiktoken BPE file).
 
 **Run:** `uv run python experiments/01_baseline_penalty/run.py`
 
+**Committed snapshot:** `outputs/` is gitignored; the `results.json`, `config.yaml` and
+figures of the run this file reports are tracked at
+[`results/01_baseline_penalty/`](../../results/01_baseline_penalty/) — see
+[`results/README.md`](../../results/README.md). Re-running writes to `outputs/` and leaves
+the snapshot untouched.
+
 ---
 
 ## Summary

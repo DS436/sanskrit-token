@@ -96,3 +96,32 @@ The Track 2 figures are far below the first build's because the quality filter n
 most of the offending Sangraha lines before either leakage layer sees them.
 Deduplication compares 64-bit blake2b digests rather than the strings (32M lines), so it is
 exact to within a collision probability of ~1e-4 lines, recorded as `dedup_digest_bits`.
+
+## Licences
+
+**The code in this repository is MIT-licensed** (`LICENSE` at the root). That licence covers
+the code, the configuration and the documentation only.
+
+**No raw or processed corpus data is distributed here.** `data/raw/` and `data/processed/`
+are gitignored and contain nothing but a `.gitkeep`; every experiment downloads its own
+sources at the pinned commit or dataset revision recorded in the table above. Nothing in
+`results/` contains corpus text either — it is metrics, configuration and figures.
+
+**Each data source keeps its own licence, as listed in its row of the table above.** The
+MIT licence on this code grants no rights over any of them, and anyone re-running these
+experiments obtains the data directly from its source and is bound by that source's terms.
+In particular:
+
+- **Sanskrit Wikipedia** (HF `wikimedia/wikipedia`, `20231101.sa`) is **CC BY-SA 3.0** (with
+  GFDL). Its share-alike condition attaches to the *text*, which this repository does not
+  redistribute; it would attach to any derived corpus you build and then publish.
+- **Digital Corpus of Sanskrit** and **Sangraha (verified Sanskrit)** are **CC BY 4.0** —
+  attribution required, per the citations in their rows.
+- **FLORES-200** is **CC BY-SA 4.0**.
+- **Itihāsa**, **Sāmayik** and the **ByT5-Sanskrit** splitter model carry **no stated
+  licence** — their repositories ship no `LICENSE` file. They are used here for research and
+  cited to their papers; treat their terms as unresolved rather than permissive.
+
+Model weights (the ByT5-Sanskrit sandhi splitter) are likewise not committed. What is
+derived from that model — the split corpora and their manifests — is described above and is
+also gitignored.

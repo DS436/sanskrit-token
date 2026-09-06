@@ -1,0 +1,698 @@
+{
+  "experiment": "01_baseline_penalty",
+  "git_commit": "5960f019efc6df81a4f9e95c214d1675e2cff4b6",
+  "git_dirty": true,
+  "timestamp": "2026-09-04T11:49:31+00:00",
+  "config": {
+    "experiment": "01_baseline_penalty",
+    "tokenizers": [
+      "T0_o200k",
+      "T0_llama4",
+      "T0_gemma3",
+      "T0_gpt2"
+    ],
+    "languages": [
+      "san_Deva",
+      "hin_Deva",
+      "eng_Latn"
+    ],
+    "split": "devtest",
+    "flores_jsonl": "data/raw/flores/devtest.jsonl",
+    "output_dir": "outputs/01_baseline_penalty",
+    "pivots": [
+      "eng_Latn",
+      "hin_Deva"
+    ],
+    "seed": 0
+  },
+  "corpus": {
+    "name": "flores200",
+    "split": "devtest",
+    "path": "data/raw/flores/devtest.jsonl"
+  },
+  "seed": 0,
+  "n_sentences_total": 1012,
+  "n_sentences_used": 1012,
+  "tokenizer_sources": {
+    "T0_o200k": {
+      "source_id": "o200k_base",
+      "vocab_size": 200019
+    },
+    "T0_llama4": {
+      "source_id": "unsloth/Llama-4-Scout-17B-16E-Instruct",
+      "vocab_size": 201135
+    },
+    "T0_gemma3": {
+      "source_id": "unsloth/gemma-3-4b-it",
+      "vocab_size": 262145
+    },
+    "T0_gpt2": {
+      "source_id": "openai-community/gpt2",
+      "vocab_size": 50257
+    }
+  },
+  "roundtrip": {
+    "n": 1012,
+    "failures": 317,
+    "failures_with_latin": 92,
+    "failures_pure_devanagari": 225,
+    "failures_no_ascii_alnum": 89,
+    "examples_pure_devanagari": [
+      {
+        "index": 0,
+        "sentence": "\"अस्मत्समीपे केचन 4 मासवर्षिणः मधुमेहहीनाः मूषकाः सन्ति ये पूर्वं मधुमेहग्रस्ताः आसन्,\" सः पुनरवदत्।"
+      },
+      {
+        "index": 1,
+        "sentence": "डा. इहद उर् महोदयः, यः हालिफैक्स, नोवा स्कोटिया इत्यत्र स्थितस्य डलहौसी विश्वविद्यालये प्राध्यापकः तथा च कैनेडियन मधुमेहसङ्घस्य विरुजालयस्य शास्त्रीयस्य विभागस्य च अध्यक्षः विद्यते, सावधानीकृतवान् यत् एतद् संशोधनम् अद्यापि प्राथमिकायाम् अवस्थायाम् एव वर्तते।"
+      },
+      {
+        "index": 2,
+        "sentence": "एतेषां निष्कर्षाणां १ प्रकारमधुमेहग्रस्तैः सह कमपि सम्बन्धं नास्ति इत्यस्य आलोकनानन्तरं अन्ये निपुणाः इव सः अपि शङ्क्यते यत् मधुमेहं उपशामयितुं शक्यते वा |"
+      },
+      {
+        "index": 3,
+        "sentence": "सोमवासरे स्वीडिशविहारे साहित्यस्य कृते विद्यमानायाः नोबेलसमित्याः स्थायिनी मन्त्री साराडैनियसमहोदया स्वीडन इत्यत्र स्वेरिजेस इत्याख्यायाम् आकाशवाण्याम् एकस्मिन् कार्यक्रमे प्रकाशम् उद्घोषितवती यत् समितिः बॉबडायलनमहोदयेन सह प्रत्यक्षं 2016 वर्षे साहित्यक्षेत्रे दीयमानाय नोबेलपुरस्कारार्थं सम्पर्कं साधयितुम् अक्षमत्वात्, तं महोदयं प्राप्तुं यत्नाः त्यक्तवती।"
+      },
+      {
+        "index": 7,
+        "sentence": "सिमिनोफमहोदयः उक्तवान् यत् शार्कटैङ्कमालिकायाः आलोचकैः अभिनवव्यवसायार्थं धनदाने व्ययिते 2013 वर्षे शार्कटैङ्कमालिकायाः कथाभागे, तस्य आगमनानन्तरं विपणनं वृद्धिं गतम्।"
+      }
+    ],
+    "examples_no_ascii_alnum": [
+      {
+        "index": 1,
+        "sentence": "डा. इहद उर् महोदयः, यः हालिफैक्स, नोवा स्कोटिया इत्यत्र स्थितस्य डलहौसी विश्वविद्यालये प्राध्यापकः तथा च कैनेडियन मधुमेहसङ्घस्य विरुजालयस्य शास्त्रीयस्य विभागस्य च अध्यक्षः विद्यते, सावधानीकृतवान् यत् एतद् संशोधनम् अद्यापि प्राथमिकायाम् अवस्थायाम् एव वर्तते।"
+      },
+      {
+        "index": 2,
+        "sentence": "एतेषां निष्कर्षाणां १ प्रकारमधुमेहग्रस्तैः सह कमपि सम्बन्धं नास्ति इत्यस्य आलोकनानन्तरं अन्ये निपुणाः इव सः अपि शङ्क्यते यत् मधुमेहं उपशामयितुं शक्यते वा |"
+      },
+      {
+        "index": 21,
+        "sentence": "उत्तमः अभिनेता इति गोसलिङ्ग उत्तमा अभिनेत्री इति स्टोन् च यथाक्रमं नामनिर्देशं प्राप्तवन्तौ |"
+      },
+      {
+        "index": 28,
+        "sentence": "शास्त्रज्ञाः मन्यन्ते यत् तस्य पशुनः बर्हच्छदम् प़ृष्ठभागे शोणवर्णितम् अस्ति अधोभागे तु पीतमूलकवर्णितः अस्ति।"
+      },
+      {
+        "index": 29,
+        "sentence": "एतद् संशोधनं खगेषु पिच्छानां परिणामस्य समीक्षायै अनुमन्यते |"
+      }
+    ]
+  },
+  "roundtrip_failures": 317,
+  "slp1_coverage": {
+    "san_Deva": {
+      "n": 1012,
+      "n_with_nukta": 40,
+      "n_non_ascii_after_slp1": 100,
+      "examples_non_ascii": [
+        {
+          "index": 3,
+          "slp1": "somavAsare svIqiSavihAre sAhityasya kfte vidyamAnAyAH nobelasamityAH sTAyinI mantrI sArAqEniyasamahodayA svIqana ityatra sverijesa ityAKyAyAm AkASavARyAm ekasmin kAryakrame prakASam udGozitavatI yat samitiH baॉbaqAyalanamahodayena saha pratyakzaM 2016 varze sAhityakzetre dIyamAnAya nobelapuraskArArTaM samparkaM sADayitum akzamatvAt, taM mahodayaM prAptuM yatnAH tyaktavatI."
+        },
+        {
+          "index": 17,
+          "slp1": "1960 tame sampUrRe daSake breJinskImahodayaH j0aॉAna-eP-keneqImahodayasya kfte tasya manturUpeRa tatpaScAt liRa़qana-bI-jaॉ़nsanamahodayasya praSAsane kAryarataH AsIt."
+        },
+        {
+          "index": 23,
+          "slp1": "citrapawe dve gIte, ऑqiSana (da PUla hU qrima), siwI ऑPa swArsa ca sarvotkfzwaM gItam ityarTaM nAmANkite. lAyanagewacitrakarmagfhaM 26 nAmANkanAni prApnot, yAni anyacitrakarmagfheByaH aDikam asti."
+        },
+        {
+          "index": 28,
+          "slp1": "SAstrajYAH manyante yat tasya paSunaH barhacCadam pa़fzWaBAge SoRavarRitam asti aDoBAge tu pItamUlakavarRitaH asti."
+        },
+        {
+          "index": 37,
+          "slp1": "prakASamAnatA BramaRaM ca tArakasya jIvadravyapravAhasambanDinaH raॉsbIkramANkasya nirDAraRe upayojite."
+        }
+      ]
+    },
+    "hin_Deva": {
+      "n": 1012,
+      "n_with_nukta": 513,
+      "n_non_ascii_after_slp1": 256,
+      "examples_non_ascii": [
+        {
+          "index": 0,
+          "slp1": "unhoMne kahA “ki aba hamAre pAsa 4 mahIne umra vAle cUhe hEM jinheM maDumeha nahIM hE jo maDumeha ke rogI Te. ”"
+        },
+        {
+          "index": 1,
+          "slp1": "qaॉ. ehuqa ura, novA skowiyA ke hEliP0Eksa meM qalahOj0I viSvavidyAlaya meM cikitsA ke proP0esara Ora kanAqAI qAyabiwIj0a esosieSana ke nEdAnika ​​Ora vEjYAnika viBAga ke aDyakza ne AgAha kiyA ki SoDa aBI BI apane SuruAtI dinoM meM hE."
+        },
+        {
+          "index": 3,
+          "slp1": "somavAra ko svIqiSa akAdamI meM sAhitya ke lie nobela samiti ke sTAyI saciva, sArA qeniyasa, svIqana samiti meM sevarija reqiyo para eka reqiyo kAryakrama ke dOrAna sArvajanika rUpa se GozaRA kI, ki sAhitya meM 2016 ke nobela puraskAra jItane ko lekara sIDe baॉba qAyalana taka pahu~cane meM asamarTa hokara, apane prayAsoM ko Coq0a cuke Te."
+        },
+        {
+          "index": 4,
+          "slp1": "qeniyasa ne kahA, “P0ilahAla hama kuCa nahIM kara rahe hEM. mEMne apane sATa kAma karane vAle logoM ko Imela Beje hEM Ora usane unake PreMqalI javAba Beje hEM. aBI ke lie, basa itanA hI batAnA cAhU~gA.” "
+        },
+        {
+          "index": 5,
+          "slp1": "isase pahale, riMga ke sIIo, jemI siminaॉPa ne batAyA TA ki kaMpanI taba SurU huI jaba usake daravAj0e kI GaMwI usake gerAja meM sTita dukAna se sunAI nahIM detI TI."
+        }
+      ]
+    }
+  },
+  "metrics": {
+    "T0_o200k": {
+      "san_Deva": {
+        "original": {
+          "fertility": {
+            "value": 3.7505743740795285,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.7505743740795285,
+            "std": 1.97229607452527
+          },
+          "compression": {
+            "value": 6.1775109986997485,
+            "n": 56143,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 6.21803460202152,
+            "std": 0.6961556456286789
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 3.4985567010309278,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.4985567010309278,
+            "std": 1.9246133003200392
+          },
+          "compression": {
+            "value": 2.3835912996045274,
+            "n": 58664,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.388025504782545,
+            "std": 0.15638220343410691
+          }
+        }
+      },
+      "hin_Deva": {
+        "original": {
+          "fertility": {
+            "value": 2.2275084818468978,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.2275084818468978,
+            "std": 1.1454444019059624
+          },
+          "compression": {
+            "value": 7.97063274378133,
+            "n": 42292,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 8.011531213326148,
+            "std": 1.0288266738482992
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 2.5565651444838746,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.5565651444838746,
+            "std": 1.2903655217550878
+          },
+          "compression": {
+            "value": 2.310966844423835,
+            "n": 64695,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.3147395867026126,
+            "std": 0.16021439920839484
+          }
+        }
+      },
+      "eng_Latn": {
+        "original": {
+          "fertility": {
+            "value": 1.4234053239578102,
+            "n": 21901,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 1.4234053239578102,
+            "std": 0.7213711593379956
+          },
+          "compression": {
+            "value": 4.915565809548617,
+            "n": 26873,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 4.954007561400597,
+            "std": 0.6608869042985883
+          }
+        }
+      }
+    },
+    "T0_llama4": {
+      "san_Deva": {
+        "original": {
+          "fertility": {
+            "value": 3.8781737849779088,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.8781737849779088,
+            "std": 2.0476512409479737
+          },
+          "compression": {
+            "value": 5.8629701631307585,
+            "n": 59155,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 5.897378961872003,
+            "std": 0.6269814993144286
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 3.561296023564065,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.561296023564065,
+            "std": 1.9768613120991367
+          },
+          "compression": {
+            "value": 2.306680963378423,
+            "n": 60620,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.3115049957823053,
+            "std": 0.15092084004301148
+          }
+        }
+      },
+      "hin_Deva": {
+        "original": {
+          "fertility": {
+            "value": 2.340014818858948,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.340014818858948,
+            "std": 1.179588437107007
+          },
+          "compression": {
+            "value": 7.548007165248545,
+            "n": 44660,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 7.574663837711515,
+            "std": 0.9592753150378217
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 2.5682642436532386,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.5682642436532386,
+            "std": 1.296253641521663
+          },
+          "compression": {
+            "value": 2.266062415690316,
+            "n": 65977,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.2689886087635784,
+            "std": 0.1507295593851732
+          }
+        }
+      },
+      "eng_Latn": {
+        "original": {
+          "fertility": {
+            "value": 1.4211679831971142,
+            "n": 21901,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 1.4211679831971142,
+            "std": 0.7211300902399244
+          },
+          "compression": {
+            "value": 4.883762200532387,
+            "n": 27048,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 4.923789596982456,
+            "std": 0.6636767279211814
+          }
+        }
+      }
+    },
+    "T0_gemma3": {
+      "san_Deva": {
+        "original": {
+          "fertility": {
+            "value": 3.114344624447717,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.114344624447717,
+            "std": 1.674042615785717
+          },
+          "compression": {
+            "value": 7.2115276651487745,
+            "n": 48093,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 7.280396308515575,
+            "std": 0.9191585161570842
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 3.5042709867452135,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.5042709867452135,
+            "std": 1.93623597244736
+          },
+          "compression": {
+            "value": 2.356477190380694,
+            "n": 59339,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.3624378668918746,
+            "std": 0.17176754665931485
+          }
+        }
+      },
+      "hin_Deva": {
+        "original": {
+          "fertility": {
+            "value": 1.7856725032172522,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 1.7856725032172522,
+            "std": 0.9612476472052225
+          },
+          "compression": {
+            "value": 9.485719109660353,
+            "n": 35537,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 9.577505712361633,
+            "std": 1.4076145974875627
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 2.524782591740436,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.524782591740436,
+            "std": 1.3011743390668828
+          },
+          "compression": {
+            "value": 2.3029220129079957,
+            "n": 64921,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.3074249937744304,
+            "std": 0.17618108826584983
+          }
+        }
+      },
+      "eng_Latn": {
+        "original": {
+          "fertility": {
+            "value": 1.3488425186064563,
+            "n": 21901,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 1.3488425186064563,
+            "std": 0.7342347321405446
+          },
+          "compression": {
+            "value": 4.871874308475326,
+            "n": 27114,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 4.939427631706009,
+            "std": 0.7443300979791154
+          }
+        }
+      }
+    },
+    "T0_gpt2": {
+      "san_Deva": {
+        "original": {
+          "fertility": {
+            "value": 12.490309278350516,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 12.490309278350516,
+            "std": 7.398778531822838
+          },
+          "compression": {
+            "value": 1.6323049770561242,
+            "n": 212475,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 1.6329266023563835,
+            "std": 0.034869319572497476
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 3.969425625920471,
+            "n": 16975,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 3.969425625920471,
+            "std": 2.228390014327828
+          },
+          "compression": {
+            "value": 2.053439262218045,
+            "n": 68096,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.0574182180163234,
+            "std": 0.12537313354763296
+          }
+        }
+      },
+      "hin_Deva": {
+        "original": {
+          "fertility": {
+            "value": 7.816519128027142,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 7.816519128027142,
+            "std": 4.176579222727501
+          },
+          "compression": {
+            "value": 1.6814093963079164,
+            "n": 200483,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 1.6819273486176787,
+            "std": 0.030529093531842168
+          }
+        },
+        "slp1": {
+          "fertility": {
+            "value": 2.8456888819560895,
+            "n": 25643,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 2.8456888819560895,
+            "std": 1.486991925723236
+          },
+          "compression": {
+            "value": 2.0248659190638714,
+            "n": 73836,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 2.029014079090315,
+            "std": 0.1207698296275884
+          }
+        }
+      },
+      "eng_Latn": {
+        "original": {
+          "fertility": {
+            "value": 1.4910278069494545,
+            "n": 21901,
+            "unit": "tokens/word",
+            "distribution": "per_word",
+            "mean": 1.4910278069494545,
+            "std": 0.8054278833899527
+          },
+          "compression": {
+            "value": 4.884484543706552,
+            "n": 27044,
+            "unit": "bytes/token",
+            "distribution": "per_text",
+            "mean": 4.925182177635925,
+            "std": 0.660191753693806
+          }
+        }
+      }
+    }
+  },
+  "parity": {
+    "T0_o200k": {
+      "eng_Latn": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 2.089197335615674,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.113267361178688,
+        "std": 0.3889781174800622
+      },
+      "hin_Deva": {
+        "pivot": "hin_Deva",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 1.3275087486995176,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 1.3479441992189136,
+        "std": 0.24226205754336083
+      },
+      "eng_Latn__slp1": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "slp1",
+        "value": 2.1830089681092546,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.209231641037204,
+        "std": 0.3891425084116241
+      }
+    },
+    "T0_llama4": {
+      "eng_Latn": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 2.1870378586217094,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.2121878515268323,
+        "std": 0.40291228938586865
+      },
+      "hin_Deva": {
+        "pivot": "hin_Deva",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 1.324563367666816,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 1.3428905067409769,
+        "std": 0.23881429036069268
+      },
+      "eng_Latn__slp1": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "slp1",
+        "value": 2.24120082815735,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.2680526404026797,
+        "std": 0.3994969602176742
+      }
+    },
+    "T0_gemma3": {
+      "eng_Latn": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 1.7737331267979641,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 1.7994230083999074,
+        "std": 0.3414205373762586
+      },
+      "hin_Deva": {
+        "pivot": "hin_Deva",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 1.3533218898612713,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 1.3759649120130548,
+        "std": 0.2559306481806649
+      },
+      "eng_Latn__slp1": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "slp1",
+        "value": 2.1885004056944752,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.222687542129663,
+        "std": 0.40018866369522615
+      }
+    },
+    "T0_gpt2": {
+      "eng_Latn": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 7.856641029433516,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 7.970065273967667,
+        "std": 1.545532926876907
+      },
+      "hin_Deva": {
+        "pivot": "hin_Deva",
+        "source_language": "san_Deva",
+        "source_variant": "original",
+        "value": 1.0598155454577196,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 1.0774061964271686,
+        "std": 0.1789378897516935
+      },
+      "eng_Latn__slp1": {
+        "pivot": "eng_Latn",
+        "source_language": "san_Deva",
+        "source_variant": "slp1",
+        "value": 2.517970714391362,
+        "n": 1012,
+        "unit": "token ratio",
+        "distribution": "per_pair",
+        "mean": 2.5506382834987025,
+        "std": 0.4620113730031758
+      }
+    }
+  }
+}

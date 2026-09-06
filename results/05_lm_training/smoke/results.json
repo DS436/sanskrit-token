@@ -1,0 +1,960 @@
+{
+  "experiment": "05_lm_training",
+  "reference_arm": "T1_bpe_raw_64k_dcs",
+  "n_runs": 3,
+  "groups": [
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T1_bpe_raw_64k_dcs",
+      "is_reference": true,
+      "is_split_arm": false,
+      "in_domain_set": "heldout_dcs",
+      "n_seeds": 1,
+      "seeds": [
+        0
+      ],
+      "logical_vocab": 64001,
+      "params": {
+        "non_embedding": 393856,
+        "token_embedding": 8200192,
+        "position_embedding": 32768,
+        "embedding": 8232960,
+        "total": 8626816,
+        "flops_params_kind": "total"
+      },
+      "corpus": {
+        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
+        "n_tokens": 6809854,
+        "n_chars": 31535529,
+        "n_bytes": 31535529,
+        "n_lines": 652007,
+        "bytes_per_token": 4.630867122848742,
+        "chars_per_token": 4.630867122848742,
+        "eos_id": 64000,
+        "dtype": "uint16"
+      },
+      "budget": {
+        "max_bytes": null,
+        "bytes_per_token": null,
+        "max_tokens": null
+      },
+      "steps": {
+        "mean": 300.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          300.0
+        ]
+      },
+      "tokens_seen": {
+        "mean": 614400.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          614400.0
+        ]
+      },
+      "bytes_seen_est": {
+        "mean": 2845205.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          2845205.0
+        ]
+      },
+      "flops_est": {
+        "mean": 31801894502400.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          31801894502400.0
+        ]
+      },
+      "tokens_per_s": {
+        "mean": 14503.620878582156,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          14503.620878582156
+        ]
+      },
+      "bpc": {
+        "heldout_dcs": {
+          "mean": 2.8258522735346387,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2.8258522735346387
+          ],
+          "role": "in_domain",
+          "label": "in_domain",
+          "split_text": false,
+          "n_chars": 200010,
+          "n_chars_scored": 200010,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 2.8258522735346387,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              2.8258522735346387
+            ]
+          },
+          "best_bpc": {
+            "mean": 2.8258522735346387,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              2.8258522735346387
+            ]
+          },
+          "best_step": {
+            "mean": 300.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              300.0
+            ]
+          }
+        },
+        "heldout_samayik_test": {
+          "mean": 4.613996402360587,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            4.613996402360587
+          ],
+          "role": "heldout_samayik_test",
+          "label": "ood",
+          "split_text": false,
+          "n_chars": 173029,
+          "n_chars_scored": 173029,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 4.613996402360587,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.613996402360587
+            ]
+          },
+          "best_bpc": {
+            "mean": 4.607882765835002,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.607882765835002
+            ]
+          },
+          "best_step": {
+            "mean": 100.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              100.0
+            ]
+          }
+        }
+      },
+      "to_reference": {
+        "reference_arm": "T1_bpe_raw_64k_dcs",
+        "threshold_kind": "reference_best_in_domain_bpc",
+        "eval_set": "heldout_dcs",
+        "threshold_bpc": {
+          "mean": 2.8258522735346387,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2.8258522735346387
+          ]
+        },
+        "tokens": {
+          "mean": 614400.0,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            614400.0
+          ]
+        },
+        "bytes": {
+          "mean": 2845205.0,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2845205.0
+          ]
+        },
+        "flops": {
+          "mean": 31801894502400.0,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            31801894502400.0
+          ]
+        },
+        "steps": {
+          "mean": 300.0,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            300.0
+          ]
+        },
+        "n_defined": 1
+      },
+      "curve": [
+        {
+          "step": 0,
+          "n": 1,
+          "tokens_seen": 0,
+          "bytes_seen_est": 0,
+          "flops_est": 0.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 3.5227871416260728,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 5.193306459424885,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 100,
+          "n": 1,
+          "tokens_seen": 204800,
+          "bytes_seen_est": 948402,
+          "flops_est": 10600631500800.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.874447329143806,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.607882765835002,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 200,
+          "n": 1,
+          "tokens_seen": 409600,
+          "bytes_seen_est": 1896803,
+          "flops_est": 21201263001600.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.8446230446446403,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.608425851695502,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 300,
+          "n": 1,
+          "tokens_seen": 614400,
+          "bytes_seen_est": 2845205,
+          "flops_est": 31801894502400.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.8258522735346387,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.613996402360587,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        }
+      ],
+      "run_dirs": [
+        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T1_bpe_raw_64k_dcs/seed0"
+      ]
+    },
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T5_morphbpe_rawseg_64k_dcs",
+      "is_reference": false,
+      "is_split_arm": false,
+      "in_domain_set": "heldout_dcs",
+      "n_seeds": 1,
+      "seeds": [
+        0
+      ],
+      "logical_vocab": 64001,
+      "params": {
+        "non_embedding": 393856,
+        "token_embedding": 8200192,
+        "position_embedding": 32768,
+        "embedding": 8232960,
+        "total": 8626816,
+        "flops_params_kind": "total"
+      },
+      "corpus": {
+        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
+        "n_tokens": 7103858,
+        "n_chars": 31535529,
+        "n_bytes": 31535529,
+        "n_lines": 652007,
+        "bytes_per_token": 4.439211622754847,
+        "chars_per_token": 4.439211622754847,
+        "eos_id": 64000,
+        "dtype": "uint16"
+      },
+      "budget": {
+        "max_bytes": null,
+        "bytes_per_token": null,
+        "max_tokens": null
+      },
+      "steps": {
+        "mean": 300.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          300.0
+        ]
+      },
+      "tokens_seen": {
+        "mean": 614400.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          614400.0
+        ]
+      },
+      "bytes_seen_est": {
+        "mean": 2727452.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          2727452.0
+        ]
+      },
+      "flops_est": {
+        "mean": 31801894502400.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          31801894502400.0
+        ]
+      },
+      "tokens_per_s": {
+        "mean": 14492.215694853374,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          14492.215694853374
+        ]
+      },
+      "bpc": {
+        "heldout_dcs": {
+          "mean": 2.8587671541892408,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2.8587671541892408
+          ],
+          "role": "in_domain",
+          "label": "in_domain",
+          "split_text": false,
+          "n_chars": 200010,
+          "n_chars_scored": 200010,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 2.8587671541892408,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              2.8587671541892408
+            ]
+          },
+          "best_bpc": {
+            "mean": 2.8587671541892408,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              2.8587671541892408
+            ]
+          },
+          "best_step": {
+            "mean": 300.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              300.0
+            ]
+          }
+        },
+        "heldout_samayik_test": {
+          "mean": 4.654387633594723,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            4.654387633594723
+          ],
+          "role": "heldout_samayik_test",
+          "label": "ood",
+          "split_text": false,
+          "n_chars": 173029,
+          "n_chars_scored": 173029,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 4.654387633594723,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.654387633594723
+            ]
+          },
+          "best_bpc": {
+            "mean": 4.654387633594723,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.654387633594723
+            ]
+          },
+          "best_step": {
+            "mean": 300.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              300.0
+            ]
+          }
+        }
+      },
+      "to_reference": {
+        "reference_arm": "T1_bpe_raw_64k_dcs",
+        "threshold_kind": "reference_best_in_domain_bpc",
+        "eval_set": "heldout_dcs",
+        "threshold_bpc": {
+          "mean": 2.8258522735346387,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2.8258522735346387
+          ]
+        },
+        "tokens": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "bytes": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "flops": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "steps": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "n_defined": 0
+      },
+      "curve": [
+        {
+          "step": 0,
+          "n": 1,
+          "tokens_seen": 0,
+          "bytes_seen_est": 0,
+          "flops_est": 0.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 3.6089107092702286,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 5.200771158211126,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 100,
+          "n": 1,
+          "tokens_seen": 204800,
+          "bytes_seen_est": 909151,
+          "flops_est": 10600631500800.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.913061052809812,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.667645644492744,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 200,
+          "n": 1,
+          "tokens_seen": 409600,
+          "bytes_seen_est": 1818301,
+          "flops_est": 21201263001600.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.875345724674066,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.669556794072366,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 300,
+          "n": 1,
+          "tokens_seen": 614400,
+          "bytes_seen_est": 2727452,
+          "flops_est": 31801894502400.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 2.8587671541892408,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.654387633594723,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        }
+      ],
+      "run_dirs": [
+        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T5_morphbpe_rawseg_64k_dcs/seed0"
+      ]
+    },
+    {
+      "track": "track1",
+      "size": "smoke",
+      "arm": "T7_byt5",
+      "is_reference": false,
+      "is_split_arm": false,
+      "in_domain_set": "heldout_dcs",
+      "n_seeds": 1,
+      "seeds": [
+        0
+      ],
+      "logical_vocab": 257,
+      "params": {
+        "non_embedding": 393856,
+        "token_embedding": 40960,
+        "position_embedding": 32768,
+        "embedding": 73728,
+        "total": 467584,
+        "flops_params_kind": "total"
+      },
+      "corpus": {
+        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
+        "n_tokens": 32187536,
+        "n_chars": 31535529,
+        "n_bytes": 31535529,
+        "n_lines": 652007,
+        "bytes_per_token": 0.9797434945004799,
+        "chars_per_token": 0.9797434945004799,
+        "eos_id": 256,
+        "dtype": "uint16"
+      },
+      "budget": {
+        "max_bytes": null,
+        "bytes_per_token": null,
+        "max_tokens": null
+      },
+      "steps": {
+        "mean": 300.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          300.0
+        ]
+      },
+      "tokens_seen": {
+        "mean": 614400.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          614400.0
+        ]
+      },
+      "bytes_seen_est": {
+        "mean": 601954.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          601954.0
+        ]
+      },
+      "flops_est": {
+        "mean": 1723701657600.0,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          1723701657600.0
+        ]
+      },
+      "tokens_per_s": {
+        "mean": 147951.56079389594,
+        "std": null,
+        "n": 1,
+        "n_defined": 1,
+        "values": [
+          147951.56079389594
+        ]
+      },
+      "bpc": {
+        "heldout_dcs": {
+          "mean": 3.7854522570979565,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            3.7854522570979565
+          ],
+          "role": "in_domain",
+          "label": "in_domain",
+          "split_text": false,
+          "n_chars": 200010,
+          "n_chars_scored": 200010,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 3.7854522570979565,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              3.7854522570979565
+            ]
+          },
+          "best_bpc": {
+            "mean": 3.7854522570979565,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              3.7854522570979565
+            ]
+          },
+          "best_step": {
+            "mean": 300.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              300.0
+            ]
+          }
+        },
+        "heldout_samayik_test": {
+          "mean": 4.4279783603235945,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            4.4279783603235945
+          ],
+          "role": "heldout_samayik_test",
+          "label": "ood",
+          "split_text": false,
+          "n_chars": 173029,
+          "n_chars_scored": 173029,
+          "unit": "bits/char",
+          "final_bpc": {
+            "mean": 4.4279783603235945,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.4279783603235945
+            ]
+          },
+          "best_bpc": {
+            "mean": 4.4279783603235945,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              4.4279783603235945
+            ]
+          },
+          "best_step": {
+            "mean": 300.0,
+            "std": null,
+            "n": 1,
+            "n_defined": 1,
+            "values": [
+              300.0
+            ]
+          }
+        }
+      },
+      "to_reference": {
+        "reference_arm": "T1_bpe_raw_64k_dcs",
+        "threshold_kind": "reference_best_in_domain_bpc",
+        "eval_set": "heldout_dcs",
+        "threshold_bpc": {
+          "mean": 2.8258522735346387,
+          "std": null,
+          "n": 1,
+          "n_defined": 1,
+          "values": [
+            2.8258522735346387
+          ]
+        },
+        "tokens": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "bytes": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "flops": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "steps": {
+          "mean": null,
+          "std": null,
+          "n": 1,
+          "n_defined": 0,
+          "values": [
+            null
+          ]
+        },
+        "n_defined": 0
+      },
+      "curve": [
+        {
+          "step": 0,
+          "n": 1,
+          "tokens_seen": 0,
+          "bytes_seen_est": 0,
+          "flops_est": 0.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 8.23607204392445,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 8.159409401914877,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 100,
+          "n": 1,
+          "tokens_seen": 204800,
+          "bytes_seen_est": 200651,
+          "flops_est": 574567219200.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 3.9841091379681846,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.442054419845966,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 200,
+          "n": 1,
+          "tokens_seen": 409600,
+          "bytes_seen_est": 401303,
+          "flops_est": 1149134438400.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 3.81982353333497,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.435573195991983,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        },
+        {
+          "step": 300,
+          "n": 1,
+          "tokens_seen": 614400,
+          "bytes_seen_est": 601954,
+          "flops_est": 1723701657600.0,
+          "bpc": {
+            "heldout_dcs": {
+              "mean": 3.7854522570979565,
+              "std": null,
+              "n_defined": 1
+            },
+            "heldout_samayik_test": {
+              "mean": 4.4279783603235945,
+              "std": null,
+              "n_defined": 1
+            }
+          }
+        }
+      ],
+      "run_dirs": [
+        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T7_byt5/seed0"
+      ]
+    }
+  ],
+  "output_dir": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke",
+  "config": {
+    "name": "smoke",
+    "output_dir": "outputs/05_lm_training/smoke",
+    "cache_dir": "outputs/05_lm_training/encoded",
+    "eval_dir": "data/processed/lm",
+    "reference_arm": "T1_bpe_raw_64k_dcs",
+    "seeds": [
+      0
+    ],
+    "device": "auto",
+    "dtype": "auto",
+    "allow_cpu": true,
+    "keep_checkpoints": false,
+    "eval_sets": {
+      "in_domain": "heldout_dcs",
+      "ood": [
+        "heldout_samayik_test"
+      ]
+    },
+    "sizes": {
+      "smoke": {
+        "block_size": 256,
+        "batch_size": 8,
+        "grad_accum": 1,
+        "max_steps": 300,
+        "lr": 0.0006,
+        "warmup_steps": 50,
+        "eval_every": 100,
+        "eval_batch_size": 8,
+        "eval_max_chars": 200000
+      }
+    },
+    "tracks": {
+      "track1": {
+        "corpus_raw": "data/processed/lm/track1_raw.txt",
+        "sizes": [
+          "smoke"
+        ],
+        "arms": [
+          "T1_bpe_raw_64k_dcs",
+          "T5_morphbpe_rawseg_64k_dcs",
+          "T7_byt5"
+        ]
+      }
+    }
+  },
+  "git_commit": "b13f6e0d69e7a4559140b5112381482387cc306b",
+  "git_dirty": false,
+  "timestamp": "2026-09-06T05:36:40+00:00"
+}

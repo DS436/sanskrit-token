@@ -235,6 +235,10 @@ in-domain BPC) and `bpc_final.{pdf,png}` (final BPC per arm per evaluation role,
 vocabulary and the `oracle` / `provisional` caveats on the labels).
 
 Everything under `outputs/` is gitignored; the numbers quoted in this file are the record.
+The one exception is the smoke sweep, whose aggregated `results.json`, `config.yaml` and
+figures are tracked at [`results/05_lm_training/smoke/`](../../results/05_lm_training/smoke/)
+and labelled there as a pipeline validation rather than a result; see
+[`results/README.md`](../../results/README.md).
 
 ## Smoke sweep — pipeline validation, NOT a result
 

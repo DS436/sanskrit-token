@@ -333,3 +333,7 @@ of magnitude smaller than the first version of this file reported.
 - `benchmark_splitter.py` — the throughput benchmark (Task 2).
 - `outputs/03_sandhi_split/results.json` — every number above, with provenance.
 - `outputs/03_sandhi_split/tpp_split_vs_raw.{pdf,png}` — the figure.
+- [`results/03_sandhi_split/`](../../results/03_sandhi_split/) — the tracked copy of that
+  `results.json`, its `config.yaml` and both figures, committed so the numbers can be read
+  without a run (`outputs/` itself is gitignored). See
+  [`results/README.md`](../../results/README.md).

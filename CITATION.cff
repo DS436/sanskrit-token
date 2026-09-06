@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this repository or its results, please cite it as below."
+title: "Recovering Latent Compression: Sandhi-Aware, Morpheme-Constrained Tokenization for Sanskrit Language Modelling"
+abstract: >-
+  Sanskrit is information-dense per word, but subword tokenizers are trained on
+  raw sandhied, compounded text. This repository tests whether that density
+  survives tokenization when measured per unit of meaning rather than per word,
+  and whether reversing sandhi before subword learning and forbidding merges
+  across gold morpheme boundaries recovers it. Headline metrics are
+  tokens-per-proposition on parallel text and bits-per-character from language
+  model training; fertility is always computed and never led with.
+type: software
+authors:
+  - family-names: Sharma
+    given-names: Devansh
+year: 2026
+repository-code: "https://github.com/DS436/sanskrit-token"
+url: "https://github.com/DS436/sanskrit-token"
+license: MIT
+keywords:
+  - sanskrit
+  - tokenization
+  - morphology
+  - sandhi
+  - language-models
+  - nlp
