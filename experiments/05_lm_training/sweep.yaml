@@ -1,0 +1,96 @@
+# Experiment 05 — the real sweep. 51 runs: Track 1's seven arms at 50M, Track 2's five raw
+# arms at 50M and 125M, three seeds each.
+#
+#   uv run python experiments/05_lm_training/run.py --sweep sweep
+#   uv run python experiments/05_lm_training/sweep.py --config experiments/05_lm_training/sweep.yaml \
+#       --dry-run --tokens-per-s 17300
+#
+# This is a GPU job (see the README). Relative paths resolve against the repository root.
+# The sweep is resumable: re-running the same command skips every run whose results.json is
+# already present under an unchanged plan.
+
+name: sweep
+output_dir: outputs/05_lm_training/sweep
+cache_dir: outputs/05_lm_training/encoded
+eval_dir: data/processed/lm
+
+# Every "tokens / bytes / FLOPs to reference BPC" figure is measured against this arm's
+# final in-domain BPC at the same track and size, seed matched to seed
+# (docs/decisions.md, 2026-09-05, "Experiment 05 model, evaluation and comparison protocol").
+reference_arm: T1_bpe_raw_64k_dcs
+
+# CLAUDE.md §2.6: three seeds minimum for anything involving model training.
+seeds: [0, 1, 2]
+
+device: auto      # cuda > mps > cpu
+dtype: auto       # bfloat16 on CUDA, float32 elsewhere (MPS half precision is unvalidated)
+
+# A 125M checkpoint is ~1.5 GB and nothing downstream reads one; set true to keep them.
+keep_checkpoints: false
+
+# In-domain first, then the four out-of-domain parallel sets. A split arm is given the
+# `_split` twin of each of these automatically (`sweep.is_split_arm`).
+eval_sets:
+  in_domain: heldout_dcs
+  ood:
+    - heldout_samayik_test
+    - heldout_samayik_test_ood
+    - heldout_itihasa_test
+    - heldout_flores_devtest
+
+# Optimisation per model size. `batch_size x grad_accum x block_size` is 65,536 tokens per
+# step at both sizes, so step counts are directly comparable between them. `batch_size` is
+# what a 40 GB card takes; halve it and double `grad_accum` on a smaller one — the product
+# is what the budget is spent in.
+sizes:
+  50M:
+    block_size: 1024
+    batch_size: 16
+    grad_accum: 4
+    lr: 6.0e-4
+    warmup_steps: 100
+    eval_every: 100
+    eval_batch_size: 8
+  125M:
+    block_size: 1024
+    batch_size: 8
+    grad_accum: 8
+    lr: 6.0e-4
+    warmup_steps: 200
+    eval_every: 250
+    eval_batch_size: 8
+
+# `epochs` is the equal-bytes budget: the track's RAW corpus bytes times this number, one
+# figure for every arm in the track, which each arm then converts into its own token budget
+# through its own bytes-per-token. Track 1 is 31,535,529 bytes, so 8 epochs is 252,284,232
+# bytes; Track 2's sample is 755,048,553 bytes and gets one pass.
+#
+# A split arm spends that same byte figure on `track1_split.txt`, which is ~6% larger than
+# the raw corpus because undoing sandhi inserts spaces — so it trains on equal bytes of the
+# text it actually sees, which is ~7.5 passes over the sentences rather than 8. Equal bytes
+# of the *raw* text would be the alternative and is not what is used; see sweep.py.
+tracks:
+  track1:
+    corpus_raw: data/processed/lm/track1_raw.txt
+    corpus_split: data/processed/lm/track1_split.txt
+    epochs: 8
+    sizes: [50M]
+    arms:
+      - T1_bpe_raw_64k_dcs
+      - T2_unigram_raw_64k_dcs
+      - T4_bpe_split_64k_oracle_dcs
+      - T5_morphbpe_rawseg_64k_dcs
+      - T5_morphbpe_raw_64k_dcs
+      - T6_morphbpe_split_64k_dcs
+      - T7_byt5
+  track2:
+    # The ~200 M-token sample of M1; there is no gold split at this scale, so no split arm.
+    corpus_raw: data/processed/lm/track2_sample.txt
+    epochs: 1
+    sizes: [50M, 125M]
+    arms:
+      - T1_bpe_raw_64k_dcs
+      - T2_unigram_raw_64k_dcs
+      - T5_morphbpe_rawseg_64k_dcs
+      - T5_morphbpe_raw_64k_dcs
+      - T7_byt5

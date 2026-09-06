@@ -1,0 +1,59 @@
+# Experiment 05 — the smoke sweep. THIS IS NOT A RESULT.
+#
+#   uv run python experiments/05_lm_training/run.py --sweep smoke
+#
+# Three arms, one seed, 300 steps of a two-layer 128-wide model on this laptop's MPS. It
+# exists to prove that the whole pipeline — encoding, training, periodic BPC evaluation,
+# checkpointing, aggregation, figures — runs end to end before any GPU is rented. A BPC
+# from this configuration says nothing about tokenizers: the model is far too small and the
+# budget far too short, and the three arms do not even see equal bytes (this sweep is
+# budgeted in steps, so a denser arm sees fewer bytes in the same 300 steps).
+#
+# ~4 minutes per run on an M-series MPS device, plus ~1 minute of first-time corpus
+# encoding per arm.
+
+name: smoke
+output_dir: outputs/05_lm_training/smoke
+cache_dir: outputs/05_lm_training/encoded
+eval_dir: data/processed/lm
+
+reference_arm: T1_bpe_raw_64k_dcs
+
+# One seed: this is a pipeline test, not a measurement (CLAUDE.md §2.6 governs real runs).
+seeds: [0]
+
+device: auto
+dtype: auto
+keep_checkpoints: false
+
+# Two sets, not five: the point is that evaluation runs, not what it says.
+eval_sets:
+  in_domain: heldout_dcs
+  ood:
+    - heldout_samayik_test
+
+sizes:
+  smoke:
+    block_size: 256
+    batch_size: 8
+    grad_accum: 1
+    max_steps: 300
+    lr: 6.0e-4
+    warmup_steps: 50
+    eval_every: 100
+    eval_batch_size: 8
+    # `TrainConfig` has one cap for every evaluation set, so this is 200,000 characters of
+    # `heldout_dcs`; `heldout_samayik_test` is 175 KB in total and is therefore scored
+    # whole. Uncapped, `heldout_dcs` alone would be 1.3 MB per evaluation.
+    eval_max_chars: 200000
+
+# No `epochs`: the smoke sweep is budgeted in steps, so no equal-bytes conversion happens
+# and the arms are NOT comparable to each other here.
+tracks:
+  track1:
+    corpus_raw: data/processed/lm/track1_raw.txt
+    sizes: [smoke]
+    arms:
+      - T1_bpe_raw_64k_dcs
+      - T5_morphbpe_rawseg_64k_dcs
+      - T7_byt5
