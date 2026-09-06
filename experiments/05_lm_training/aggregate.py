@@ -6,22 +6,27 @@
 Reads every `<output_dir>/<track>/<size>/<arm>/seed<k>/results.json` the sweep wrote, plus
 the `curve.jsonl` beside it, and writes one `results.json` in `<output_dir>` with, per
 track × size × arm: the final bits-per-character on every evaluation set as mean ± standard
-deviation over seeds, the parameter and compute counts, the mean training curve, and the
-training bytes, tokens and FLOPs at which the arm first reached the reference arm's final
-in-domain BPC.
+deviation over seeds, the **best** (minimum) BPC on the curve and the step it happened at,
+the parameter and compute counts, the mean training curve, and the training bytes, tokens
+and FLOPs at which the arm first reached the reference threshold.
 
-**The reference is `T1_bpe_raw_64k_dcs`'s final in-domain BPC at the same track and size,
-matched seed by seed** (docs/decisions.md, 2026-09-05, "Experiment 05 model, evaluation and
-comparison protocol"). Seed 0 of an arm is compared against seed 0 of the reference, and the
-three crossings are then averaged — not the other way round, which would mix a seed's
-trajectory with another seed's target. An arm that never reaches the reference has `null`
-for that seed and is counted in `n_defined` rather than quietly dropped from the mean.
+**The reference threshold is `T1_bpe_raw_64k_dcs`'s BEST in-domain BPC on its own curve, at
+the same track and size, matched seed by seed** (docs/decisions.md, 2026-09-06, "BPC is
+bits per character of the RAW held-out text for every arm ..."). Best, not final, because
+Track 1 is eight epochs over a 31 MB corpus: a reference arm that overfits in its last
+epoch would raise its final BPC and hand every other arm an easier target, turning the
+baseline's weakness into the proposal's result. Seed 0 of an arm is compared against seed 0
+of the reference, and the three crossings are then averaged — not the other way round,
+which would mix a seed's trajectory with another seed's target. An arm that never reaches
+the threshold has `null` for that seed and is counted in `n_defined` rather than quietly
+dropped from the mean. The **headline table stays final BPC**; both numbers are reported
+for every arm on every set (`final_bpc`, `best_bpc`, `best_step`).
 
-**Bits per character, never perplexity** (CLAUDE.md §2.2). The one subtlety the numbers
-carry is that a split arm is scored on the `_split` twin of each held-out set — the same
-sentences with sandhi undone — whose character count is ~6% larger than the raw text's.
-The denominators therefore differ slightly between raw and split arms, so `n_chars` is
-recorded for every set of every arm and the figures say which shape each arm was scored on.
+**Bits per character, never perplexity** (CLAUDE.md §2.2). A split arm is scored on the
+`_split` twin of each held-out set — the same sentences with sandhi undone, ~6% more
+characters — but its BPC is divided by the **raw** twin's character count, as every arm's
+is, so the two are directly comparable; `n_chars` is the shared denominator and
+`n_chars_scored` (in each run's `results.json`) is what the split arm actually predicted.
 
 Standard deviations are the sample standard deviation (ddof 1) and are `null` for a
 single-seed group, because one number has no spread; the smoke sweep is such a group and
@@ -45,7 +50,7 @@ logger = logging.getLogger("exp05.aggregate")
 
 EXPERIMENT_NAME = "05_lm_training"
 
-#: The arm whose final in-domain BPC every crossing is measured against.
+#: The arm whose best in-domain BPC every crossing is measured against.
 DEFAULT_REFERENCE_ARM = "T1_bpe_raw_64k_dcs"
 
 #: The base name of the in-domain evaluation set. A split arm's is this plus `_split`.
@@ -71,10 +76,17 @@ def base_set_name(name: str) -> str:
     return name[: -len("_split")] if name.endswith("_split") else name
 
 
-def eval_role(name: str) -> str:
-    """The comparison slot an evaluation set fills, independent of text shape."""
+def eval_role(name: str, in_domain: str | None = None) -> str:
+    """The comparison slot an evaluation set fills, independent of text shape.
+
+    `in_domain` is the run's own in-domain set, which is `heldout_dcs` on Track 1 and
+    `heldout_sangraha` on Track 2 (the sample is 93.6% Sangraha, so a DCS-only held-out set
+    would make every Track 2 number a transfer measurement — docs/decisions.md, 2026-09-06).
+    It defaults to `IN_DOMAIN_BASE` for a caller that has no run in hand.
+    """
     base = base_set_name(name)
-    return IN_DOMAIN_ROLE if base == IN_DOMAIN_BASE else base
+    reference = base_set_name(in_domain or IN_DOMAIN_BASE)
+    return IN_DOMAIN_ROLE if base == reference else base
 
 
 def is_split_set(name: str) -> bool:
@@ -120,11 +132,25 @@ class RunRecord:
 
     @property
     def in_domain_set(self) -> str:
-        """The evaluation set this arm's in-domain BPC is on: raw or `_split`."""
+        """The evaluation set this arm's in-domain BPC is on: raw or `_split`.
+
+        The sweep records it in `sweep_run.json`, which is the authority — Track 2's is
+        `heldout_sangraha`, not `heldout_dcs`, and no rule over set names could know that.
+        The name-based fallback is for a run written without a sidecar (a fixture, or a
+        `train.py` invocation outside the sweep).
+        """
+        recorded = self.sidecar.get("in_domain_set")
+        if recorded:
+            return str(recorded)
         for name in self.results.get("bpc") or {}:
             if eval_role(str(name)) == IN_DOMAIN_ROLE:
                 return str(name)
         return f"{IN_DOMAIN_BASE}_split" if is_split_arm_name(self.arm) else IN_DOMAIN_BASE
+
+    @property
+    def eval_labels(self) -> dict[str, str]:
+        """`{set name: in_domain|transfer|ood}` as the sweep recorded it, or `{}`."""
+        return {str(k): str(v) for k, v in (self.sidecar.get("eval_labels") or {}).items()}
 
     def final_bpc(self, name: str) -> float | None:
         entry = (self.results.get("bpc") or {}).get(name)
@@ -132,6 +158,26 @@ class RunRecord:
             return None
         value = entry.get("value")
         return None if value is None else float(value)
+
+    def best_bpc(self, name: str) -> tuple[float | None, int | None]:
+        """The lowest BPC this seed reached on `name`, and the step it reached it at.
+
+        Read from `curve.jsonl` rather than from `results.json`'s `curve_summary`, so a run
+        whose summary predates this field still aggregates. `(None, None)` when the curve
+        has no finite point for that set — a run that crashed before its first evaluation,
+        or a set it was not scored on.
+        """
+        scored = [
+            (float(row["bpc"][name]), int(row["step"]))
+            for row in self.curve
+            if name in (row.get("bpc") or {})
+            and row["bpc"][name] is not None
+            and math.isfinite(float(row["bpc"][name]))
+        ]
+        if not scored:
+            return None, None
+        value, step = min(scored)
+        return value, step
 
 
 def is_split_arm_name(arm: str) -> bool:
@@ -284,14 +330,17 @@ def aggregate(
     for record in records:
         groups.setdefault((record.track, record.size, record.arm), []).append(record)
 
-    # The reference's final in-domain BPC per (track, size, seed): the target every arm at
-    # that track and size is timed against.
+    # The reference's BEST in-domain BPC per (track, size, seed): the target every arm at
+    # that track and size is timed against. Its final value is the fallback for a run with
+    # no curve at all, so a hand-written fixture without one still produces a threshold.
     reference: dict[tuple[str, str, int], float] = {}
     for (track, size, arm), members in groups.items():
         if arm != reference_arm:
             continue
         for record in members:
-            value = record.final_bpc(record.in_domain_set)
+            value, _ = record.best_bpc(record.in_domain_set)
+            if value is None:
+                value = record.final_bpc(record.in_domain_set)
             if value is not None:
                 reference[(track, size, record.seed)] = value
 
@@ -299,18 +348,32 @@ def aggregate(
     for (track, size, arm), members in sorted(groups.items()):
         members = sorted(members, key=lambda record: record.seed)
         in_domain = members[0].in_domain_set
+        labels = members[0].eval_labels
         set_names = sorted(
             {name for record in members for name in (record.results.get("bpc") or {})},
-            key=lambda name: (eval_role(name) != IN_DOMAIN_ROLE, name),
+            key=lambda name: (eval_role(name, in_domain) != IN_DOMAIN_ROLE, name),
         )
         bpc: dict[str, Any] = {}
         for name in set_names:
-            summary = mean_std([record.final_bpc(name) for record in members])
+            finals = [record.final_bpc(name) for record in members]
+            bests = [record.best_bpc(name) for record in members]
+            summary = mean_std(finals)
             entry = (members[0].results.get("bpc") or {}).get(name) or {}
-            summary["role"] = eval_role(name)
+            summary["role"] = eval_role(name, in_domain)
+            summary["label"] = labels.get(
+                name,
+                IN_DOMAIN_ROLE if eval_role(name, in_domain) == IN_DOMAIN_ROLE else "ood",
+            )
             summary["split_text"] = is_split_set(name)
+            # The shared denominator: the RAW twin's characters, for a split arm too.
             summary["n_chars"] = entry.get("n")
+            summary["n_chars_scored"] = entry.get("n_chars_scored", entry.get("n"))
             summary["unit"] = entry.get("unit", "bits/char")
+            # `mean`/`std`/`values` above are the FINAL BPC and stay the headline; the two
+            # keys below are the minimum the arm reached on its curve and where.
+            summary["final_bpc"] = mean_std(finals)
+            summary["best_bpc"] = mean_std([value for value, _ in bests])
+            summary["best_step"] = mean_std([step for _, step in bests])
             bpc[name] = summary
 
         thresholds: list[float | None] = [
@@ -322,6 +385,7 @@ def aggregate(
         ]
         to_reference = {
             "reference_arm": reference_arm,
+            "threshold_kind": "reference_best_in_domain_bpc",
             "eval_set": in_domain,
             "threshold_bpc": mean_std(thresholds),
             "tokens": mean_std(
@@ -450,10 +514,14 @@ def build_curve_figure(results: Mapping[str, Any]) -> Any:
                     linewidth=0,
                 )
             if group["arm"] == reference_arm:
-                final = group["bpc"].get(name, {}).get("mean")
-                if final is not None:
+                # The threshold the crossings are timed against: the reference's BEST
+                # in-domain BPC, not its final one (module docstring).
+                threshold = (group["bpc"].get(name, {}).get("best_bpc") or {}).get("mean")
+                if threshold is None:
+                    threshold = group["bpc"].get(name, {}).get("mean")
+                if threshold is not None:
                     axes.axhline(
-                        float(final),
+                        float(threshold),
                         linestyle="--",
                         linewidth=1.0,
                         color="gray",
@@ -472,10 +540,10 @@ def build_curve_figure(results: Mapping[str, Any]) -> Any:
     figure.text(
         0.01,
         0.005,
-        "Dashed line: the reference arm's final in-domain BPC. Split arms are scored on the "
-        "`_split` twin of the held-out set (same sentences, ~6% more characters), so their "
-        "denominators differ slightly from the raw arms'. Perplexity is never compared "
-        "(CLAUDE.md §2.2).",
+        "Dashed line: the reference arm's best in-domain BPC, the level the crossings are "
+        "timed against. Split arms predict the `_split` twin of the held-out set (same "
+        "sentences, ~6% more characters) but are scored per character of the RAW twin, so "
+        "every arm's denominator is the same. Perplexity is never compared (CLAUDE.md §2.2).",
         fontsize=5.5,
         wrap=True,
     )

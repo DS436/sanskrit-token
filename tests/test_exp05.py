@@ -33,6 +33,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+import torch
 import yaml
 
 from sanskrit_tok.lm.config import MODEL_SIZES
@@ -744,10 +745,34 @@ def test_the_real_sweep_config_enumerates_the_planned_grid() -> None:
     assert config["tracks"]["track1"]["arms"] == TRACK1_ARMS
     assert config["tracks"]["track2"]["arms"] == TRACK2_ARMS
     assert len(specs) == 7 * 3 + 5 * 2 * 3
+    # Cadence: every 25 steps at 50M and every 100 at 125M, so the crossing the experiment
+    # reports is resolved to a few percent of the budget (docs/decisions.md, 2026-09-06).
+    assert config["sizes"]["50M"]["eval_every"] == 25
+    assert config["sizes"]["125M"]["eval_every"] == 100
+    # The real sweep must not be allowed to fall through to the CPU.
+    assert "allow_cpu" not in config
     for spec in specs:
         assert spec.settings["block_size"] == 1024
         assert spec.max_bytes is not None and spec.max_bytes > 0
-        assert len(spec.eval_sets) == 5
+        # Track 1: in-domain DCS plus four out-of-domain. Track 2: `heldout_sangraha`
+        # in-domain, `heldout_dcs` as transfer, plus the same four.
+        assert len(spec.eval_sets) == (5 if spec.track == "track1" else 6)
+        assert set(spec.eval_raw_sets) == set(spec.eval_sets)
+
+
+def test_track2_is_evaluated_in_domain_on_sangraha_and_transfers_to_dcs() -> None:
+    """The Track 2 sample is 93.6% Sangraha; DCS is a transfer set there, not in-domain."""
+    config = yaml.safe_load(SWEEP_YAML.read_text(encoding="utf-8"))
+    specs = sweep.enumerate_runs(config, REPO_ROOT)
+    track2 = next(spec for spec in specs if spec.track == "track2")
+    assert track2.in_domain_set == "heldout_sangraha"
+    assert track2.eval_labels["heldout_sangraha"] == "in_domain"
+    assert track2.eval_labels["heldout_dcs"] == "transfer"
+    assert track2.eval_labels["heldout_flores_devtest"] == "ood"
+    # Track 1 keeps DCS as its in-domain set.
+    track1 = next(spec for spec in specs if spec.track == "track1")
+    assert track1.in_domain_set == "heldout_dcs"
+    assert track1.eval_labels["heldout_dcs"] == "in_domain"
 
 
 def test_the_real_smoke_config_is_three_arms_one_seed_and_capped_evaluation() -> None:
@@ -797,3 +822,163 @@ def test_run_py_exposes_both_sweep_names() -> None:
     assert set(module.SWEEPS) == {"smoke", "sweep"}
     assert module.SWEEPS["smoke"].name == "smoke.yaml"
     assert module.SWEEPS["sweep"].name == "sweep.yaml"
+
+
+# --------------------------------------------------- the raw BPC denominator and device
+
+
+def test_a_split_arm_carries_the_raw_twin_of_every_evaluation_set(sweep_root: Path) -> None:
+    """`heldout_dcs_split` is predicted; `heldout_dcs.txt` is the BPC denominator."""
+    specs = sweep.enumerate_runs(_sweep_config(sweep_root), sweep_root)
+    split = next(spec for spec in specs if spec.arm == "T6_morphbpe_split_64k_dcs")
+    raw = next(spec for spec in specs if spec.arm == "T1_bpe_raw_64k_dcs")
+    for name, path in split.eval_sets.items():
+        assert path.name.endswith("_split.txt")
+        assert split.eval_raw_sets[name].name == path.name.replace("_split.txt", ".txt")
+    # A raw arm's twin is the file it already reads.
+    assert raw.eval_raw_sets == raw.eval_sets
+    mapping = split.train_mapping(max_tokens=10)
+    assert set(mapping["eval_raw_sets"]) == set(mapping["eval_sets"])
+
+
+def test_the_plan_hash_moves_with_the_tokenizer_file(
+    sweep_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An arm name is not its contents: a retrained vocabulary must re-run its runs."""
+    spec = sweep.enumerate_runs(_sweep_config(sweep_root), sweep_root)[0]
+    monkeypatch.setattr(sweep, "tokenizer_digest", lambda arm: "digest-a")
+    before = spec.plan_hash()
+    monkeypatch.setattr(sweep, "tokenizer_digest", lambda arm: "digest-b")
+    assert spec.plan_hash() != before
+
+
+def test_the_sweep_resolves_and_checks_its_device_before_encoding_anything(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="allow_cpu"):
+        sweep.resolve_sweep_device({"device": "auto"})
+    assert sweep.resolve_sweep_device({"device": "auto", "allow_cpu": True}) == (
+        "cpu",
+        "float32",
+    )
+    with pytest.raises(RuntimeError, match="unavailable"):
+        sweep.resolve_sweep_device({"device": "cuda"})
+
+
+def test_run_sweep_aborts_on_a_bad_device_without_touching_the_corpora(
+    sweep_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The abort happens before `enumerate_runs`, so nothing is encoded or trained."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(
+        sweep, "enumerate_runs", lambda *a, **k: pytest.fail("enumerated despite a bad device")
+    )
+    with pytest.raises(RuntimeError, match="allow_cpu"):
+        sweep.run_sweep(_sweep_config(sweep_root), None, sweep_root)
+
+
+def test_the_smoke_config_allows_the_cpu_and_the_sweep_config_does_not() -> None:
+    smoke = yaml.safe_load(SMOKE_YAML.read_text(encoding="utf-8"))
+    assert smoke["allow_cpu"] is True
+    assert sweep.resolve_sweep_device(smoke)[0] in {"cuda", "mps", "cpu"}
+
+
+def test_eval_sets_reject_an_unknown_group_and_a_set_named_twice(sweep_root: Path) -> None:
+    config = _sweep_config(sweep_root)
+    config["eval_sets"] = {"in_domain": "heldout_dcs", "nonsense": ["x"]}
+    with pytest.raises(ValueError, match="unknown eval_sets group"):
+        sweep.enumerate_runs(config, sweep_root)
+    config["eval_sets"] = {"in_domain": "heldout_dcs", "ood": ["heldout_dcs"]}
+    with pytest.raises(ValueError, match="more than one label"):
+        sweep.enumerate_runs(config, sweep_root)
+
+
+# ------------------------------------------------ final vs best BPC, and the threshold
+
+
+def test_every_set_reports_both_the_final_and_the_best_bpc(tmp_path: Path) -> None:
+    out = tmp_path / "sweep"
+    _write_run(
+        out,
+        track="track1",
+        size="50M",
+        arm="T1_bpe_raw_64k_dcs",
+        seed=0,
+        final_bpc={"heldout_dcs": 2.6},
+        # Overfits: the minimum is at step 1, the final value is worse.
+        curve=_curve([(100, 3.0), (200, 2.4), (300, 2.6)]),
+    )
+    results = aggregate.aggregate(aggregate.load_runs(out), reference_arm="T1_bpe_raw_64k_dcs")
+    entry = results["groups"][0]["bpc"]["heldout_dcs"]
+    assert entry["mean"] == pytest.approx(2.6), "the headline stays the FINAL BPC"
+    assert entry["final_bpc"]["values"] == [2.6]
+    assert entry["best_bpc"]["values"] == [2.4]
+    assert entry["best_step"]["values"] == [1]
+
+
+def test_the_threshold_is_the_references_best_curve_point_not_its_final_one(
+    tmp_path: Path,
+) -> None:
+    """A reference that overfits must not hand every other arm an easier target."""
+    out = tmp_path / "sweep"
+    _write_run(
+        out,
+        track="track1",
+        size="50M",
+        arm="T1_bpe_raw_64k_dcs",
+        seed=0,
+        final_bpc={"heldout_dcs": 2.6},
+        curve=_curve([(100, 3.0), (200, 2.4), (300, 2.6)]),
+    )
+    # The candidate is at 2.5 by 200 bytes and 2.4 by 300: it beats the reference's FINAL
+    # 2.6 early, and its BEST 2.4 only at the end.
+    _write_run(
+        out,
+        track="track1",
+        size="50M",
+        arm="T5_morphbpe_rawseg_64k_dcs",
+        seed=0,
+        final_bpc={"heldout_dcs": 2.4},
+        curve=_curve([(100, 3.1), (200, 2.5), (300, 2.4)]),
+    )
+    results = aggregate.aggregate(aggregate.load_runs(out), reference_arm="T1_bpe_raw_64k_dcs")
+    candidate = next(
+        g for g in results["groups"] if g["arm"] == "T5_morphbpe_rawseg_64k_dcs"
+    )
+    crossing = candidate["to_reference"]
+    assert crossing["threshold_kind"] == "reference_best_in_domain_bpc"
+    assert crossing["threshold_bpc"]["values"] == [2.4]
+    assert crossing["bytes"]["values"] == [300], "not 200, which only beat the final 2.6"
+
+
+def test_the_in_domain_set_comes_from_the_sweeps_own_sidecar(tmp_path: Path) -> None:
+    """Track 2's in-domain set is `heldout_sangraha`; no rule over names could know that."""
+    out = tmp_path / "sweep"
+    run_dir = _write_run(
+        out,
+        track="track2",
+        size="50M",
+        arm="T1_bpe_raw_64k_dcs",
+        seed=0,
+        final_bpc={"heldout_sangraha": 2.1, "heldout_dcs": 3.3},
+        curve=_curve([(100, 2.1)], name="heldout_sangraha"),
+    )
+    (run_dir / "sweep_run.json").write_text(
+        json.dumps(
+            {
+                "in_domain_set": "heldout_sangraha",
+                "eval_labels": {"heldout_sangraha": "in_domain", "heldout_dcs": "transfer"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    results = aggregate.aggregate(aggregate.load_runs(out), reference_arm="T1_bpe_raw_64k_dcs")
+    group = results["groups"][0]
+    assert group["in_domain_set"] == "heldout_sangraha"
+    assert group["bpc"]["heldout_sangraha"]["role"] == "in_domain"
+    assert group["bpc"]["heldout_sangraha"]["label"] == "in_domain"
+    assert group["bpc"]["heldout_dcs"]["role"] == "heldout_dcs"
+    assert group["bpc"]["heldout_dcs"]["label"] == "transfer"

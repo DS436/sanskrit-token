@@ -18,6 +18,13 @@ rented A100" are the same command: `device: auto` takes CUDA if there is one, th
 CPU, and `dtype: auto` picks bfloat16 only where it is known good. MPS gets float32 —
 half-precision on Metal is not something this project has validated, and a silently NaN'd
 BPC is worse than a slower smoke run.
+
+**Neither resolution ever silently downgrades.** A run that asked for `cuda` on a box with
+no CUDA used to fall back to CPU with a warning; on a rented GPU that turns a mis-set
+`CUDA_VISIBLE_DEVICES` into a sweep that appears to be running and finishes in three weeks.
+`resolve_device` now raises, and `auto` is allowed to land on CPU only when the config says
+`allow_cpu: true` — which the smoke sweep sets and the real sweep does not
+(docs/decisions.md, 2026-09-06, "Sweep hardening before paid GPU time").
 """
 
 import logging
@@ -80,12 +87,21 @@ def round_up_vocab(logical_vocab: int, multiple: int = VOCAB_PAD_MULTIPLE) -> in
     return -(-logical_vocab // multiple) * multiple
 
 
-def resolve_device(name: str) -> str:
+def resolve_device(name: str, *, allow_cpu: bool = False) -> str:
     """Turn `auto|cuda|mps|cpu` into the device string this machine will actually use.
 
-    `auto` prefers CUDA, then MPS, then CPU. An explicitly named device that is not
-    available falls back to CPU with a warning rather than crashing halfway through a
-    sweep — except that an unknown name is a config error and raises.
+    `auto` prefers CUDA, then MPS, then CPU; an explicit `cpu` is honoured, since asking
+    for it is a choice rather than an accident.
+
+    Raises `ValueError` on an unknown name, and `RuntimeError` in the two cases that used
+    to be warnings:
+
+    * a named device that this machine does not have (`cuda` on a box with no CUDA). The
+      old behaviour was a silent fall back to CPU, which on rented hardware means a sweep
+      that looks like it is running and is a hundred times too slow to finish.
+    * `auto` resolving to CPU when `allow_cpu` is false. The smoke sweep sets
+      `allow_cpu: true` because a CPU smoke run is still a valid pipeline test; the real
+      sweep does not, so a GPU box whose driver did not come up stops immediately.
     """
     if name not in {"auto", "cuda", "mps", "cpu"}:
         raise ValueError(f"unknown device {name!r}; expected one of auto, cuda, mps, cpu")
@@ -96,11 +112,24 @@ def resolve_device(name: str) -> str:
     if name == "auto":
         if has_cuda:
             return "cuda"
-        return "mps" if has_mps else "cpu"
+        if has_mps:
+            return "mps"
+        if allow_cpu:
+            logger.warning("device auto found no accelerator; running on cpu (allow_cpu)")
+            return "cpu"
+        raise RuntimeError(
+            "device 'auto' found neither CUDA nor MPS and would run on the CPU. Set "
+            "`allow_cpu: true` in the config if that is what you want (the smoke sweep "
+            "does); the real sweep deliberately does not, because a CPU run of it would "
+            "not finish."
+        )
     if (name == "cuda" and has_cuda) or (name == "mps" and has_mps):
         return name
-    logger.warning("device %s requested but unavailable; falling back to cpu", name)
-    return "cpu"
+    raise RuntimeError(
+        f"device {name!r} was requested but torch reports it unavailable "
+        f"(cuda={has_cuda}, mps={has_mps}). Fix the environment, or set device to 'auto' "
+        "or 'cpu' deliberately — this used to fall back to the CPU silently."
+    )
 
 
 def resolve_dtype(name: str, device: str) -> str:
@@ -143,8 +172,16 @@ class TrainConfig:
     given; when both are, the smaller resulting step budget wins, which is what makes
     "stop at 200 steps or 10M tokens, whichever comes first" expressible.
 
+    `eval_raw_sets` maps an evaluation set's name to the **raw twin** of its text: for a
+    split arm, `heldout_dcs_split` -> `heldout_dcs.txt`. Its character count is the BPC
+    denominator (`bpc.py`, convention 3). A name absent from it is its own raw twin, which
+    is every set of every raw arm.
+
     `eval_max_chars` truncates every held-out text at a whole line. It exists for the smoke
     runs; a real run leaves it `None` and scores the whole set.
+
+    `allow_cpu` lets `device: auto` resolve to the CPU; without it that resolution raises
+    (`resolve_device`).
     """
 
     arm: str
@@ -154,6 +191,7 @@ class TrainConfig:
     out_dir: Path
     cache_dir: Path
     eval_sets: dict[str, Path] = field(default_factory=dict)
+    eval_raw_sets: dict[str, Path] = field(default_factory=dict)
     block_size: int = 0
     batch_size: int = 8
     grad_accum: int = 1
@@ -171,6 +209,7 @@ class TrainConfig:
     seed: int = 0
     device: str = "auto"
     dtype: str = "auto"
+    allow_cpu: bool = False
     eval_every: int = 50
     eval_batch_size: int = 8
     eval_max_chars: int | None = None
@@ -229,6 +268,9 @@ class TrainConfig:
             "out_dir": str(self.out_dir),
             "cache_dir": str(self.cache_dir),
             "eval_sets": {name: str(path) for name, path in self.eval_sets.items()},
+            "eval_raw_sets": {
+                name: str(path) for name, path in self.eval_raw_sets.items()
+            },
             "block_size": self.block_size,
             "batch_size": self.batch_size,
             "grad_accum": self.grad_accum,
@@ -246,6 +288,7 @@ class TrainConfig:
             "seed": self.seed,
             "device": self.device,
             "dtype": self.dtype,
+            "allow_cpu": self.allow_cpu,
             "eval_every": self.eval_every,
             "eval_batch_size": self.eval_batch_size,
             "eval_max_chars": self.eval_max_chars,
@@ -285,6 +328,15 @@ class TrainConfig:
             name: resolve_path(path, root)
             for name, path in (values.get("eval_sets") or {}).items()
         }
+        values["eval_raw_sets"] = {
+            name: resolve_path(path, root)
+            for name, path in (values.get("eval_raw_sets") or {}).items()
+        }
+        unknown_raw = sorted(set(values["eval_raw_sets"]) - set(values["eval_sets"]))
+        if unknown_raw:
+            raise ValueError(
+                f"eval_raw_sets names sets that eval_sets does not: {', '.join(unknown_raw)}"
+            )
         return cls(**values)
 
 

@@ -11,10 +11,21 @@ with a single EOS acting as a document-start marker, so that the very first real
 context and is scored like every other. The stream is then cut into non-overlapping
 `block_size` windows; the last window is padded and its padding masked out with
 `ignore_index=-1`. Every token of the held-out text is therefore predicted exactly once and
-counted exactly once, and the total surprise is divided by the text's SLP1 characters
-(`bpc.py`). The EOS tokens are inside that total: they are one token per line on the same
-lines for every arm, a constant handicap that cancels in every comparison, and excluding
-them would reward an arm for being bad at sentence boundaries.
+counted exactly once, and the total surprise is divided by the SLP1 characters of the
+**raw** twin of that text (`bpc.py`). The EOS tokens are inside that total: they are one
+token per line on the same lines for every arm, a constant handicap that cancels in every
+comparison, and excluding them would reward an arm for being bad at sentence boundaries.
+
+**The BPC denominator is the raw held-out text, for a split arm as much as a raw one.** A
+split arm predicts the sandhi-split twin of a held-out set, which carries 2.1-6.3% more
+characters than the raw text because undoing sandhi inserts spaces; dividing its nats by
+that larger count would hand it a discount the size of the effect being measured. So
+`evaluate_bpc` takes the raw twin's path beside the text it scores, measures it over
+*exactly the lines that were scored* (which matters when `eval_max_chars` truncates), and
+divides by that. `n_chars_scored` and `n_chars_denominator` are both recorded, per set, in
+`curve.jsonl` and in `results.json`, so the difference is in the record rather than in the
+number (docs/decisions.md, 2026-09-06, "BPC is bits per character of the RAW held-out
+text for every arm").
 
 **The softmax runs over the logical vocabulary, in training and in evaluation alike.** The
 embedding is padded up to a multiple of 64 for kernel shapes (`config.round_up_vocab`), so
@@ -27,7 +38,12 @@ columns to `-inf` before the loss, so the distribution is over the logical vocab
 exactly. Training is masked too: the padded rows are never targets, but without the mask
 they receive gradient through the denominator and the model spends capacity pushing down
 ids it will never be scored on. The cost is that the loss is computed here rather than
-taken from vendored nanoGPT's `forward`, whose own (unmasked) loss is discarded.
+taken from vendored nanoGPT's `forward`. `forward_logits` therefore runs the transformer
+stack and `lm_head` itself and never asks the model for a loss — the vendored `forward`
+with `targets` would compute a full unmasked cross-entropy over every position and then
+throw it away, which at a 64k vocabulary is 10-20% of the step (docs/decisions.md,
+2026-09-06, "Sweep hardening before paid GPU time"). `model.py` stays byte-for-byte
+nanoGPT; the fast path lives here.
 
 **Resume is not a convenience.** A Track 2 run is hours long and this project's numbers must
 survive a laptop lid closing, so the checkpoint holds the optimiser state, the step counter,
@@ -79,6 +95,7 @@ from sanskrit_tok.lm.data import (
     ensure_encoded_corpus,
     eos_id_for,
     iter_batches,
+    measure_text,
     tokenise_text,
 )
 from sanskrit_tok.lm.model import GPT, GPTConfig
@@ -90,6 +107,7 @@ __all__ = [
     "build_model",
     "count_parameters",
     "evaluate_bpc",
+    "forward_logits",
     "learning_rate_at",
     "main",
     "masked_cross_entropy",
@@ -248,6 +266,34 @@ def _vendor_stdout_to_log() -> Iterator[None]:
             logger.info("nanoGPT: %s", line.strip())
 
 
+def forward_logits(model: GPT, idx: torch.Tensor) -> torch.Tensor:
+    """`model`'s logits for every position of `idx`, without computing any loss.
+
+    Exactly vendored nanoGPT's `GPT.forward(idx, targets)` up to and including `lm_head`,
+    minus the `F.cross_entropy` it would then compute over the padded vocabulary and this
+    module would discard (`masked_cross_entropy` computes the one that is used). At 64k
+    that discarded softmax is a `batch x 1024 x 64,064` reduction on every forward, in
+    training and in evaluation alike.
+
+    The `cast`s are because `nn.ModuleDict` is typed as holding bare `Module`s and the
+    vendored file carries no annotations of its own; the attribute names are nanoGPT's.
+    """
+    block_size = int(model.config.block_size)
+    _, t = idx.size()
+    if t > block_size:
+        raise ValueError(f"sequence of length {t} exceeds the block size {block_size}")
+    transformer = model.transformer
+    wte = cast(torch.nn.Embedding, transformer.wte)
+    wpe = cast(torch.nn.Embedding, transformer.wpe)
+    drop = cast(torch.nn.Module, transformer.drop)
+    ln_f = cast(torch.nn.Module, transformer.ln_f)
+    pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
+    x: torch.Tensor = drop(wte(idx) + wpe(pos))
+    for block in cast(torch.nn.ModuleList, transformer.h):
+        x = block(x)
+    return cast(torch.Tensor, model.lm_head(ln_f(x)))
+
+
 def _masked_logits(logits: torch.Tensor, logical_vocab: int) -> torch.Tensor:
     """`logits` with every column at or above `logical_vocab` set to `-inf`, in place.
 
@@ -297,6 +343,7 @@ def evaluate_bpc(
     device: str,
     dtype_name: str,
     max_chars: int | None,
+    raw_text_path: Path | None = None,
 ) -> BpcResult:
     """Bits per character of `model` on the held-out text at `text_path`.
 
@@ -308,12 +355,34 @@ def evaluate_bpc(
     over the text's character and byte counts — see the module docstring for why the EOS
     tokens are charged to those characters.
 
-    The loss is computed here, from `logits`, rather than taken from the model's own
+    `raw_text_path` is the **raw twin** of `text_path` — for a split arm's
+    `heldout_dcs_split.txt`, that is `heldout_dcs.txt` — and its characters are the
+    denominator. It defaults to `text_path`, which is correct for every raw arm because
+    there the two are one file. The twin is measured over exactly as many lines as were
+    scored, so a `max_chars` truncation cuts both sides at the same sentence; the two files
+    are written in lockstep line by line (`build_corpus.py`), and a line-count mismatch is
+    an error rather than a silently rescaled BPC.
+
+    The loss is computed here, from `forward_logits`, rather than taken from the model's own
     `forward`: the distribution has to be over `logical_vocab` ids and not over the padded
     embedding's rows (`masked_cross_entropy`, and the module docstring). `reduction="sum"`
     gives the batch's exact total, so nothing is multiplied back out of a mean.
     """
     tokenised = tokenise_text(arm, text_path, eos_id=eos_id, max_chars=max_chars)
+    raw_path = text_path if raw_text_path is None else raw_text_path
+    if raw_path == text_path:
+        denominator = tokenised.n_chars
+        denominator_bytes = tokenised.n_bytes
+    else:
+        extent = measure_text(raw_path, max_lines=tokenised.n_lines)
+        if extent.n_lines != tokenised.n_lines:
+            raise ValueError(
+                f"{raw_path} has {extent.n_lines} line(s) where {text_path} scored "
+                f"{tokenised.n_lines}: the raw twin and the text scored are not aligned, "
+                "so the BPC denominator would be of different sentences"
+            )
+        denominator = extent.n_chars
+        denominator_bytes = extent.n_bytes
     stream = np.asarray([eos_id, *tokenised.ids], dtype=np.int64)
     n_targets = len(stream) - 1
     n_windows = -(-n_targets // block_size)
@@ -337,8 +406,9 @@ def evaluate_bpc(
         if valid == 0:
             continue
         with _autocast(device, dtype_name):
-            # The model's own loss is discarded: it is a mean over the *padded* vocabulary.
-            logits = model(x, y)[0]
+            # Never `model(x, y)`: its own loss is a mean over the *padded* vocabulary and
+            # computing it to throw it away is 10-20% of the forward at 64k.
+            logits = forward_logits(model, x)
             nats = masked_cross_entropy(logits, y, logical_vocab, reduction="sum")
         total_nats += float(nats.item())
         counted += valid
@@ -351,7 +421,11 @@ def evaluate_bpc(
             "dropped or double-counted a token"
         )
     return bpc_from_total(
-        total_nats, counted, tokenised.n_chars, n_bytes=tokenised.n_bytes
+        total_nats,
+        counted,
+        denominator,
+        n_bytes=denominator_bytes,
+        n_chars_scored=tokenised.n_chars,
     )
 
 
@@ -439,7 +513,7 @@ def train(config: TrainConfig) -> Path:
     default): a checkpoint already at the step budget re-evaluates and rewrites the results
     without taking a step, which is what makes a sweep restartable.
     """
-    device = resolve_device(config.device)
+    device = resolve_device(config.device, allow_cpu=config.allow_cpu)
     dtype_name = resolve_dtype(config.dtype, device)
     total_steps = config.total_steps()
     seed_everything(config.seed)
@@ -519,6 +593,7 @@ def train(config: TrainConfig) -> Path:
                 device=device,
                 dtype_name=dtype_name,
                 max_chars=config.eval_max_chars,
+                raw_text_path=config.eval_raw_sets.get(name),
             )
             for name, path in config.eval_sets.items()
         }
@@ -545,6 +620,20 @@ def train(config: TrainConfig) -> Path:
             "elapsed_s": elapsed,
             "tokens_per_s": tokens_seen / elapsed if elapsed > 0 else 0.0,
             "bpc": {name: result["value"] for name, result in bpc.items()},
+            # The arithmetic behind each of those values, so that a BPC can be re-derived
+            # against a different denominator without re-running the model. `n_chars_scored`
+            # is the text the model predicted and `n_chars_denominator` the raw twin it was
+            # divided by; they differ only for a split arm (`evaluate_bpc`).
+            "bpc_detail": {
+                name: {
+                    "total_nats": result["total_nats"],
+                    "n_tokens": result["n_tokens"],
+                    "n_chars_scored": result["n_chars_scored"],
+                    "n_chars_denominator": result["n_chars_denominator"],
+                    "bpc": result["value"],
+                }
+                for name, result in bpc.items()
+            },
         }
         with curve_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(row) + "\n")
@@ -587,10 +676,10 @@ def train(config: TrainConfig) -> Path:
             x, y = next(batches)
             with _autocast(device, dtype_name):
                 # As in `evaluate_bpc`: the vendored forward's own loss is over the padded
-                # vocabulary, so it is discarded and the masked one is used instead. The
-                # padded rows are never targets, but an unmasked softmax denominator still
-                # sends them gradient, so train and eval have to agree on this.
-                logits = model(x, y)[0]
+                # vocabulary, so it is never computed and the masked one is used instead.
+                # The padded rows are never targets, but an unmasked softmax denominator
+                # still sends them gradient, so train and eval have to agree on this.
+                logits = forward_logits(model, x)
                 loss = masked_cross_entropy(logits, y, logical_vocab) / config.grad_accum
             scaler.scale(loss).backward()  # type: ignore[no-untyped-call]
             accumulated += float(loss.item())
@@ -640,6 +729,10 @@ def train(config: TrainConfig) -> Path:
         "flops_est": 6.0 * params.total * tokens_seen,
         "loss_train_final": last_loss,
         "bpc": {name: dict(result) for name, result in latest_bpc.items()},
+        "bpc_denominator_sets": {
+            name: str(config.eval_raw_sets.get(name, path))
+            for name, path in config.eval_sets.items()
+        },
         "curve_summary": curve_summary,
         "params": params.to_dict(),
         "model": {

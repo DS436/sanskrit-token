@@ -62,6 +62,20 @@ Then, separately and in minutes, the Track 2 training sample:
 `--sample` rebuilds nothing. It subsets the `track2_raw.txt` that is already on disk, using
 the per-source line ranges its manifest records, so the sample inherits every filter above
 unchanged (`build_sample`).
+
+Then, in about a minute, Track 2's own in-domain held-out set:
+
+    uv run python experiments/05_lm_training/build_corpus.py --config \\
+        experiments/05_lm_training/corpus.yaml --sangraha-heldout
+
+`--sangraha-heldout` draws 2,000 Sangraha lines out of `track2_sample.txt`, writes them as
+`heldout_sangraha.txt`, and rewrites the sample without them **and without any line sharing
+a 24-letter shingle with them** — the sample is 93.6% Sangraha, so without this Track 2 has
+no in-domain evaluation at all and every one of its numbers is a transfer number
+(`build_sangraha_heldout`; docs/decisions.md, 2026-09-06). Regenerate
+`data/exclusion_hashes.txt` afterwards, with
+`experiments/02_tpp_parallel/build_exclusion.py`, so the held-out lines are excluded from
+every future training corpus too.
 """
 
 import argparse
@@ -79,6 +93,7 @@ from sanskrit_tok.data.exclusion import (
     EXCLUSION_PATH,
     SHINGLE_K,
     build_evaluation_shingle_index,
+    build_shingle_index,
     letters_only,
     load_exclusion_hashes,
     sentence_hash_slp1,
@@ -151,6 +166,15 @@ TRACK1_RAW = "track1_raw"
 TRACK1_SPLIT = "track1_split"
 TRACK2_RAW = "track2_raw"
 TRACK2_SAMPLE = "track2_sample"
+
+#: The name of Track 2's own in-domain held-out set: `heldout_sangraha.txt`, and the key
+#: `manifest.json`'s `heldout` block files it under.
+SANGRAHA_HELDOUT = "sangraha"
+
+#: How many Sangraha lines `--sangraha-heldout` draws by default, and the seed it draws
+#: them with (docs/decisions.md, 2026-09-06, "Track 2 gets an in-domain held-out set").
+SANGRAHA_HELDOUT_N = 2000
+SANGRAHA_HELDOUT_SEED = 0
 
 MANIFEST_FILENAME = "manifest.json"
 
@@ -915,6 +939,17 @@ def build_sample(config: Mapping[str, Any], *, root: Path | None = None) -> dict
             }
             for source, _, _ in ranges
         },
+        # The sample's own line ranges, for `--sangraha-heldout`: it is written in one
+        # pass over a source-grouped file, so each source's block is its `n_out` lines.
+        "sample_line_ranges": {
+            source: [start, end]
+            for source, start, end in sample_line_ranges(
+                {
+                    source: {"n_out": out_lines[source]}
+                    for source, _, _ in ranges
+                }
+            )
+        },
         **asdict(stats),
         "sources": {
             source: source_provenance(source, config, resolved_root)
@@ -944,6 +979,205 @@ def build_sample(config: Mapping[str, Any], *, root: Path | None = None) -> dict
         arm_name or "n/a",
     )
     return entry
+
+
+def sample_line_ranges(composition: Mapping[str, Mapping[str, Any]]) -> list[tuple[str, int, int]]:
+    """`[(source, start, end)]` over `track2_sample.txt`, from the manifest's composition.
+
+    The sample is written in one streaming pass over `track2_raw.txt`, which is itself
+    grouped by source, so the sample is grouped the same way and each source's block is
+    exactly its `n_out` lines long. JSON preserves the key order the sample was written in,
+    which is `source_line_ranges`' order, so the cumulative sum of `n_out` is the sample's
+    own line ranges. Recorded explicitly rather than re-derived by a caller, because
+    getting this order wrong would hold out the wrong sentences.
+    """
+    ranges: list[tuple[str, int, int]] = []
+    cursor = 0
+    for source, entry in composition.items():
+        count = int(entry["n_out"])
+        ranges.append((str(source), cursor, cursor + count))
+        cursor += count
+    return ranges
+
+
+def build_sangraha_heldout(
+    config: Mapping[str, Any],
+    *,
+    n: int = SANGRAHA_HELDOUT_N,
+    seed: int = SANGRAHA_HELDOUT_SEED,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Hold `n` Sangraha lines out of `track2_sample.txt` and rewrite the sample without them.
+
+    Track 2's training sample is **93.6% Sangraha by bytes**, so evaluating it only on
+    `heldout_dcs` — curated literary Sanskrit — makes every Track 2 number a transfer
+    measurement and leaves the scale track with no in-domain BPC at all. This draws `n`
+    lines uniformly from the sample's Sangraha block (`random.Random(seed)`, so the draw is
+    reproducible), writes them as `heldout_sangraha.txt`, and removes them from the sample
+    (docs/decisions.md, 2026-09-06, "Track 2 gets an in-domain held-out set").
+
+    **Removing the drawn lines is not enough.** Sangraha is OCR of printed books and the
+    same passage is scanned, reprinted and re-uploaded many times, so a line that is a
+    near-duplicate of a held-out one is the same leak. Every remaining sample line is
+    therefore tested against the held-out lines' 24-letter shingle index — the identical
+    rule both leakage layers use everywhere else in this file — and dropped on a hit. The
+    two counts are recorded separately in the manifest.
+
+    Idempotent in the sense that matters: it refuses to run twice, because the second run
+    would draw a *different* 2,000 lines from an already-reduced sample and hold out 4,000
+    in total while the exclusion list named only the last 2,000. Delete
+    `heldout_sangraha.txt` to redraw deliberately.
+
+    The sample is rewritten in place through a temporary file, so an interrupted run leaves
+    the original sample intact rather than a truncated one.
+    """
+    resolved_root = repo_root() if root is None else root
+    out_dir = resolve_path(str(config["out_dir"]), resolved_root)
+    sample_path = out_dir / f"{TRACK2_SAMPLE}.txt"
+    sample_manifest_path = out_dir / f"{TRACK2_SAMPLE}.manifest.json"
+    heldout_path = out_dir / f"heldout_{SANGRAHA_HELDOUT}.txt"
+    if not sample_path.exists() or not sample_manifest_path.exists():
+        raise CorpusError(
+            f"{sample_path} and its manifest must exist before --sangraha-heldout can "
+            "subset them; run the build with --sample first"
+        )
+    if heldout_path.exists():
+        raise CorpusError(
+            f"{heldout_path} already exists, so this sample has already had a Sangraha "
+            "held-out set drawn from it. Drawing again would hold out a second, different "
+            "set while the exclusion list named only one; delete the file to redraw."
+        )
+    sample_manifest = json.loads(sample_manifest_path.read_text(encoding="utf-8"))
+    composition = sample_manifest.get("composition")
+    if not composition:
+        raise CorpusError(f"{sample_manifest_path} has no composition; rebuild the sample")
+    ranges = sample_line_ranges(composition)
+    sampled_sources = frozenset(str(name) for name in sample_manifest.get("sampled_sources") or [])
+    if not sampled_sources:
+        raise CorpusError(
+            f"{sample_manifest_path} names no sampled_sources, so there is no Sangraha "
+            "block to hold lines out of"
+        )
+    pool = [
+        index
+        for source, start, end in ranges
+        if source in sampled_sources
+        for index in range(start, end)
+    ]
+    if len(pool) < n:
+        raise CorpusError(
+            f"asked for {n} held-out Sangraha lines but the sample has only {len(pool)}"
+        )
+    shingle_k = int(config.get("shingle_k", SHINGLE_K))
+    chosen = frozenset(random.Random(seed).sample(pool, n))
+
+    heldout_lines: list[str] = []
+    with sample_path.open(encoding="utf-8") as handle:
+        for index, raw in enumerate(handle):
+            if index in chosen:
+                heldout_lines.append(raw.rstrip("\n"))
+    heldout_stats = write_lines(heldout_path, heldout_lines)
+    index_of_heldout = build_shingle_index(heldout_lines, shingle_k)
+    logger.info(
+        "held out %d Sangraha line(s) -> %s (%d chars, %d shingle(s))",
+        heldout_stats.n_out,
+        heldout_path,
+        heldout_stats.n_chars,
+        len(index_of_heldout),
+    )
+
+    temporary = sample_path.with_suffix(".txt.rewrite")
+    sink = _Sink(temporary)
+    kept_lines: dict[str, int] = {source: 0 for source, _, _ in ranges}
+    kept_bytes: dict[str, int] = dict.fromkeys(kept_lines, 0)
+    n_removed_shingle = 0
+    with sample_path.open(encoding="utf-8") as handle:
+        for index, raw in enumerate(handle):
+            if index in chosen:
+                continue
+            line = raw.rstrip("\n")
+            if matching_eval_sources(line, {SANGRAHA_HELDOUT: index_of_heldout}, shingle_k):
+                n_removed_shingle += 1
+                continue
+            source = _source_at(index, ranges)
+            sink.write(line)
+            kept_lines[source] += 1
+            kept_bytes[source] += len(line.encode("utf-8"))
+    stats = sink.close()
+    temporary.replace(sample_path)
+    logger.info(
+        "%s rewritten: %d line(s), %d bytes (removed %d held out, %d by shingle)",
+        sample_path,
+        stats.n_out,
+        stats.n_bytes,
+        len(chosen),
+        n_removed_shingle,
+    )
+
+    record: dict[str, Any] = {
+        "n_requested": n,
+        "seed": seed,
+        "shingle_k": shingle_k,
+        "path": str(heldout_path),
+        "n_heldout": heldout_stats.n_out,
+        "n_heldout_chars": heldout_stats.n_chars,
+        "n_heldout_bytes": heldout_stats.n_bytes,
+        "heldout_sha256": heldout_stats.sha256,
+        "n_removed_selected": len(chosen),
+        "n_removed_shingle": n_removed_shingle,
+        "n_out_before": int(sample_manifest["n_out"]),
+        "n_bytes_before": int(sample_manifest["n_bytes"]),
+        **provenance(resolved_root),
+    }
+    for source in kept_lines:
+        composition[source] = {
+            **composition[source],
+            "n_out": kept_lines[source],
+            "n_bytes": kept_bytes[source],
+        }
+    sample_manifest["composition"] = composition
+    sample_manifest["sample_line_ranges"] = {
+        source: [start, end] for source, start, end in sample_line_ranges(composition)
+    }
+    sample_manifest.update(asdict(stats))
+    sample_manifest["sangraha_heldout"] = record
+    arm_name = config.get("token_count_arm")
+    if arm_name:
+        sample_manifest["token_count_arm"] = str(arm_name)
+        sample_manifest["n_tokens"] = count_tokens(
+            sample_path, load_tokenizer(str(arm_name)).encode
+        )
+        sample_manifest["bytes_per_token"] = (
+            stats.n_bytes / sample_manifest["n_tokens"] if sample_manifest["n_tokens"] else None
+        )
+    sample_manifest.update(provenance(resolved_root))
+    sample_manifest_path.write_text(
+        json.dumps(sanitize_json(sample_manifest), ensure_ascii=False, indent=2, allow_nan=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manifest_path = out_dir / MANIFEST_FILENAME
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest.setdefault("heldout", {})[SANGRAHA_HELDOUT] = {
+            "path": str(heldout_path),
+            **asdict(heldout_stats),
+        }
+        manifest["sangraha_heldout"] = record
+        manifest_path.write_text(
+            json.dumps(sanitize_json(manifest), ensure_ascii=False, indent=2, allow_nan=False)
+            + "\n",
+            encoding="utf-8",
+        )
+        logger.info("recorded the Sangraha held-out set in %s", manifest_path)
+    else:  # pragma: no cover - the manifest is written by every full build
+        logger.warning(
+            "%s does not exist; heldout_sangraha written but not recorded", manifest_path
+        )
+    record["sample"] = asdict(stats)
+    record["n_tokens"] = sample_manifest.get("n_tokens")
+    return record
 
 
 # ----------------------------------------------------------------------------- build
@@ -988,10 +1222,20 @@ def build(
         heldout_texts = (
             normalise_line(str(record[raw_field])) for record in iter_jsonl(heldout_jsonl)
         )
+        extra: dict[str, Iterable[str]] = {"dcs_heldout": heldout_texts}
+        # Track 2's own held-out set, once it has been drawn. It lives in a text file
+        # rather than a loader, and a rebuild that predates it simply has one index fewer.
+        sangraha_heldout_path = out_dir / f"heldout_{SANGRAHA_HELDOUT}.txt"
+        if sangraha_heldout_path.exists():
+            extra["sangraha_heldout"] = [
+                line
+                for line in sangraha_heldout_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
         shingle_indices = build_evaluation_shingle_index(
             resolve_path(str(config["flores_devtest_jsonl"]), resolved_root),
             shingle_k,
-            extra_sources={"dcs_heldout": heldout_texts},
+            extra_sources=extra,
         )
     logger.info(
         "shingle index over %d source(s): %s",
@@ -1149,6 +1393,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--sangraha-heldout",
+        type=int,
+        nargs="?",
+        const=SANGRAHA_HELDOUT_N,
+        default=None,
+        metavar="N",
+        help=(
+            f"do not rebuild: draw N Sangraha lines (default {SANGRAHA_HELDOUT_N}) out of "
+            "the existing track2_sample.txt as heldout_sangraha.txt, remove them and every "
+            "24-letter-shingle near-duplicate of them from the sample, and rewrite the "
+            "sample and its manifest"
+        ),
+    )
+    parser.add_argument(
+        "--sangraha-heldout-seed",
+        type=int,
+        default=SANGRAHA_HELDOUT_SEED,
+        help=f"seed for the --sangraha-heldout draw (default {SANGRAHA_HELDOUT_SEED})",
+    )
+    parser.add_argument(
         "--heldout-only",
         action="store_true",
         help=(
@@ -1157,10 +1421,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    if args.sample and args.heldout_only:
-        parser.error("--sample and --heldout-only do different things; pass one of them")
+    modes = [
+        name
+        for name, chosen in (
+            ("--sample", args.sample),
+            ("--heldout-only", args.heldout_only),
+            ("--sangraha-heldout", args.sangraha_heldout is not None),
+        )
+        if chosen
+    ]
+    if len(modes) > 1:
+        parser.error(f"{' and '.join(modes)} do different things; pass one of them")
 
     config = load_config(args.config)
+    if args.sangraha_heldout is not None:
+        record = build_sangraha_heldout(
+            config, n=args.sangraha_heldout, seed=args.sangraha_heldout_seed
+        )
+        logger.info(
+            "heldout_sangraha: %d line(s), %d chars; sample %d -> %d lines "
+            "(%d held out, %d shingle near-duplicates), %d bytes, %s tokens",
+            record["n_heldout"],
+            record["n_heldout_chars"],
+            record["n_out_before"],
+            record["sample"]["n_out"],
+            record["n_removed_selected"],
+            record["n_removed_shingle"],
+            record["sample"]["n_bytes"],
+            record.get("n_tokens", "n/a"),
+        )
+        logger.info(
+            "now regenerate the exclusion list: "
+            "uv run python experiments/02_tpp_parallel/build_exclusion.py"
+        )
+        return 0
     if args.heldout_only:
         entry = build_heldout(config)
         logger.info(

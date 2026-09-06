@@ -44,6 +44,7 @@ from sanskrit_tok.tokenizers.registry import LoadedTokenizer
 __all__ = [
     "CHUNK_LINES",
     "EncodedCorpus",
+    "TextExtent",
     "TokenisedText",
     "arm_fingerprint",
     "dtype_for",
@@ -52,6 +53,7 @@ __all__ = [
     "eos_id_for",
     "iter_batches",
     "load_encoded_corpus",
+    "measure_text",
     "meta_path_for",
     "open_tokens",
     "tokenise_text",
@@ -143,6 +145,39 @@ class TokenisedText:
     n_chars: int
     n_bytes: int
     n_lines: int
+
+
+@dataclass(frozen=True)
+class TextExtent:
+    """How much text a file holds, counted the way a BPC denominator counts it.
+
+    The same convention as `TokenisedText` and `encode_corpus`: blank lines are skipped and
+    the line terminators are excluded, so `n_chars` here and `n_chars` there describe the
+    same quantity of the same lines. `max_lines` exists because an evaluation may be capped
+    (`TrainConfig.eval_max_chars`), and the denominator then has to be the *raw twin's*
+    count over exactly the lines that were scored, not over the whole file.
+    """
+
+    n_chars: int
+    n_bytes: int
+    n_lines: int
+
+
+def measure_text(path: Path, *, max_lines: int | None = None) -> TextExtent:
+    """The character, byte and line counts of `path`'s first `max_lines` non-blank lines.
+
+    `max_lines=None` measures the whole file. Used for the raw twin of a split evaluation
+    set, whose character count is the BPC denominator every arm shares
+    (docs/decisions.md, 2026-09-06, "BPC is bits per character of the RAW held-out text").
+    """
+    n_chars = n_bytes = n_lines = 0
+    for line in _iter_lines(path):
+        if max_lines is not None and n_lines >= max_lines:
+            break
+        n_chars += len(line)
+        n_bytes += len(line.encode("utf-8"))
+        n_lines += 1
+    return TextExtent(n_chars=n_chars, n_bytes=n_bytes, n_lines=n_lines)
 
 
 def eos_id_for(arm: LoadedTokenizer) -> int:

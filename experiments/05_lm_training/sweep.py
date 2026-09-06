@@ -30,9 +30,18 @@ per byte and is not what is used.
 
 **`T4_bpe_split_64k_oracle_dcs` and `T6_morphbpe_split_64k_dcs` are evaluated on the
 `_split` twin of every held-out set** — the same sentences, split the same way the training
-text was. Bits-per-character denominators therefore differ slightly between raw and split
-arms (the split text has more characters: the inserted spaces), which the aggregation
-records per set per arm rather than hiding.
+text was — **and scored against the RAW twin's character count**. The split text carries
+2.1-6.3% more characters (the inserted spaces), so dividing by it would hand the split arms
+a discount the size of the effect being measured; every arm's bits-per-character therefore
+has the same denominator per evaluation set. `_eval_sets_for` returns both paths and the
+run config carries both (docs/decisions.md, 2026-09-06, "BPC is bits per character of the
+RAW held-out text for every arm").
+
+**The device is resolved and checked before anything is encoded.** `run_sweep` logs the
+device and dtype it will use and lets `resolve_device` raise when the requested device is
+absent, or when `auto` would land on the CPU without `allow_cpu: true` — a 51-run sweep
+should stop in the first second on a box whose GPU did not come up, not encode 755 MB and
+then take three weeks.
 
 Checkpoints are deleted once a run's `results.json` is final (`keep_checkpoints: true`
 keeps them): the sweep is 51 runs and a 125M checkpoint is ~1.5 GB, while nothing
@@ -48,12 +57,18 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import Any
 
 from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path
-from sanskrit_tok.lm.config import MODEL_SIZES, TrainConfig
-from sanskrit_tok.lm.data import ensure_encoded_corpus, eos_id_for, load_encoded_corpus
+from sanskrit_tok.lm.config import MODEL_SIZES, TrainConfig, resolve_device, resolve_dtype
+from sanskrit_tok.lm.data import (
+    arm_fingerprint,
+    ensure_encoded_corpus,
+    eos_id_for,
+    load_encoded_corpus,
+)
 from sanskrit_tok.lm.train import build_model, count_parameters, train
 from sanskrit_tok.tokenizers.registry import LoadedTokenizer, load_tokenizer
 
@@ -67,6 +82,11 @@ DEFAULT_EVAL_DIR = "data/processed/lm"
 
 #: The suffix that turns a held-out set (or a Track 1 corpus) into its sandhi-split twin.
 SPLIT_SUFFIX = "_split"
+
+#: The groups a config's `eval_sets` may name, and the label each gives its sets. Order is
+#: the order the sets are evaluated and reported in: the in-domain set first, then the
+#: same-language-different-register transfer sets, then the parallel out-of-domain ones.
+EVAL_SET_LABELS = ("in_domain", "transfer", "ood")
 
 #: `TrainConfig` fields a sweep config may set per size or per track. Everything else about
 #: a run — its arm, corpus, evaluation sets, seed and token budget — the sweep derives, so
@@ -93,12 +113,13 @@ SETTING_KEYS = frozenset(
         "eval_max_chars",
         "log_every",
         "resume",
+        "allow_cpu",
     }
 )
 
 #: Settings a config may also give once at the top level, next to `seeds`, because they
 #: describe the machine rather than the experiment.
-GLOBAL_SETTING_KEYS = ("device", "dtype")
+GLOBAL_SETTING_KEYS = ("device", "dtype", "allow_cpu")
 
 #: One line in every `stride` is tokenised when a corpus has no cached encoding and a
 #: dry run needs its bytes-per-token. 1 in 1,000 of Track 2 is ~9,900 lines: seconds to
@@ -120,6 +141,16 @@ def is_split_arm(name: str) -> bool:
     `rawseg` and `raw` cannot be caught by a substring.
     """
     return "_split_" in f"_{name}_"
+
+
+@cache
+def tokenizer_digest(arm: str) -> str | None:
+    """The sha256 of `arm`'s tokenizer file, or `None` when the arm has no file.
+
+    Cached: `plan_hash` is called once per run and the sweep has 51 of them over seven
+    arms, and hashing a 2 MB tokenizer file 51 times is pure waste.
+    """
+    return arm_fingerprint(load_tokenizer(arm))[2]
 
 
 def corpus_bytes(path: Path) -> int:
@@ -210,6 +241,8 @@ class RunSpec:
     corpus: Path
     corpus_n_bytes: int
     eval_sets: dict[str, Path]
+    eval_raw_sets: dict[str, Path]
+    eval_labels: dict[str, str]
     in_domain_set: str
     settings: dict[str, Any]
     out_dir: Path
@@ -241,6 +274,9 @@ class RunSpec:
             "out_dir": str(self.out_dir),
             "cache_dir": str(self.cache_dir),
             "eval_sets": {name: str(path) for name, path in self.eval_sets.items()},
+            "eval_raw_sets": {
+                name: str(path) for name, path in self.eval_raw_sets.items()
+            },
             "seed": self.seed,
             **self.settings,
         }
@@ -251,19 +287,30 @@ class RunSpec:
     def plan_hash(self) -> str:
         """A digest of everything about this run that is fixed before encoding.
 
-        Covers the arm, the text, the evaluation sets, every hyperparameter and the byte
-        budget, plus the corpus's own size so that a rebuilt corpus invalidates a finished
-        run. The token budget is *not* in it — it is derived from this budget and the
-        arm's encoding, both of which are recorded in `sweep_run.json` beside the results.
+        Covers the arm, the text, the evaluation sets and their raw twins, every
+        hyperparameter and the byte budget, plus the corpus's own size so that a rebuilt
+        corpus invalidates a finished run. The token budget is *not* in it — it is derived
+        from this budget and the arm's encoding, both of which are recorded in
+        `sweep_run.json` beside the results.
+
+        **The tokenizer's own sha256 is in it too.** An arm name is not its contents: a
+        retrained `T1_bpe_raw_64k_dcs` is a different vocabulary under the same key, and
+        without its digest a resumed sweep would skip every run of it and report numbers
+        from the old one. `arm_fingerprint` returns `None` for an arm with no file behind
+        it (`T7_byt5`, a HuggingFace id), which is recorded as `null` rather than omitted.
         """
         payload = {
             "track": self.track,
             "size": self.size,
             "arm": self.arm,
+            "tokenizer_sha256": tokenizer_digest(self.arm),
             "seed": self.seed,
             "corpus": str(self.corpus),
             "corpus_n_bytes": self.corpus_n_bytes,
             "eval_sets": {name: str(path) for name, path in sorted(self.eval_sets.items())},
+            "eval_raw_sets": {
+                name: str(path) for name, path in sorted(self.eval_raw_sets.items())
+            },
             "settings": {key: self.settings[key] for key in sorted(self.settings)},
             "max_bytes": self.max_bytes,
         }
@@ -300,18 +347,60 @@ def _eval_sets_for(
     track_config: Mapping[str, Any],
     arm: str,
     root: Path,
-) -> tuple[dict[str, Path], str]:
-    """`({name: path}, in_domain_name)` for `arm`, `_split` twins for a split arm."""
+) -> tuple[dict[str, Path], dict[str, Path], dict[str, str], str]:
+    """`(sets, raw twins, labels, in_domain_name)` — `_split` twins for a split arm.
+
+    The second mapping is keyed by the *same* names as the first and always points at the
+    **raw** file: `heldout_dcs_split` -> `heldout_dcs.txt` for a split arm, and a set's own
+    path for a raw one. Its character count is the BPC denominator every arm on that set
+    shares (`lm/train.evaluate_bpc`).
+
+    The third return value labels each set `in_domain`, `transfer` or `ood`, from the
+    config's own grouping. Track 2 uses all three: `heldout_sangraha` is in-domain (the
+    sample is 93.6% Sangraha), `heldout_dcs` is **transfer** there rather than in-domain —
+    the DCS sentences it holds out are curated literary Sanskrit and the corpus is OCR'd
+    web and book text — and the parallel sets are out-of-domain (docs/decisions.md,
+    2026-09-06, "Track 2 gets an in-domain held-out set").
+
+    `in_domain` may name one set or a list; the first is the one the reference crossing is
+    measured on.
+    """
     spec = dict(track_config.get("eval_sets") or config.get("eval_sets") or {})
     if "in_domain" not in spec:
         raise ValueError("config's eval_sets needs an 'in_domain' entry")
+    unknown = sorted(set(spec) - set(EVAL_SET_LABELS))
+    if unknown:
+        raise ValueError(
+            f"unknown eval_sets group(s): {', '.join(unknown)}; allowed: "
+            f"{', '.join(EVAL_SET_LABELS)}"
+        )
     eval_dir = resolve_path(
         str(track_config.get("eval_dir") or config.get("eval_dir") or DEFAULT_EVAL_DIR), root
     )
     suffix = SPLIT_SUFFIX if is_split_arm(arm) else ""
-    names = [str(spec["in_domain"]), *(str(name) for name in spec.get("ood") or [])]
+    grouped: dict[str, list[str]] = {}
+    for label in EVAL_SET_LABELS:
+        value = spec.get(label)
+        if value is None:
+            grouped[label] = []
+        elif isinstance(value, list):
+            grouped[label] = [str(name) for name in value]
+        else:
+            grouped[label] = [str(value)]
+    if not grouped["in_domain"]:
+        raise ValueError("config's eval_sets 'in_domain' is empty")
+    names = [name for label in EVAL_SET_LABELS for name in grouped[label]]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"eval_sets names {duplicates} under more than one label")
     sets = {f"{name}{suffix}": eval_dir / f"{name}{suffix}.txt" for name in names}
-    return sets, f"{spec['in_domain']}{suffix}"
+    raw_sets = {f"{name}{suffix}": eval_dir / f"{name}.txt" for name in names}
+    labels = {
+        f"{name}{suffix}": label
+        for label in EVAL_SET_LABELS
+        for name in grouped[label]
+    }
+    return sets, raw_sets, labels, f"{grouped['in_domain'][0]}{suffix}"
 
 
 def enumerate_runs(config: Mapping[str, Any], root: Path | None = None) -> list[RunSpec]:
@@ -358,7 +447,9 @@ def enumerate_runs(config: Mapping[str, Any], root: Path | None = None) -> list[
                     )
                 corpus = corpus_split if is_split_arm(arm) else corpus_raw
                 assert corpus is not None
-                eval_sets, in_domain = _eval_sets_for(config, track_config, arm, where)
+                eval_sets, eval_raw_sets, eval_labels, in_domain = _eval_sets_for(
+                    config, track_config, arm, where
+                )
                 for seed in seeds:
                     specs.append(
                         RunSpec(
@@ -369,6 +460,8 @@ def enumerate_runs(config: Mapping[str, Any], root: Path | None = None) -> list[
                             corpus=corpus,
                             corpus_n_bytes=split_bytes if is_split_arm(arm) else raw_bytes,
                             eval_sets=eval_sets,
+                            eval_raw_sets=eval_raw_sets,
+                            eval_labels=eval_labels,
                             in_domain_set=in_domain,
                             settings=dict(settings),
                             out_dir=out_dir,
@@ -625,6 +718,10 @@ def run_one(spec: RunSpec, *, keep_checkpoints: bool) -> Path:
                 "corpus": str(spec.corpus),
                 "corpus_n_bytes": spec.corpus_n_bytes,
                 "in_domain_set": spec.in_domain_set,
+                "eval_labels": dict(spec.eval_labels),
+                "eval_raw_sets": {
+                    name: str(path) for name, path in spec.eval_raw_sets.items()
+                },
                 "is_split_arm": spec.is_split,
                 "max_bytes": spec.max_bytes,
                 "bytes_per_token": bytes_per_token,
@@ -641,10 +738,27 @@ def run_one(spec: RunSpec, *, keep_checkpoints: bool) -> Path:
     return results_path
 
 
+def resolve_sweep_device(config: Mapping[str, Any]) -> tuple[str, str]:
+    """The `(device, dtype)` every run of `config` will use, or a `RuntimeError`.
+
+    Called before anything is encoded or trained. `resolve_device` raises when the named
+    device is unavailable, and when `auto` would land on the CPU without `allow_cpu: true`;
+    the smoke sweep sets that flag and the real sweep deliberately does not, so a GPU box
+    whose driver did not come up fails in the first second rather than after encoding a
+    755 MB corpus (docs/decisions.md, 2026-09-06, "Sweep hardening before paid GPU time").
+    """
+    device = resolve_device(
+        str(config.get("device", "auto")), allow_cpu=bool(config.get("allow_cpu", False))
+    )
+    return device, resolve_dtype(str(config.get("dtype", "auto")), device)
+
+
 def run_sweep(
     config: Mapping[str, Any], config_src: Path | None = None, root: Path | None = None
 ) -> list[Path]:
     """Run every pending run of `config` in order; returns the results paths written."""
+    device, dtype = resolve_sweep_device(config)
+    logger.info("device %s, dtype %s (allow_cpu=%s)", device, dtype, config.get("allow_cpu", False))
     specs = enumerate_runs(config, root)
     pending = pending_runs(specs)
     out_dir = resolve_path(str(config["output_dir"]), repo_root() if root is None else root)

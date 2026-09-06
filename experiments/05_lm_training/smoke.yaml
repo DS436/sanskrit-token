@@ -24,6 +24,9 @@ seeds: [0]
 
 device: auto
 dtype: auto
+# A CPU smoke run is still a valid pipeline test, so `auto` may fall through to it here.
+# sweep.yaml deliberately does not set this (`lm/config.resolve_device`).
+allow_cpu: true
 keep_checkpoints: false
 
 # Two sets, not five: the point is that evaluation runs, not what it says.

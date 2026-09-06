@@ -27,13 +27,23 @@ appears in the Sanskrit list only.
 They are read from `data/processed/dcs/heldout.jsonl`, which
 `experiments/04_morph_constrained/ingest_dcs.py` writes and which is gitignored.
 
+**The Sangraha held-out split.** Experiment 05's Track 2 trains on a corpus that is 93.6%
+Sangraha, so it holds 2,000 Sangraha lines out of its own training sample as an in-domain
+evaluation set (`experiments/05_lm_training/build_corpus.py --sangraha-heldout`;
+docs/decisions.md, 2026-09-06, "Track 2 gets an in-domain held-out set"). Those lines are
+evaluation text from the moment they are drawn, so they belong in the Sanskrit list on the
+same footing as the DCS split: already SLP1, hashed with `sentence_hash_slp1`, monolingual
+and therefore absent from the English list. They are read from
+`data/processed/lm/heldout_sangraha.txt`, which is gitignored.
+
 **Two guards, because a leakage list must never weaken silently.**
 
 * If `heldout.jsonl` is absent (a fresh clone that has not run the ingestion) this script
   **fails**. Regenerating the list without DCS would drop 30k hashes from the committed
   file, and the committed file is the authority every training script asserts against.
   `--allow-missing-dcs` writes the list without that source, for someone who genuinely
-  wants a DCS-free list and has said so.
+  wants a DCS-free list and has said so. `heldout_sangraha.txt` is guarded the same way,
+  by `--allow-missing-sangraha`.
 * Whatever the sources, the list about to be written must be a **superset** of the one
   already on disk. Any hash the committed file holds and the new one does not means an
   evaluation sentence has stopped being excluded — a corpus loader that silently returned
@@ -85,12 +95,18 @@ SOURCE_ORDER = (
     "itihasa_test",
 )
 
-#: The Sanskrit list carries one more source, appended after `itihasa_test`: the DCS
-#: held-out split. Monolingual, so it has no English counterpart.
+#: The Sanskrit list carries two more sources, appended after `itihasa_test`: the DCS
+#: held-out split and the Sangraha one. Both monolingual, so neither has an English
+#: counterpart.
 DCS_HELDOUT_SOURCE = "dcs_heldout"
+SANGRAHA_HELDOUT_SOURCE = "sangraha_heldout"
 
 #: Written by `experiments/04_morph_constrained/ingest_dcs.py`; gitignored.
 DCS_HELDOUT_PATH = REPO_ROOT / "data" / "processed" / "dcs" / "heldout.jsonl"
+
+#: Written by `experiments/05_lm_training/build_corpus.py --sangraha-heldout`; gitignored.
+#: One SLP1 sentence per line, already normalised — it was drawn out of a built corpus.
+SANGRAHA_HELDOUT_PATH = REPO_ROOT / "data" / "processed" / "lm" / "heldout_sangraha.txt"
 
 SANSKRIT_LANGUAGE = "san_Deva"
 ENGLISH_LANGUAGE = "eng_Latn"
@@ -98,6 +114,10 @@ ENGLISH_LANGUAGE = "eng_Latn"
 
 class MissingDcsHeldoutError(RuntimeError):
     """`heldout.jsonl` is absent, so the list would be written without its DCS hashes."""
+
+
+class MissingSangrahaHeldoutError(RuntimeError):
+    """`heldout_sangraha.txt` is absent, so the list would lose its Sangraha hashes."""
 
 
 class ExclusionShrinkError(RuntimeError):
@@ -131,6 +151,32 @@ def load_dcs_heldout(
         return []
     with path.open(encoding="utf-8") as handle:
         return [json.loads(line)["text_slp1"] for line in handle if line.strip()]
+
+
+def load_sangraha_heldout(
+    path: Path = SANGRAHA_HELDOUT_PATH, *, allow_missing: bool = False
+) -> list[str]:
+    """The SLP1 text of every held-out Sangraha line, one per line of `path`.
+
+    Raises `MissingSangrahaHeldoutError` when `path` does not exist, for the same reason
+    `load_dcs_heldout` does: regenerating the list without it silently drops 2,000
+    evaluation hashes, and the committed list is the authority every training script
+    asserts against. `--allow-missing-sangraha` returns `[]` with a warning instead.
+    """
+    if not path.exists():
+        message = (
+            f"{path} not found, so the Sanskrit exclusion list would be written WITHOUT the "
+            "Sangraha held-out hashes. Run experiments/05_lm_training/build_corpus.py "
+            "--sangraha-heldout first, or keep the committed data/exclusion_hashes.txt, or "
+            "pass --allow-missing-sangraha if you really want a Sangraha-free list."
+        )
+        if not allow_missing:
+            raise MissingSangrahaHeldoutError(message)
+        logger.warning("--allow-missing-sangraha: %s", message)
+        return []
+    return [
+        line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
 
 
 def assert_superset_of_committed(
@@ -206,6 +252,12 @@ def main() -> None:
         "data/processed/dcs/heldout.jsonl is absent (default: fail)",
     )
     parser.add_argument(
+        "--allow-missing-sangraha",
+        action="store_true",
+        help="write the Sanskrit list without the Sangraha held-out hashes when "
+        "data/processed/lm/heldout_sangraha.txt is absent (default: fail)",
+    )
+    parser.add_argument(
         "--allow-shrink",
         action="store_true",
         help="write a list even if it drops hashes the committed one holds (default: fail)",
@@ -214,6 +266,7 @@ def main() -> None:
 
     corpora = load_corpora()
     dcs_heldout = load_dcs_heldout(allow_missing=args.allow_missing_dcs)
+    sangraha_heldout = load_sangraha_heldout(allow_missing=args.allow_missing_sangraha)
 
     for language, path, hash_fn in (
         (SANSKRIT_LANGUAGE, REPO_ROOT / EXCLUSION_PATH, sentence_hash),
@@ -224,6 +277,9 @@ def main() -> None:
         if language == SANSKRIT_LANGUAGE and dcs_heldout:
             sources[DCS_HELDOUT_SOURCE] = dcs_heldout
             hash_fns[DCS_HELDOUT_SOURCE] = sentence_hash_slp1
+        if language == SANSKRIT_LANGUAGE and sangraha_heldout:
+            sources[SANGRAHA_HELDOUT_SOURCE] = sangraha_heldout
+            hash_fns[SANGRAHA_HELDOUT_SOURCE] = sentence_hash_slp1
         count = write_list(
             sources, path, hash_fn=hash_fn, hash_fns=hash_fns, allow_shrink=args.allow_shrink
         )

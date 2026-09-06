@@ -847,3 +847,113 @@ def test_heldout_text_keeps_a_line_whose_only_defect_was_its_typesetting(
 
     lines = _read_lines(tmp_path / "lm" / "heldout_dcs.txt")
     assert lines[-1] == '"vAyuH vahati" - iti...'
+
+
+# ------------------------------------------------ Track 2's own in-domain held-out set
+
+
+def _sampled_case(corpus_case: dict[str, Any], n_documents: int = 60) -> dict[str, Any]:
+    """Build the tiny corpora and take a full-budget Track 2 sample of them."""
+    tmp_path = _sample_case(corpus_case, n_documents)["tmp_path"]
+    config = dict(corpus_case["config"])
+    build_corpus.build(config, root=tmp_path, shingle_indices={})
+    config["track2_sample_bytes"] = 10_000_000  # far above the corpus: keep everything
+    config["track2_sample_sampled_sources"] = ["sangraha_verified_san"]
+    config["track2_sample_seed"] = 0
+    build_corpus.build_sample(config, root=tmp_path)
+    return {"tmp_path": tmp_path, "config": config}
+
+
+def test_sample_line_ranges_are_the_cumulative_composition() -> None:
+    ranges = build_corpus.sample_line_ranges(
+        {"a": {"n_out": 3}, "b": {"n_out": 0}, "c": {"n_out": 2}}
+    )
+    assert ranges == [("a", 0, 3), ("b", 3, 3), ("c", 3, 5)]
+
+
+def test_sangraha_heldout_leaves_the_sample_without_its_lines_or_their_near_duplicates(
+    corpus_case: dict[str, Any],
+) -> None:
+    """The drawn lines go, and so does anything sharing a 24-letter shingle with them.
+
+    Track 2's sample is 93.6% Sangraha in production, so without this the scale track has
+    no in-domain evaluation at all (docs/decisions.md, 2026-09-06).
+    """
+    case = _sampled_case(corpus_case)
+    tmp_path, config = case["tmp_path"], case["config"]
+    sample_path = tmp_path / "lm" / "track2_sample.txt"
+    before = _read_lines(sample_path)
+
+    record = build_corpus.build_sangraha_heldout(config, n=5, seed=0, root=tmp_path)
+
+    heldout = _read_lines(tmp_path / "lm" / "heldout_sangraha.txt")
+    after = _read_lines(sample_path)
+    assert len(heldout) == 5 == record["n_heldout"]
+    assert set(heldout) <= set(before)
+    # Nothing held out is still in the sample, by line or by shingle.
+    assert not set(heldout) & set(after)
+    index = build_shingle_index(heldout, build_corpus.SHINGLE_K)
+    for line in after:
+        assert not has_shingle_overlap(line, index, build_corpus.SHINGLE_K)
+    assert len(after) == len(before) - record["n_removed_selected"] - record["n_removed_shingle"]
+
+    # The sample's manifest describes the file that is now on disk.
+    manifest = json.loads((tmp_path / "lm" / "track2_sample.manifest.json").read_text("utf-8"))
+    assert manifest["n_out"] == len(after)
+    assert manifest["n_bytes"] == sum(len(line.encode("utf-8")) for line in after)
+    assert manifest["sangraha_heldout"]["seed"] == 0
+    assert manifest["sangraha_heldout"]["n_removed_selected"] == 5
+    assert sum(entry["n_out"] for entry in manifest["composition"].values()) == len(after)
+
+    # ... and so does the top-level one, under the key the sweep reads.
+    top = json.loads((tmp_path / "lm" / "manifest.json").read_text("utf-8"))
+    assert top["heldout"]["sangraha"]["n_out"] == 5
+    assert top["heldout"]["sangraha"]["path"].endswith("heldout_sangraha.txt")
+
+
+def test_sangraha_heldout_refuses_to_draw_a_second_time(
+    corpus_case: dict[str, Any],
+) -> None:
+    """Two draws would hold out two sets while the exclusion list named only one."""
+    case = _sampled_case(corpus_case)
+    build_corpus.build_sangraha_heldout(case["config"], n=3, seed=0, root=case["tmp_path"])
+    with pytest.raises(build_corpus.CorpusError, match="already exists"):
+        build_corpus.build_sangraha_heldout(case["config"], n=3, seed=0, root=case["tmp_path"])
+
+
+def test_sangraha_heldout_needs_a_sample_and_enough_sangraha_lines(
+    corpus_case: dict[str, Any],
+) -> None:
+    tmp_path = corpus_case["tmp_path"]
+    with pytest.raises(build_corpus.CorpusError, match="run the build with --sample"):
+        build_corpus.build_sangraha_heldout(corpus_case["config"], n=1, root=tmp_path)
+    case = _sampled_case(corpus_case)
+    with pytest.raises(build_corpus.CorpusError, match="only"):
+        build_corpus.build_sangraha_heldout(
+            case["config"], n=10_000, root=case["tmp_path"]
+        )
+
+
+def test_a_later_corpus_build_filters_against_the_sangraha_held_out_lines(
+    corpus_case: dict[str, Any],
+) -> None:
+    """Once drawn, the held-out lines are an evaluation source like any other."""
+    case = _sampled_case(corpus_case)
+    build_corpus.build_sangraha_heldout(case["config"], n=5, seed=0, root=case["tmp_path"])
+    heldout_path = case["tmp_path"] / "lm" / "heldout_sangraha.txt"
+    assert heldout_path.exists()
+    # `build` picks the file up as an extra shingle source when it builds its own index.
+    captured: dict[str, Any] = {}
+
+    def _capture(flores_path: Path, k: int, *, extra_sources: Any = None) -> dict[str, Any]:
+        captured["extra"] = dict(extra_sources or {})
+        return {}
+
+    original = build_corpus.build_evaluation_shingle_index
+    build_corpus.build_evaluation_shingle_index = _capture  # type: ignore[assignment]
+    try:
+        build_corpus.build(case["config"], root=case["tmp_path"])
+    finally:
+        build_corpus.build_evaluation_shingle_index = original  # type: ignore[assignment]
+    assert "sangraha_heldout" in captured["extra"]
+    assert len(list(captured["extra"]["sangraha_heldout"])) == 5

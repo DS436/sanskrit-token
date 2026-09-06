@@ -9,7 +9,7 @@ the vocabulary from the denominator entirely: every arm is scored on the same te
 the same way, and the number is directly comparable (docs/decisions.md, 2026-09-05,
 "Experiment 05 model, evaluation and comparison protocol").
 
-Two conventions this module fixes, because they are the kind of thing that silently differs
+Three conventions this module fixes, because they are the kind of thing that silently differs
 between two implementations of "BPC" and makes two numbers incomparable:
 
 1. **The total is in nats and the result is in bits.** Cross-entropy from
@@ -21,6 +21,14 @@ between two implementations of "BPC" and makes two numbers incomparable:
    same small constant — one token per line, on the same lines — so it cancels in every
    comparison the experiment actually makes, and the alternative (dropping the EOS nats)
    would let an arm win by being bad at predicting where a sentence ends.
+3. **The denominator is the characters of the RAW held-out text, for every arm.** A split
+   arm predicts the sandhi-split twin of a held-out set, which has 2.1-6.3% more characters
+   than the raw text because undoing sandhi inserts spaces. Dividing its summed nats by the
+   *split* character count would hand it a mechanical discount the size of the effect the
+   experiment is trying to measure, so `n_chars` is always the raw twin's count and
+   `n_chars_scored` records the characters the model actually predicted (docs/decisions.md,
+   2026-09-06, "BPC is bits per character of the RAW held-out text for every arm"). For a
+   raw arm the two are equal, because raw and split twin are the same file.
 
 Pure arithmetic only: nothing here imports `torch` or touches a file. The evaluator that
 runs a model over held-out text and produces the token NLLs lives in `train.py`.
@@ -49,6 +57,12 @@ class BpcResult(MetricResult, total=False):
     `value` is bits per character, `n` the character count it was divided by, and `unit`
     is always `"bits/char"`.
 
+    `n_chars_denominator` is that same denominator named for what it is — the RAW held-out
+    text's characters — and `n_chars_scored` is the number of characters the model was
+    actually asked to predict. They differ only for a split arm, whose scored text is the
+    sandhi-split twin; keeping both means the split arm's ~6% longer text is visible in the
+    record instead of silently absorbed into its BPC (module docstring, convention 3).
+
     `total_nats` is the summed negative log-likelihood the value came from and `n_tokens`
     how many token predictions went into that sum; both are recorded because they are what
     lets a later reader re-derive the number against a different denominator, and because
@@ -68,6 +82,8 @@ class BpcResult(MetricResult, total=False):
 
     total_nats: float
     n_tokens: int
+    n_chars_scored: int
+    n_chars_denominator: int
     bits_per_token: float
     bits_per_byte: float
     n_bytes: int
@@ -94,7 +110,11 @@ def bits_per_char(total_nll_nats: float, n_chars: int) -> float:
 
 
 def bpc_from_token_nll(
-    token_nll: Sequence[float], n_chars: int, n_bytes: int | None = None
+    token_nll: Sequence[float],
+    n_chars: int,
+    n_bytes: int | None = None,
+    *,
+    n_chars_scored: int | None = None,
 ) -> BpcResult:
     """BPC over `n_chars` characters from the per-token negative log-likelihoods.
 
@@ -103,19 +123,44 @@ def bpc_from_token_nll(
     to also get `bits_per_byte`; omit it and those two keys are absent rather than guessed,
     because assuming bytes equal characters is true for SLP1 and wrong for Devanagari.
 
+    `n_chars` is the **denominator**: the raw held-out text's characters. `n_chars_scored`
+    is what the model actually predicted, and defaults to `n_chars` (a raw arm, where they
+    are the same text).
+
     Raises `ValueError` on an empty `token_nll` — a BPC over no predictions is not zero,
     it does not exist — and, through `bits_per_char`, on a non-positive `n_chars`.
     """
     if len(token_nll) == 0:
         raise ValueError("token_nll is empty: a BPC over no token predictions is undefined")
     total_nats = float(math.fsum(token_nll))
+    return _result(
+        total_nats,
+        len(token_nll),
+        n_chars,
+        n_bytes,
+        n_chars if n_chars_scored is None else n_chars_scored,
+    )
+
+
+def _result(
+    total_nats: float,
+    n_tokens: int,
+    n_chars: int,
+    n_bytes: int | None,
+    n_chars_scored: int,
+) -> BpcResult:
+    """The `BpcResult` both public constructors build, so the key set cannot drift."""
+    if n_chars_scored <= 0:
+        raise ValueError(f"n_chars_scored must be positive, got {n_chars_scored}")
     result: BpcResult = {
         "value": bits_per_char(total_nats, n_chars),
         "n": n_chars,
         "unit": "bits/char",
-        "total_nats": total_nats,
-        "n_tokens": len(token_nll),
-        "bits_per_token": total_nats * BITS_PER_NAT / len(token_nll),
+        "total_nats": float(total_nats),
+        "n_tokens": n_tokens,
+        "n_chars_scored": n_chars_scored,
+        "n_chars_denominator": n_chars,
+        "bits_per_token": total_nats * BITS_PER_NAT / n_tokens,
     }
     if n_bytes is not None:
         if n_bytes <= 0:
@@ -126,7 +171,12 @@ def bpc_from_token_nll(
 
 
 def bpc_from_total(
-    total_nats: float, n_tokens: int, n_chars: int, n_bytes: int | None = None
+    total_nats: float,
+    n_tokens: int,
+    n_chars: int,
+    n_bytes: int | None = None,
+    *,
+    n_chars_scored: int | None = None,
 ) -> BpcResult:
     """The same `BpcResult` as `bpc_from_token_nll`, from an already-summed total.
 
@@ -138,6 +188,10 @@ def bpc_from_total(
     allocate memory, so this is the entry point `train.evaluate_bpc` uses and
     `bpc_from_token_nll` is the one a hand-computed test uses.
 
+    `n_chars` is the raw held-out text's character count — the denominator every arm on
+    that evaluation set shares — and `n_chars_scored` the characters the model predicted,
+    which differ only for a split arm.
+
     `total_nats` must be non-negative and `n_tokens` positive, for the same reasons
     `bpc_from_token_nll` requires them.
     """
@@ -146,17 +200,10 @@ def bpc_from_total(
             f"n_tokens must be positive, got {n_tokens}: a BPC over no token predictions "
             "is undefined"
         )
-    result: BpcResult = {
-        "value": bits_per_char(total_nats, n_chars),
-        "n": n_chars,
-        "unit": "bits/char",
-        "total_nats": float(total_nats),
-        "n_tokens": n_tokens,
-        "bits_per_token": total_nats * BITS_PER_NAT / n_tokens,
-    }
-    if n_bytes is not None:
-        if n_bytes <= 0:
-            raise ValueError(f"n_bytes must be positive when given, got {n_bytes}")
-        result["bits_per_byte"] = total_nats * BITS_PER_NAT / n_bytes
-        result["n_bytes"] = n_bytes
-    return result
+    return _result(
+        total_nats,
+        n_tokens,
+        n_chars,
+        n_bytes,
+        n_chars if n_chars_scored is None else n_chars_scored,
+    )

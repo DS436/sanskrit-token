@@ -14,6 +14,7 @@ import json
 import math
 import random
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -30,6 +31,7 @@ from sanskrit_tok.lm.data import (
     eos_id_for,
     iter_batches,
     load_encoded_corpus,
+    measure_text,
     open_tokens,
     tokenise_text,
 )
@@ -37,6 +39,7 @@ from sanskrit_tok.lm.train import (
     IGNORE_INDEX,
     build_model,
     evaluate_bpc,
+    forward_logits,
     masked_cross_entropy,
     seed_everything,
     train,
@@ -943,3 +946,262 @@ def test_bpc_from_total_matches_the_per_token_form() -> None:
 def test_bpc_from_total_rejects_a_zero_token_count() -> None:
     with pytest.raises(ValueError):
         bpc_from_total(1.0, 0, 20)
+
+
+# ------------------------------------------------- the BPC denominator is the raw twin
+
+
+def _split_twin(raw_path: Path, split_path: Path, every: int = 16) -> tuple[int, int]:
+    """Write a ~6%-longer "split" twin of `raw_path`: a space every `every` characters.
+
+    Stands in for what sandhi reversal does to a held-out set — the same sentences, the
+    same number of lines, more characters — without needing a splitter in a unit test.
+    Returns `(raw chars, split chars)`.
+    """
+    raw_lines = [
+        line for line in raw_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    split_lines = [
+        " ".join(line[index : index + every] for index in range(0, len(line), every))
+        for line in raw_lines
+    ]
+    split_path.write_text("\n".join(split_lines) + "\n", encoding="utf-8")
+    return sum(map(len, raw_lines)), sum(map(len, split_lines))
+
+
+def test_a_split_arm_is_scored_per_character_of_the_raw_twin(tmp_path: Path) -> None:
+    """The denominator is the raw text's characters; the scored text may be longer.
+
+    The split twin here is 6.2% longer than the raw one, which is the size of the effect
+    Experiment 05 is trying to measure — so dividing by the split count would be worth as
+    much as the result (docs/decisions.md, 2026-09-06).
+    """
+    arm = load_tokenizer("T7_byt5")
+    raw = _random_byte_text(tmp_path / "raw.txt", n_lines=8)
+    split = tmp_path / "split.txt"
+    raw_chars, split_chars = _split_twin(raw, split)
+    assert split_chars / raw_chars == pytest.approx(1.062, abs=0.02)
+
+    config = _smoke_config(tmp_path, max_steps=1)
+    seed_everything(0)
+    model = build_model(config, 257)
+
+    def score(text: Path, twin: Path | None) -> dict[str, Any]:
+        return dict(
+            evaluate_bpc(
+                model,
+                arm,
+                text,
+                eos_id=256,
+                logical_vocab=257,
+                block_size=32,
+                batch_size=4,
+                device="cpu",
+                dtype_name="float32",
+                max_chars=None,
+                raw_text_path=twin,
+            )
+        )
+
+    split_result = score(split, raw)
+    raw_result = score(raw, None)
+
+    # Both denominators are the raw text; only the scored text differs.
+    assert split_result["n_chars_denominator"] == raw_chars
+    assert split_result["n"] == raw_chars
+    assert split_result["n_chars_scored"] == split_chars
+    assert raw_result["n_chars_scored"] == raw_result["n_chars_denominator"] == raw_chars
+
+    # The invariant the fix exists for: the same summed nats over the same raw text is the
+    # same BPC, however many characters the arm was actually asked to predict.
+    as_if_raw = bpc_from_total(
+        split_result["total_nats"], split_result["n_tokens"], raw_chars
+    )
+    assert split_result["value"] == pytest.approx(as_if_raw["value"], rel=1e-12)
+    # ... and it is strictly larger than the discount the split denominator would have given.
+    discounted = bpc_from_total(
+        split_result["total_nats"], split_result["n_tokens"], split_chars
+    )
+    assert split_result["value"] > discounted["value"]
+
+
+def test_the_raw_twin_is_measured_over_only_the_lines_that_were_scored(
+    tmp_path: Path,
+) -> None:
+    """A capped evaluation cuts both texts at the same sentence, not the whole twin."""
+    arm = load_tokenizer("T7_byt5")
+    raw = _random_byte_text(tmp_path / "raw.txt", n_lines=40)
+    split = tmp_path / "split.txt"
+    raw_chars, _ = _split_twin(raw, split)
+
+    config = _smoke_config(tmp_path, max_steps=1)
+    seed_everything(0)
+    model = build_model(config, 257)
+    result = evaluate_bpc(
+        model,
+        arm,
+        split,
+        eos_id=256,
+        logical_vocab=257,
+        block_size=32,
+        batch_size=4,
+        device="cpu",
+        dtype_name="float32",
+        max_chars=200,
+        raw_text_path=raw,
+    )
+    assert 0 < result["n_chars_denominator"] < raw_chars
+    assert result["n_chars_scored"] > result["n_chars_denominator"]
+
+
+def test_a_misaligned_raw_twin_is_an_error_not_a_rescaled_bpc(tmp_path: Path) -> None:
+    arm = load_tokenizer("T7_byt5")
+    text = _random_byte_text(tmp_path / "text.txt", n_lines=8)
+    short = tmp_path / "short.txt"
+    short.write_text("abc\n", encoding="utf-8")
+    config = _smoke_config(tmp_path, max_steps=1)
+    model = build_model(config, 257)
+    with pytest.raises(ValueError, match="not aligned"):
+        evaluate_bpc(
+            model,
+            arm,
+            text,
+            eos_id=256,
+            logical_vocab=257,
+            block_size=32,
+            batch_size=4,
+            device="cpu",
+            dtype_name="float32",
+            max_chars=None,
+            raw_text_path=short,
+        )
+
+
+def test_the_curve_row_records_the_arithmetic_behind_every_bpc(tmp_path: Path) -> None:
+    config = _smoke_config(tmp_path, max_steps=5)
+
+    train(config)
+
+    rows = [
+        json.loads(line)
+        for line in (config.run_dir / "curve.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    for row in rows:
+        detail = row["bpc_detail"]["mini"]
+        assert set(detail) == {
+            "total_nats",
+            "n_tokens",
+            "n_chars_scored",
+            "n_chars_denominator",
+            "bpc",
+        }
+        assert detail["bpc"] == row["bpc"]["mini"]
+        assert detail["total_nats"] > 0
+        assert detail["n_chars_scored"] == detail["n_chars_denominator"] > 0
+    results = json.loads((config.run_dir / "results.json").read_text(encoding="utf-8"))
+    assert results["bpc"]["mini"]["n_chars_denominator"] == results["bpc"]["mini"]["n"]
+    assert results["bpc_denominator_sets"]["mini"].endswith(MINI_CORPUS.name)
+
+
+def test_measure_text_counts_whole_lines_and_stops_at_max_lines(tmp_path: Path) -> None:
+    path = tmp_path / "text.txt"
+    path.write_text("abcd\n\n   \nefg\nhi\n", encoding="utf-8")
+    whole = measure_text(path)
+    assert (whole.n_chars, whole.n_bytes, whole.n_lines) == (9, 9, 3)
+    capped = measure_text(path, max_lines=2)
+    assert (capped.n_chars, capped.n_lines) == (7, 2)
+
+
+# --------------------------------------------------------------- device resolution
+
+
+def _no_accelerators(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+
+def test_resolve_device_raises_for_a_device_this_machine_does_not_have(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The old behaviour was a warning and a CPU fallback; on rented hardware that is fatal."""
+    _no_accelerators(monkeypatch)
+    for name in ("cuda", "mps"):
+        with pytest.raises(RuntimeError, match="unavailable"):
+            resolve_device(name)
+
+
+def test_resolve_device_auto_refuses_the_cpu_unless_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_accelerators(monkeypatch)
+    with pytest.raises(RuntimeError, match="allow_cpu"):
+        resolve_device("auto")
+    assert resolve_device("auto", allow_cpu=True) == "cpu"
+    # An explicit `cpu` is a choice, not an accident, and is always honoured.
+    assert resolve_device("cpu") == "cpu"
+
+
+def test_resolve_device_auto_prefers_cuda_then_mps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    assert resolve_device("auto") == "cuda"
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device("auto") == "mps"
+
+
+def test_train_config_carries_allow_cpu_and_the_raw_evaluation_twins(
+    tmp_path: Path,
+) -> None:
+    config = TrainConfig.from_mapping(
+        {
+            "arm": "T7_byt5",
+            "track": "t",
+            "size": "smoke",
+            "corpus": "c.txt",
+            "eval_sets": {"a_split": "a_split.txt"},
+            "eval_raw_sets": {"a_split": "a.txt"},
+            "allow_cpu": True,
+            "max_steps": 1,
+        },
+        root=tmp_path,
+    )
+    assert config.allow_cpu is True
+    assert config.eval_raw_sets["a_split"] == tmp_path / "a.txt"
+    assert config.to_dict()["eval_raw_sets"] == {"a_split": str(tmp_path / "a.txt")}
+    with pytest.raises(ValueError, match="eval_raw_sets names sets"):
+        TrainConfig.from_mapping(
+            {
+                "arm": "T7_byt5",
+                "track": "t",
+                "size": "smoke",
+                "corpus": "c.txt",
+                "eval_sets": {"a": "a.txt"},
+                "eval_raw_sets": {"b": "b.txt"},
+                "max_steps": 1,
+            },
+            root=tmp_path,
+        )
+
+
+# ------------------------------------------------------------------- forward_logits
+
+
+def test_forward_logits_matches_the_vendored_forward_exactly(tmp_path: Path) -> None:
+    """The fast path is nanoGPT's forward minus the loss it would compute and discard."""
+    config = _smoke_config(tmp_path, max_steps=1)
+    seed_everything(0)
+    model = build_model(config, 257)
+    model.eval()
+    idx = torch.randint(0, 257, (2, 32))
+    targets = torch.randint(0, 257, (2, 32))
+    with torch.no_grad():
+        vendored = model(idx, targets)[0]
+        fast = forward_logits(model, idx)
+    assert torch.equal(vendored, fast)
+
+
+def test_forward_logits_rejects_a_sequence_longer_than_the_block(tmp_path: Path) -> None:
+    config = _smoke_config(tmp_path, max_steps=1)
+    model = build_model(config, 257)
+    with pytest.raises(ValueError, match="exceeds the block size"):
+        forward_logits(model, torch.zeros((1, config.block_size + 1), dtype=torch.long))

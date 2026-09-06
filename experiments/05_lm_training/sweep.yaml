@@ -15,21 +15,33 @@ cache_dir: outputs/05_lm_training/encoded
 eval_dir: data/processed/lm
 
 # Every "tokens / bytes / FLOPs to reference BPC" figure is measured against this arm's
-# final in-domain BPC at the same track and size, seed matched to seed
-# (docs/decisions.md, 2026-09-05, "Experiment 05 model, evaluation and comparison protocol").
+# BEST in-domain BPC on its own curve, at the same track and size, seed matched to seed.
+# Best rather than final because Track 1 is eight epochs over a small corpus and a
+# final-step threshold could be loosened by the baseline overfitting (docs/decisions.md,
+# 2026-09-06, "BPC is bits per character of the RAW held-out text for every arm").
 reference_arm: T1_bpe_raw_64k_dcs
 
 # CLAUDE.md §2.6: three seeds minimum for anything involving model training.
 seeds: [0, 1, 2]
 
-device: auto      # cuda > mps > cpu
+device: auto      # cuda > mps; NOT cpu -- see allow_cpu
 dtype: auto       # bfloat16 on CUDA, float32 elsewhere (MPS half precision is unvalidated)
+
+# Deliberately absent (i.e. false): if `device: auto` finds no accelerator, this sweep
+# ABORTS rather than starting a 5.1-exaFLOP job on a CPU. smoke.yaml sets it true.
+# allow_cpu: false
 
 # A 125M checkpoint is ~1.5 GB and nothing downstream reads one; set true to keep them.
 keep_checkpoints: false
 
 # In-domain first, then the four out-of-domain parallel sets. A split arm is given the
-# `_split` twin of each of these automatically (`sweep.is_split_arm`).
+# `_split` twin of each of these automatically (`sweep.is_split_arm`); every arm's BPC is
+# divided by the RAW twin's character count whichever shape it predicts.
+#
+# Track 2 overrides this block: its corpus is 93.6% Sangraha, so `heldout_sangraha` is its
+# in-domain set and `heldout_dcs` -- curated literary Sanskrit against an OCR'd web/book
+# corpus -- is a TRANSFER measurement there (docs/decisions.md, 2026-09-06, "Track 2 gets
+# an in-domain held-out set").
 eval_sets:
   in_domain: heldout_dcs
   ood:
@@ -49,7 +61,12 @@ sizes:
     grad_accum: 4
     lr: 6.0e-4
     warmup_steps: 100
-    eval_every: 100
+    # Every 25 steps: the crossing the experiment reports is resolved to a few percent of
+    # the budget rather than to 100/832 of it. Costs ~1.6% of the FLOPs (docs/decisions.md,
+    # 2026-09-06). NOTE (M14): each arm's step count differs, because the byte budget buys
+    # a denser arm more tokens -- so `warmup_steps: 100` is a different FRACTION of each
+    # arm's schedule (12% of T4_oracle's 736 steps, 2.5% of T7_byt5's 3,929).
+    eval_every: 25
     eval_batch_size: 8
   125M:
     block_size: 1024
@@ -57,7 +74,7 @@ sizes:
     grad_accum: 8
     lr: 6.0e-4
     warmup_steps: 200
-    eval_every: 250
+    eval_every: 100
     eval_batch_size: 8
 
 # `epochs` is the equal-bytes budget: the track's RAW corpus bytes times this number, one
@@ -88,6 +105,17 @@ tracks:
     corpus_raw: data/processed/lm/track2_sample.txt
     epochs: 1
     sizes: [50M, 125M]
+    # 2,000 Sangraha lines held out of the sample itself (build_corpus.py
+    # --sangraha-heldout), so Track 2 has an in-domain number and not only transfer ones.
+    eval_sets:
+      in_domain: heldout_sangraha
+      transfer:
+        - heldout_dcs
+      ood:
+        - heldout_samayik_test
+        - heldout_samayik_test_ood
+        - heldout_itihasa_test
+        - heldout_flores_devtest
     arms:
       - T1_bpe_raw_64k_dcs
       - T2_unigram_raw_64k_dcs
