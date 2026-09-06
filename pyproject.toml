@@ -56,6 +56,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 strict = true
 files = ["src"]
+# `scripts/` is checked explicitly (`mypy scripts`) and imports the project by name;
+# without this it would resolve to the installed distribution, which ships no py.typed.
+mypy_path = "src"
 
 # Third-party libraries that ship no type information.
 [[tool.mypy.overrides]]
