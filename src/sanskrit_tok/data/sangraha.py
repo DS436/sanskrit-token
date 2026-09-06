@@ -28,6 +28,9 @@ decision rather than an engineering one.
 import logging
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
+from typing import Any
+
+from sanskrit_tok.data.quality import real_words
 
 __all__ = [
     "DANDA",
@@ -38,12 +41,15 @@ __all__ = [
     "SANGRAHA_REVISION",
     "SANGRAHA_TEXT_COLUMN",
     "VERIFIED_SANSKRIT_PREFIX",
+    "assert_verified_sanskrit_files",
     "documents_to_lines",
     "has_devanagari_letter",
     "iter_sangraha_lines",
     "iter_sangraha_sanskrit",
     "list_verified_sanskrit_files",
+    "resolve_sanskrit_files",
     "sangraha_file_path",
+    "sangraha_file_sizes",
     "verified_sanskrit_files",
 ]
 
@@ -125,10 +131,14 @@ def documents_to_lines(document: str) -> list[str]:
     lines: list[str] = []
     for raw_line in document.split("\n"):
         for piece in _split_on_danda(raw_line):
-            words = piece.split()
+            # `real_words`, not `piece.split()`: a danda is not a word, so `राम ।` is a
+            # one-word line and does not reach the corpus (docs/decisions.md, 2026-09-05,
+            # "Sangraha quality filter calibrated on a sample", rule 5). Counting the danda
+            # was the base splitter's one-word-line gap.
+            words = real_words(piece)
             if len(words) < MIN_WORDS_PER_LINE:
                 continue
-            candidate = " ".join(words)
+            candidate = " ".join(piece.split())
             if not has_devanagari_letter(candidate):
                 continue
             lines.append(candidate)
@@ -169,9 +179,78 @@ def list_verified_sanskrit_files(revision: str = SANGRAHA_REVISION) -> list[str]
     return selected
 
 
+def assert_verified_sanskrit_files(files: Iterable[str]) -> list[str]:
+    """`files` unchanged, or `ValueError` naming every entry outside `verified/san/`.
+
+    `verified_sanskrit_files` guarantees the *default* file list contains no machine
+    translation, but a caller may pass `files` explicitly — `corpus.yaml` has a `files:`
+    key — and nothing stopped that list from naming `synthetic/san_Deva/wiki_0.parquet`.
+    Training a Sanskrit LM on machine-translated Wikipedia would measure the translator,
+    and it would do so silently, so an out-of-prefix name is an error rather than a
+    warning. The offenders are named in the message: a config typo is what this catches
+    in practice, and a message that says only "invalid file list" would not help.
+    """
+    names = list(files)
+    outside = [
+        name
+        for name in names
+        if not (name.startswith(VERIFIED_SANSKRIT_PREFIX) and name.endswith(".parquet"))
+    ]
+    if outside:
+        raise ValueError(
+            f"{len(outside)} Sangraha file(s) are not verified Sanskrit parquet under "
+            f"{VERIFIED_SANSKRIT_PREFIX!r} and will not be read: {outside}"
+        )
+    return names
+
+
+def resolve_sanskrit_files(
+    *,
+    files: Sequence[str] | None = None,
+    revision: str = SANGRAHA_REVISION,
+    max_files: int | None = None,
+) -> list[str]:
+    """The file list a read will actually use: validated, and truncated by `max_files`.
+
+    `files` defaults to `list_verified_sanskrit_files(revision)` (one network call). A
+    caller-supplied list is checked by `assert_verified_sanskrit_files` and otherwise kept
+    in the order given. `max_files` takes whole files from the front, so two runs with the
+    same cap see the same documents.
+
+    Separated from `iter_sangraha_sanskrit` so a build can record *what it read* — the
+    resolved names, not the config's `null` — in its manifest before reading anything.
+    """
+    names = (
+        list_verified_sanskrit_files(revision)
+        if files is None
+        else assert_verified_sanskrit_files(files)
+    )
+    return names if max_files is None else names[:max_files]
+
+
 def sangraha_file_path(cache_dir: Path, name: str) -> Path:
     """Where `name` lives (or will live) under `cache_dir`, mirroring the repo layout."""
     return cache_dir / name
+
+
+def sangraha_file_sizes(cache_dir: Path, names: Iterable[str]) -> list[dict[str, Any]]:
+    """`{"name", "n_bytes"}` for each of `names`, for the manifest's provenance.
+
+    `n_bytes` is `None` for a file not on disk — the sizes are recorded after the read, so
+    in a completed build every entry has one, and a `None` says the build did not get that
+    far rather than that the file is empty.
+    """
+    return [
+        {
+            "name": name,
+            "n_bytes": (
+                sangraha_file_path(cache_dir, name).stat().st_size
+                if sangraha_file_path(cache_dir, name).exists()
+                else None
+            ),
+        }
+        for name in names
+    ]
 
 
 def _ensure_downloaded(
@@ -205,15 +284,14 @@ def iter_sangraha_sanskrit(
     """Every verified Sanskrit document, file by file and batch by batch.
 
     `files` defaults to `list_verified_sanskrit_files(revision)` (one network call); pass
-    it to work offline from an already-populated `cache_dir`. `max_files` truncates the
-    list, which is how a shortened build is configured — it takes whole files from the
-    front, so two runs with the same cap see the same documents.
+    it to work offline from an already-populated `cache_dir`, and it is validated against
+    `VERIFIED_SANSKRIT_PREFIX` (`resolve_sanskrit_files`). `max_files` truncates the list,
+    which is how a shortened build is configured — it takes whole files from the front, so
+    two runs with the same cap see the same documents.
     """
     import pyarrow.parquet as pq
 
-    names = list(list_verified_sanskrit_files(revision) if files is None else files)
-    if max_files is not None:
-        names = names[:max_files]
+    names = resolve_sanskrit_files(files=files, revision=revision, max_files=max_files)
     for name in names:
         path = _ensure_downloaded(cache_dir, name, revision)
         parquet = pq.ParquetFile(path)

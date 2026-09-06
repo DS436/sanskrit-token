@@ -40,6 +40,7 @@ from sanskrit_tok.data.exclusion import (
     sentence_hash_slp1,
 )
 from sanskrit_tok.data.parallel import ParallelCorpus
+from sanskrit_tok.data.quality import QUALITY_RULES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_PY = REPO_ROOT / "experiments" / "05_lm_training" / "build_corpus.py"
@@ -105,6 +106,18 @@ def _write_parquet(path: Path, columns: dict[str, list[str]]) -> None:
     pq.write_table(pa.table(columns), path)
 
 
+def test_documents_to_lines_does_not_count_a_danda_as_a_word() -> None:
+    """`राम ।` is one word, not two: the base splitter's one-word-line gap.
+
+    `piece.split()` counts the danda, so a two-word floor let one-word lines through
+    (docs/decisions.md, 2026-09-05, rule 5). `real_words` is the fix, and it is the same
+    function the quality filter's word-count rule uses.
+    """
+    assert sangraha.documents_to_lines("रामः ।") == []
+    assert sangraha.documents_to_lines("रामः ॥ १२ ॥") == []
+    assert sangraha.documents_to_lines("रामः वनम् ।") == ["रामः वनम् ।"]
+
+
 def test_verified_sanskrit_files_takes_only_verified_sanskrit() -> None:
     """`verified/san/` only: never `synthetic` (machine-translated) and never another language."""
     files = [
@@ -119,6 +132,56 @@ def test_verified_sanskrit_files_takes_only_verified_sanskrit() -> None:
         "verified/san/data-0.parquet",
         "verified/san/data-1.parquet",
     ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "synthetic/san_Deva/wiki_0.parquet",  # machine translation
+        "unverified/san/data-0.parquet",
+        "verified/hin/data-0.parquet",  # another language
+        "verified/san/data-0.txt",  # not a parquet
+        "verified/san_Deva/data-0.parquet",  # the directory that does not exist
+    ],
+)
+def test_assert_verified_sanskrit_files_rejects_anything_outside_the_prefix(name: str) -> None:
+    """A caller-supplied `files` list is validated, not trusted.
+
+    `verified_sanskrit_files` only guarantees the *default* list; `corpus.yaml` has a
+    `files:` key, and a name pointing at `synthetic/` would put machine-translated
+    Wikipedia into a Sanskrit LM's training data without a word in any log.
+    """
+    with pytest.raises(ValueError, match=name):
+        sangraha.assert_verified_sanskrit_files(["verified/san/data-0.parquet", name])
+
+
+def test_assert_verified_sanskrit_files_accepts_and_preserves_order() -> None:
+    files = ["verified/san/data-1.parquet", "verified/san/data-0.parquet"]
+    assert sangraha.assert_verified_sanskrit_files(files) == files
+
+
+def test_iter_sangraha_sanskrit_validates_the_file_list(tmp_path: Path) -> None:
+    """The reader refuses the same list, so no caller can bypass the check."""
+    with pytest.raises(ValueError, match="synthetic"):
+        list(
+            sangraha.iter_sangraha_sanskrit(
+                tmp_path, files=["synthetic/san_Deva/wiki_0.parquet"]
+            )
+        )
+
+
+def test_resolve_sanskrit_files_applies_max_files() -> None:
+    files = [f"verified/san/data-{index}.parquet" for index in range(4)]
+    assert sangraha.resolve_sanskrit_files(files=files, max_files=2) == files[:2]
+
+
+def test_sangraha_file_sizes_reports_what_is_on_disk(tmp_path: Path) -> None:
+    name = "verified/san/data-0.parquet"
+    _write_parquet(tmp_path / name, {"doc_id": ["a"], "text": ["रामः वनं गच्छति।"], "type": ["pdf"]})
+    sizes = sangraha.sangraha_file_sizes(tmp_path, [name, "verified/san/data-9.parquet"])
+    assert sizes[0]["name"] == name
+    assert sizes[0]["n_bytes"] == (tmp_path / name).stat().st_size
+    assert sizes[1]["n_bytes"] is None
 
 
 def test_iter_sangraha_sanskrit_reads_a_cached_parquet(tmp_path: Path) -> None:
@@ -508,6 +571,220 @@ def test_corpus_yaml_matches_the_builder(corpus_case: dict[str, Any]) -> None:
     assert config["track2_sources"][0] == "dcs_train"
     assert [entry["name"] for entry in config["heldout_parallel"]] == list(_PARALLEL)
     assert config["token_count_arm"] == "T1_bpe_raw_64k_dcs"
+
+
+# ------------------------------------------------------------------- the quality filter
+
+
+def test_build_corpus_drops_web_lines_by_rule_and_counts_each(
+    corpus_case: dict[str, Any],
+) -> None:
+    """Each quality rule's drop is counted under its own name, per source.
+
+    The four planted Sangraha documents fail one rule each, in the order the rules run;
+    the fifth is ordinary Sanskrit and survives. DCS and the parallel sides are SLP1
+    already and are not passed through the filter at all, so their counters stay zero.
+    """
+    tmp_path = corpus_case["tmp_path"]
+    _write_parquet(
+        tmp_path / "sangraha" / "verified" / "san" / "data-0.parquet",
+        {
+            "doc_id": ["a", "b", "c", "d", "e"],
+            "text": [
+                "रामः vanam गच्छति।",  # latin
+                "राम का पुत्र है वनं गच्छति।",  # hindi
+                "रामः ३४५६७ वनं ८९ गच्छति।",  # letter_fraction
+                "रामः ﾱ वनं गच्छति।",  # non_slp1
+                "गुरुः छात्रान् पाठयति।",  # kept
+            ],
+            "type": ["pdf"] * 5,
+        },
+    )
+    manifest = build_corpus.build(
+        corpus_case["config"],
+        root=tmp_path,
+        shingle_indices={"flores_devtest": build_shingle_index([_PLANTED_EVAL])},
+    )
+    track2 = manifest["corpora"]["track2_raw"]
+    assert track2["n_dropped_quality_per_source_per_rule"]["sangraha_verified_san"] == {
+        "latin": 1,
+        "hindi": 1,
+        "letter_fraction": 1,
+        "n_words": 0,
+        "word_length": 0,
+        "non_slp1": 1,
+    }
+    assert track2["n_dropped_quality_per_source"]["sangraha_verified_san"] == 4
+    assert track2["n_dropped_quality"] == 4
+    assert track2["n_dropped_quality_per_source"]["dcs_train"] == 0
+    assert set(track2["n_dropped_quality_per_rule"]) == set(QUALITY_RULES)
+    assert _read_lines(tmp_path / "lm" / "track2_raw.txt")[-2] == "guruH CAtrAn pAWayati."
+
+
+def test_build_corpus_drops_an_unspellable_slp1_line_from_every_track(
+    corpus_case: dict[str, Any], tmp_path: Path
+) -> None:
+    """A DCS record carrying a character SLP1 cannot spell reaches no corpus and no held-out
+    file, and is counted as `non_slp1` rather than as an empty line."""
+    case_path = corpus_case["tmp_path"]
+    _write_jsonl(
+        case_path / "dcs" / "train.jsonl",
+        [
+            {"text_slp1": "rAmaH vanaM gacCati", "oracle_split_slp1": "rAmaH vanam gacCati"},
+            {"text_slp1": "sItA ﾱ gfhe", "oracle_split_slp1": "sItA ﾱ gfhe"},
+        ],
+    )
+    _write_jsonl(
+        case_path / "dcs" / "heldout.jsonl",
+        [
+            {"text_slp1": "guruH CAtrAn pAWayati", "oracle_split_slp1": "guruH CAtrAn pAWayati"},
+            {"text_slp1": "vAyuH ﾱ vahati", "oracle_split_slp1": "vAyuH ﾱ vahati"},
+        ],
+    )
+    manifest = build_corpus.build(
+        corpus_case["config"], root=case_path, shingle_indices={}
+    )
+    track1 = manifest["corpora"]["track1_raw"]
+    assert track1["n_dropped_non_slp1_per_source"] == {"dcs_train": 1}
+    assert track1["n_dropped_empty"] == 0
+    assert _read_lines(case_path / "lm" / "track1_raw.txt") == ["rAmaH vanaM gacCati"]
+    assert _read_lines(case_path / "lm" / "track1_split.txt") == ["rAmaH vanam gacCati"]
+    assert manifest["corpora"]["track2_raw"]["n_dropped_non_slp1_per_source"]["dcs_train"] == 1
+
+    # The held-out text is not deduplicated and not leakage-filtered, but it is cleaned:
+    # a character no vocabulary can spell would sit in the bits-per-character denominator.
+    assert manifest["heldout_dropped"]["dcs_non_slp1"] == 1
+    assert _read_lines(case_path / "lm" / "heldout_dcs.txt") == ["guruH CAtrAn pAWayati"]
+    assert _read_lines(case_path / "lm" / "heldout_dcs_split.txt") == ["guruH CAtrAn pAWayati"]
+
+
+def test_build_corpus_records_the_resolved_sangraha_files(
+    corpus_case: dict[str, Any],
+) -> None:
+    """The manifest names the files the build read, with their sizes."""
+    tmp_path = corpus_case["tmp_path"]
+    manifest = build_corpus.build(
+        corpus_case["config"], root=tmp_path, shingle_indices={}
+    )
+    sangraha_provenance = manifest["corpora"]["track2_raw"]["sources"][
+        "sangraha_verified_san"
+    ]
+    assert sangraha_provenance["n_files"] == 1
+    assert sangraha_provenance["files"] == [
+        {
+            "name": "verified/san/data-0.parquet",
+            "n_bytes": (
+                tmp_path / "sangraha" / "verified" / "san" / "data-0.parquet"
+            ).stat().st_size,
+        }
+    ]
+    assert sangraha_provenance["subset"] == "verified/san"
+
+
+def test_build_corpus_rejects_a_synthetic_sangraha_file_in_the_config(
+    corpus_case: dict[str, Any],
+) -> None:
+    """The `files:` key cannot smuggle machine translation into the corpus."""
+    config = dict(corpus_case["config"])
+    config["sangraha"] = {
+        **config["sangraha"],
+        "files": ["synthetic/san_Deva/wiki_0.parquet"],
+    }
+    with pytest.raises(ValueError, match="synthetic"):
+        build_corpus.build(config, root=corpus_case["tmp_path"], shingle_indices={})
+
+
+# -------------------------------------------------------------------- the Track 2 sample
+
+
+def test_sampling_probability_is_the_share_of_the_budget_left_over() -> None:
+    """Hand-computed: 100 bytes of budget, 20 already spent, 160 available -> 0.5."""
+    assert build_corpus.sampling_probability(100, 20, 160) == 0.5
+    # Never above 1: a budget larger than the corpus keeps all of it.
+    assert build_corpus.sampling_probability(1000, 20, 160) == 1.0
+    assert build_corpus.sampling_probability(1000, 20, 0) == 0.0
+    with pytest.raises(build_corpus.CorpusError, match="already exceeds"):
+        build_corpus.sampling_probability(10, 20, 160)
+
+
+def _sample_case(corpus_case: dict[str, Any], n_documents: int) -> dict[str, Any]:
+    """`corpus_case` with a Sangraha file of `n_documents` distinct one-line documents."""
+    tmp_path = corpus_case["tmp_path"]
+    _write_parquet(
+        tmp_path / "sangraha" / "verified" / "san" / "data-0.parquet",
+        {
+            "doc_id": [str(index) for index in range(n_documents)],
+            "text": [f"गुरुः छात्रान् पाठयति {index} वारम्।" for index in range(n_documents)],
+            "type": ["pdf"] * n_documents,
+        },
+    )
+    return corpus_case
+
+
+def test_build_sample_keeps_every_unsampled_source_and_thins_sangraha(
+    corpus_case: dict[str, Any],
+) -> None:
+    """Half the Sangraha bytes, all of everything else, and the same file twice over."""
+    tmp_path = _sample_case(corpus_case, 40)["tmp_path"]
+    config = dict(corpus_case["config"])
+    manifest = build_corpus.build(config, root=tmp_path, shingle_indices={})
+    track2 = manifest["corpora"]["track2_raw"]
+    ranges = track2["source_line_ranges"]
+    assert ranges["dcs_train"][0] == 0
+    assert ranges["wikipedia_sa"][1] == track2["n_out"]
+
+    composition_bytes = {}
+    lines = _read_lines(tmp_path / "lm" / "track2_raw.txt")
+    for source, (start, end) in ranges.items():
+        composition_bytes[source] = sum(
+            len(line.encode("utf-8")) for line in lines[start:end]
+        )
+    kept = sum(
+        count for source, count in composition_bytes.items()
+        if source != "sangraha_verified_san"
+    )
+    config["track2_sample_bytes"] = kept + composition_bytes["sangraha_verified_san"] // 2
+    config["track2_sample_sampled_sources"] = ["sangraha_verified_san"]
+    config["track2_sample_seed"] = 0
+
+    entry = build_corpus.build_sample(config, root=tmp_path)
+    assert entry["keep_probability"] == pytest.approx(0.5, abs=0.01)
+    for source, composition in entry["composition"].items():
+        if source == "sangraha_verified_san":
+            assert 0 < composition["n_out"] < composition["n_in"]
+        else:
+            assert composition["n_out"] == composition["n_in"]
+    assert entry["n_out"] == sum(
+        composition["n_out"] for composition in entry["composition"].values()
+    )
+    assert entry["n_tokens"] > 0
+    assert entry["sampled_from_sha256"] == track2["sha256"]
+
+    # Every sampled line is a line of the corpus it was sampled from, and the seed makes
+    # the sample reproducible.
+    sample_lines = _read_lines(tmp_path / "lm" / "track2_sample.txt")
+    assert set(sample_lines) <= set(lines)
+    first = entry["sha256"]
+    assert build_corpus.build_sample(config, root=tmp_path)["sha256"] == first
+
+
+def test_build_sample_needs_a_corpus_with_source_ranges(
+    corpus_case: dict[str, Any],
+) -> None:
+    """`--sample` refuses to guess: no corpus, or a manifest predating the ranges, is fatal."""
+    tmp_path = corpus_case["tmp_path"]
+    config = dict(corpus_case["config"])
+    config["track2_sample_bytes"] = 10_000
+    with pytest.raises(build_corpus.CorpusError, match="run the build without"):
+        build_corpus.build_sample(config, root=tmp_path)
+
+    build_corpus.build(config, root=tmp_path, shingle_indices={})
+    manifest_path = tmp_path / "lm" / "track2_raw.manifest.json"
+    stale = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del stale["source_line_ranges"]
+    manifest_path.write_text(json.dumps(stale), encoding="utf-8")
+    with pytest.raises(build_corpus.CorpusError, match="source_line_ranges"):
+        build_corpus.build_sample(config, root=tmp_path)
 
 
 def test_write_lines_reports_chars_bytes_and_digest(tmp_path: Path) -> None:

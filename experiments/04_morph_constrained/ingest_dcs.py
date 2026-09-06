@@ -35,6 +35,15 @@ Three rules the numbers depend on (docs/decisions.md, 2026-09-05):
   into the manifest as `n_dropped_shingle` and `n_dropped_shingle_per_source`. The held-out
   split is *not* filtered — it is the evaluation set.
 
+* **Every kept sentence is clean SLP1.** A sentence whose sandhied or oracle-split SLP1
+  form still contains a character outside the SLP1 alphabet, ASCII digits, ASCII
+  punctuation and the space is dropped from **both** splits and counted
+  (`n_dropped_non_slp1`). DCS's IAST is not uniform — 1,119 sentences spell the anusvāra
+  `ṁ` (U+1E41) rather than `ṃ`, which `sanskrit_tok.data.boundaries.normalise_iast` now
+  rewrites before conversion, and a further ~1,000 carry halfwidth-katakana mojibake from
+  the source scans, which nothing can rewrite. The held-out split is filtered by this rule
+  too, unlike by the leakage rules: it is the bits-per-character denominator, and a
+  character no arm's vocabulary can spell does not belong in it.
 * **The stem rule is audited, not assumed.** Both stem rules — the sandhi-aware
   `stem_boundary` the marked corpora are built from, and the superseded `stem_boundary_lcp`
   — are run over every held-out segment and their cut counts written to the manifest under
@@ -95,6 +104,7 @@ from sanskrit_tok.data.exclusion import (
     load_exclusion_hashes,
     sentence_hash_slp1,
 )
+from sanskrit_tok.data.quality import is_clean_slp1
 from sanskrit_tok.experiment import load_config, provenance, repo_root, resolve_path, sanitize_json
 
 logger = logging.getLogger("ingest_dcs")
@@ -256,6 +266,7 @@ def ingest(
         "n_dropped_min_words": 0,
         "n_dropped_heldout_duplicate": 0,
         "n_dropped_shingle": 0,
+        "n_dropped_non_slp1": 0,
         "n_sentences_text_mismatch": 0,
         "n_words": 0,
         "n_words_aligned": 0,
@@ -290,6 +301,17 @@ def ingest(
                     counts["n_dropped_min_words"] += 1
                     continue
                 gold = build_gold_sentence(sentence)
+                # Dropped from *both* splits: a held-out sentence carrying a character no
+                # arm's vocabulary can spell would put it in the bits-per-character
+                # denominator, so the evaluation text has to be as clean as the training
+                # text (docs/decisions.md, 2026-09-05, "Sangraha quality filter calibrated
+                # on a sample", the `non_slp1` rule).
+                if not (
+                    is_clean_slp1(gold.text_slp1)
+                    and is_clean_slp1(gold.oracle_split_slp1)
+                ):
+                    counts["n_dropped_non_slp1"] += 1
+                    continue
                 digest = sentence_hash_slp1(gold.text_slp1)
                 if digest in excluded:
                     counts["n_dropped_excluded"] += 1
@@ -391,6 +413,7 @@ def ingest(
                 "n_dropped_min_words",
                 "n_dropped_heldout_duplicate",
                 "n_dropped_shingle",
+                "n_dropped_non_slp1",
             )
         },
         "n_dropped_shingle_per_source": shingle_drops,
@@ -462,7 +485,8 @@ def main() -> None:
     logger.info(
         "done: train %d sentences / %d texts, heldout %d / %d; dropped %d excluded, "
         "%d too short, %d duplicating a held-out sentence, %d near-duplicating an "
-        "evaluation sentence (%s); alignment %.4f; human-verified %.4f",
+        "evaluation sentence (%s), %d carrying a non-SLP1 character; alignment %.4f; "
+        "human-verified %.4f",
         manifest["splits"]["train"]["n_sentences"],
         manifest["splits"]["train"]["n_texts"],
         manifest["splits"]["heldout"]["n_sentences"],
@@ -475,6 +499,7 @@ def main() -> None:
             f"{source}={count}"
             for source, count in manifest["n_dropped_shingle_per_source"].items()
         ),
+        manifest["n_dropped_non_slp1"],
         manifest["alignment_rate"],
         manifest["human_verified_fraction"],
     )

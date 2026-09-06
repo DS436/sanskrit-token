@@ -75,6 +75,7 @@ from sanskrit_tok.encoding import to_slp1
 __all__ = [
     "BOUNDARY_MARKER",
     "GoldSentence",
+    "IAST_ANUSVARA_NORMALISATION",
     "MIN_ALIGN_RATIO",
     "MIN_STEM_LENGTH",
     "NO_STEM_UPOS",
@@ -83,6 +84,7 @@ __all__ = [
     "align_segments",
     "build_gold_sentence",
     "mark",
+    "normalise_iast",
     "stem_boundary",
     "stem_boundary_lcp",
     "stem_cut_inside_lemma",
@@ -121,15 +123,35 @@ NO_STEM_UPOS = frozenset({"PRON", "PART", "ADV", "CCONJ", "SCONJ", "ADP", "NUM"}
 _WHITESPACE = re.compile(r"\s+")
 
 
+#: IAST anusvāra written with a dot *above* rather than below. DCS uses both, and
+#: `indic_transliteration` maps only `ṃ` (U+1E43); `ṁ` (U+1E41) has no SLP1 spelling and is
+#: passed through into the SLP1 text, where it is a character no tokenizer arm can spell.
+#: 1,119 DCS sentences carried one. The two are the same phoneme in the same notation, so
+#: normalising before conversion is a spelling fix, not a change of content
+#: (docs/decisions.md, 2026-09-05, "Sangraha quality filter calibrated on a sample").
+IAST_ANUSVARA_NORMALISATION: dict[str, str] = {"ṁ": "ṃ"}
+
+_IAST_NORMALISATION_TABLE = str.maketrans(IAST_ANUSVARA_NORMALISATION)
+
+
+def normalise_iast(iast: str) -> str:
+    """`iast` with `ṁ` rewritten to `ṃ`; nothing else is touched."""
+    return iast.translate(_IAST_NORMALISATION_TABLE)
+
+
 @lru_cache(maxsize=1 << 20)
 def _slp1(iast: str) -> str:
-    """`to_slp1(iast, "iast")`, memoised.
+    """`normalise_iast` then `to_slp1(·, "iast")`, memoised.
 
     DCS is 750,660 sentences of 4.29M word tokens over a far smaller vocabulary, and each
     is transliterated several times (surface, unsandhied, lemma). The cache is what makes
     the whole ingestion a 92-second job rather than a transliteration-bound one.
+
+    This is the project's single DCS IAST -> SLP1 conversion point, which is why the
+    normalisation lives here: putting it in the ingestion script would leave every other
+    caller of `build_gold_sentence` converting `ṁ` to itself.
     """
-    return to_slp1(iast, "iast")
+    return to_slp1(normalise_iast(iast), "iast")
 
 
 # ------------------------------------------------------------------------------ alignment

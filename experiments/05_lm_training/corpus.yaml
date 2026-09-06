@@ -72,6 +72,34 @@ heldout_parallel:
     split_jsonl: data/processed/split/flores_devtest.jsonl
     corpus: {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
 
+# --- Track 2 sample (`--sample`) -------------------------------------------------------
+#
+#   uv run python experiments/05_lm_training/build_corpus.py --config \
+#       experiments/05_lm_training/corpus.yaml --sample
+#
+# Track 2 is 1.02 G tokens and the outline budgets ~200 M (docs/decisions.md, 2026-09-05,
+# "Track 2 budget"). `--sample` subsets the already-written `track2_raw.txt` rather than
+# rebuilding it, so the sample inherits both leakage layers, the deduplication and the
+# quality filter unchanged, and every arm trains on exactly the same bytes.
+#
+# Calibrated, not predicted. A first run at 926,000,000 bytes measured 246,005,664
+# tokens under `T1_bpe_raw_64k_dcs` — 3.7638 bytes/token overall, but 4.7332 over the
+# sources kept in full (48,131,611 bytes, 10,168,999 tokens) and 3.7220 over Sangraha,
+# which is what a byte budget has to be set against. 200 M tokens is therefore
+# 48,131,611 + (200,000,000 - 10,168,999) x 3.7220 = 754,686,113 bytes, rounded up. The
+# re-run at this value measured 200,096,083 tokens. The manifest always records the
+# counts actually achieved, by streaming encode, never these predictions.
+track2_sample_bytes: 755000000
+
+# Sources sampled rather than kept whole. Everything not named here — DCS, Sāmayik,
+# Itihāsa, Wikipedia, ~14 M bytes in total — is kept in full: they are the clean part of
+# M1 and there is no budget reason to thin them.
+track2_sample_sampled_sources:
+  - sangraha_verified_san
+
+# Seed for the per-line Bernoulli draw. Uniform over the whole of Sangraha, not a prefix.
+track2_sample_seed: 0
+
 # The arm each corpus's "≈ tokens available" figure is counted under. Track 1's raw
 # baseline, so the number is directly comparable to the token budgets the sweep will set.
 token_count_arm: T1_bpe_raw_64k_dcs

@@ -24,6 +24,7 @@ from sanskrit_tok.data.boundaries import (
     align_segments,
     build_gold_sentence,
     mark,
+    normalise_iast,
     stem_boundary,
     stem_boundary_lcp,
     stem_cut_inside_lemma,
@@ -46,6 +47,7 @@ from sanskrit_tok.data.exclusion import (
     sentence_hash,
     sentence_hash_slp1,
 )
+from sanskrit_tok.data.quality import is_clean_slp1
 from sanskrit_tok.encoding import to_slp1
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -623,12 +625,19 @@ def test_ingest_shingle_filter_drops_a_repunctuated_training_sentence(
 ) -> None:
     """The same fixture under a second `text_id`, with the first held out: the training
     copy is dropped by the *hash* layer, and a re-punctuated evaluation sentence drops the
-    rest by shingle overlap."""
+    rest by shingle overlap.
+
+    The re-punctuation is a trailing danda, which `letters_only` removes: the two copies of
+    the sentence therefore hash differently and shingle identically, which is exactly the
+    case the second layer exists for. (It used to be spelled by writing the anusvāra `ṁ`
+    instead of `ṃ`; `boundaries.normalise_iast` now folds those together before conversion,
+    so that spelling no longer produces two hashes.)"""
+    text_line = "# text = pratītyajānāṃ bhāvānāṃ naiḥsvābhāvyaṃ jagāda yaḥ"
     twin = tmp_path / "twin.conllu"
     twin.write_text(
         FIXTURE.read_text(encoding="utf-8")
         .replace("## text_id: 415", "## text_id: 999")
-        .replace("pratītyajānāṃ", "pratītyajānāṁ"),  # a different hash, the same letters
+        .replace(text_line, text_line + " |"),  # a different hash, the same letters
         encoding="utf-8",
     )
     out_dir = tmp_path / "dcs"
@@ -645,6 +654,73 @@ def test_ingest_shingle_filter_drops_a_repunctuated_training_sentence(
     assert manifest["splits"]["heldout"]["n_sentences"] == 3
     assert manifest["n_dropped_shingle"] >= 1
     assert manifest["n_dropped_shingle_per_source"]["dcs_heldout"] >= 1
+
+
+def test_normalise_iast_folds_the_dot_above_anusvara() -> None:
+    """`ṁ` is `ṃ`: the same phoneme in the same notation, spelled two ways in DCS.
+
+    `indic_transliteration` maps only `ṃ`, so without this `ṁ` reaches the SLP1 text
+    unchanged and is a character no arm's vocabulary can spell. 1,119 DCS sentences
+    carried one.
+    """
+    assert normalise_iast("saṁskṛta") == "saṃskṛta"
+    assert to_slp1(normalise_iast("saṁskṛta"), "iast") == to_slp1("saṃskṛta", "iast")
+    # Nothing else is touched.
+    assert normalise_iast("pratītyajānāṃ bhāvānāṃ") == "pratītyajānāṃ bhāvānāṃ"
+
+
+def test_ingest_drops_a_sentence_with_an_unspellable_character_from_both_splits(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """A `ﾱ` in the source survives transliteration, so the sentence carrying it goes.
+
+    It is dropped from the **held-out** split too, unlike a leakage hit: the held-out text
+    is the bits-per-character denominator, and a character no vocabulary can spell would
+    make every arm's BPC partly a measure of how it handles mojibake.
+    """
+    text = FIXTURE.read_text(encoding="utf-8")
+    original = "# text = taṃ namāmy asamajñānam acintyam anidarśanam"
+    assert original in text
+    damaged = tmp_path / "damaged.conllu"
+    damaged.write_text(text.replace(original, original + " ﾱ"), encoding="utf-8")
+
+    manifest = ingest_module.ingest(
+        conllu_dir=tmp_path,
+        out_dir=tmp_path / "dcs",
+        excluded=frozenset(),
+        heldout_fraction=1.0,  # everything is held out, so the drop cannot be a leakage drop
+        seed=0,
+        min_words=2,
+        files=[damaged],
+    )
+    assert manifest["n_dropped_non_slp1"] == 1
+    assert manifest["splits"]["heldout"]["n_sentences"] == 2
+    written = [
+        json.loads(line)
+        for line in (tmp_path / "dcs" / "heldout.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert all(is_clean_slp1(record["text_slp1"]) for record in written)
+
+
+def test_ingest_keeps_a_dot_above_anusvara_sentence_by_normalising_it(
+    tmp_path: Path, ingest_module: ModuleType
+) -> None:
+    """The same sentence spelled with `ṁ` is kept, not dropped as unspellable."""
+    text = FIXTURE.read_text(encoding="utf-8")
+    respelled = tmp_path / "respelled.conllu"
+    respelled.write_text(text.replace("ṃ", "ṁ"), encoding="utf-8")
+
+    manifest = ingest_module.ingest(
+        conllu_dir=tmp_path,
+        out_dir=tmp_path / "dcs",
+        excluded=frozenset(),
+        heldout_fraction=1.0,
+        seed=0,
+        min_words=2,
+        files=[respelled],
+    )
+    assert manifest["n_dropped_non_slp1"] == 0
+    assert manifest["splits"]["heldout"]["n_sentences"] == 3
 
 
 def test_ingest_records_both_stem_rules(tmp_path: Path, ingest_module: ModuleType) -> None:
