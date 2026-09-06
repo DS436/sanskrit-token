@@ -88,6 +88,7 @@ from sanskrit_tok.data.quality import (
     QUALITY_RULES,
     check_quality,
     is_clean_slp1,
+    normalise_typographic_punctuation,
 )
 from sanskrit_tok.data.sangraha import (
     SANGRAHA_LICENCE,
@@ -219,13 +220,20 @@ def write_lines(path: Path, lines: Iterable[str]) -> CorpusStats:
 
 
 def normalise_line(text: str) -> str:
-    """`text` with every run of whitespace collapsed to one space, and stripped.
+    """`text` with typographic punctuation made ASCII, whitespace collapsed, and stripped.
 
     The corpora are newline-delimited files, so a line may not contain a line break; and a
     sentence that differs from another only in its spacing is the same sentence for
     deduplication. Collapsing here is what makes both true of every source at once.
+
+    `normalise_typographic_punctuation` is applied in the same place, and for the same
+    reason: this is the one funnel every source line and every held-out line passes
+    through, so a curly quote cannot reach `is_clean_slp1` by a path that forgot about it
+    (docs/decisions.md, 2026-09-06). The Devanagari-source path normalises *before*
+    `check_quality` as well — see `_Filter.accept` — because those lines are transliterated
+    inside the quality check and never reach this function un-transliterated.
     """
-    return " ".join(text.split())
+    return " ".join(normalise_typographic_punctuation(text).split())
 
 
 def line_digest(line: str) -> int:
@@ -372,7 +380,9 @@ class _Filter:
         """
         self._counts.n_in[source] += 1
         if source in DEVANAGARI_SOURCES:
-            result = check_quality(item)
+            # Before `check_quality`, which transliterates: `to_slp1` passes a curly quote
+            # through unchanged and `is_clean_slp1` would then drop the line for it.
+            result = check_quality(normalise_typographic_punctuation(item))
             if not result.ok:
                 assert result.rule is not None
                 self._counts.n_dropped_quality[source] += 1
@@ -1071,6 +1081,56 @@ def build(
     return manifest
 
 
+def build_heldout(config: Mapping[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    """Rewrite only the held-out texts, and patch them into the existing `manifest.json`.
+
+    The held-out files are minutes to build and the training corpora are an hour, so a
+    change that affects only what evaluation text is admissible — the typographic-punctuation
+    normalisation of docs/decisions.md, 2026-09-06 — does not justify rebuilding M1. The two
+    are independent by construction: no held-out line is filtered against a corpus and no
+    corpus line is filtered against a held-out *file* (the shingle index is built from the
+    evaluation jsonl, not from these texts), so a rebuild of one cannot invalidate the other.
+
+    The manifest is *patched*, not rewritten: `corpora` still describes the files on disk
+    and must not be replaced by a build that did not write them. `heldout`,
+    `heldout_dropped` and a `heldout_rebuilt` note are replaced, so the manifest never
+    claims a drop count the files do not have.
+    """
+    resolved_root = repo_root() if root is None else root
+    out_dir = resolve_path(str(config["out_dir"]), resolved_root)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+
+    drops: dict[str, int] = {}
+    heldout: dict[str, CorpusStats] = _dcs_heldout(config, resolved_root, out_dir, drops)
+    for entry in config.get("heldout_parallel", []):
+        heldout.update(_parallel_heldout(dict(entry), resolved_root, out_dir, drops))
+
+    heldout_manifest = {
+        name: {"path": str(out_dir / f"heldout_{name}.txt"), **asdict(stats)}
+        for name, stats in heldout.items()
+    }
+    dropped = dict(sorted(drops.items()))
+    manifest_path = out_dir / MANIFEST_FILENAME
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["heldout"] = heldout_manifest
+        manifest["heldout_dropped"] = dropped
+        manifest["heldout_rebuilt"] = {
+            "wall_seconds": round(time.monotonic() - started, 1),
+            **provenance(resolved_root),
+        }
+        manifest_path.write_text(
+            json.dumps(sanitize_json(manifest), ensure_ascii=False, indent=2, allow_nan=False)
+            + "\n",
+            encoding="utf-8",
+        )
+        logger.info("patched the held-out sections of %s", manifest_path)
+    else:
+        logger.warning("%s does not exist; held-out files written but not recorded", manifest_path)
+    return {"heldout": heldout_manifest, "heldout_dropped": dropped}
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1088,9 +1148,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             "the config's track2_sample_bytes budget"
         ),
     )
+    parser.add_argument(
+        "--heldout-only",
+        action="store_true",
+        help=(
+            "do not rebuild the corpora: rewrite only the held-out texts and patch their "
+            "sections of the existing manifest"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.sample and args.heldout_only:
+        parser.error("--sample and --heldout-only do different things; pass one of them")
 
     config = load_config(args.config)
+    if args.heldout_only:
+        entry = build_heldout(config)
+        logger.info(
+            "held-out texts: %s",
+            ", ".join(f"{name}={stats['n_out']}" for name, stats in entry["heldout"].items()),
+        )
+        logger.info(
+            "held-out dropped: %s",
+            ", ".join(f"{name}={count}" for name, count in entry["heldout_dropped"].items())
+            or "none",
+        )
+        return 0
     if args.sample:
         entry = build_sample(config)
         logger.info(

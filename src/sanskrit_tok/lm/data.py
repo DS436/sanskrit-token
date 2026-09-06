@@ -45,6 +45,7 @@ __all__ = [
     "CHUNK_LINES",
     "EncodedCorpus",
     "TokenisedText",
+    "arm_fingerprint",
     "dtype_for",
     "encode_corpus",
     "ensure_encoded_corpus",
@@ -80,6 +81,14 @@ class EncodedCorpus:
     `eos_id` is `None` for a stream with no separators, in which case `logical_vocab` is
     just the arm's vocabulary. `source_sha256` is of the corpus file's bytes, so a cached
     `.bin` can be told apart from one built before the corpus was rebuilt.
+
+    `arm_source_id`, `arm_vocab_size` and `arm_sha256` identify the *tokenizer* the same
+    way `source_sha256` identifies the text. The arm name alone does not: a file-backed arm
+    is whatever `tokenizer.json` currently sits at its path, and re-training a vocabulary
+    leaves the name unchanged while changing every id in the `.bin`. `arm_sha256` is the
+    digest of that file when `source_id` names one and `None` otherwise (an off-the-shelf
+    or byte-level arm has no file to hash, and its `source_id` plus `vocab_size` are the
+    whole of its identity).
     """
 
     bin_path: Path
@@ -94,6 +103,9 @@ class EncodedCorpus:
     n_lines: int
     eos_id: int | None
     logical_vocab: int
+    arm_source_id: str = ""
+    arm_vocab_size: int = 0
+    arm_sha256: str | None = None
 
     @property
     def bytes_per_token(self) -> float:
@@ -141,6 +153,25 @@ def eos_id_for(arm: LoadedTokenizer) -> int:
     (256 + 1 for `T7_byt5`, 64000 + 1 for a 64k arm).
     """
     return arm.vocab_size
+
+
+def arm_fingerprint(arm: LoadedTokenizer) -> tuple[str, int, str | None]:
+    """`(source_id, vocab_size, tokenizer-file sha256 or None)` — what a `.bin` was built by.
+
+    The third element is the digest of `arm.source_id` when that names an existing file, so
+    a re-trained `T1_bpe_raw_64k_dcs` invalidates the cached encoding of a corpus even
+    though its arm name, its vocabulary size and the corpus itself are all unchanged. For
+    an arm whose `source_id` is a model id, a tiktoken encoding name or `"bytes/utf-8"`
+    there is no file, and `None` records that rather than pretending to a digest.
+    """
+    path = Path(arm.source_id)
+    digest: str | None = None
+    try:
+        if path.is_file():
+            digest = _sha256_file(path)
+    except OSError:  # pragma: no cover - an unreadable path is simply not a file digest
+        digest = None
+    return arm.source_id, arm.vocab_size, digest
 
 
 def dtype_for(logical_vocab: int) -> str:
@@ -231,6 +262,7 @@ def encode_corpus(
     if n_tokens == 0:
         raise ValueError(f"{corpus_path} produced no tokens; is it empty?")
 
+    arm_source_id, arm_vocab_size, arm_sha256 = arm_fingerprint(arm)
     encoded = EncodedCorpus(
         bin_path=out_path,
         meta_path=meta_path_for(out_path),
@@ -244,6 +276,9 @@ def encode_corpus(
         n_lines=n_lines,
         eos_id=eos_id,
         logical_vocab=logical_vocab,
+        arm_source_id=arm_source_id,
+        arm_vocab_size=arm_vocab_size,
+        arm_sha256=arm_sha256,
     )
     encoded.meta_path.write_text(
         json.dumps(encoded.to_meta(), indent=2) + "\n", encoding="utf-8"
@@ -276,6 +311,13 @@ def load_encoded_corpus(bin_path: Path) -> EncodedCorpus:
         n_lines=int(meta["n_lines"]),
         eos_id=None if meta["eos_id"] is None else int(meta["eos_id"]),
         logical_vocab=int(meta["logical_vocab"]),
+        # `.get`, not `[...]`: a `.meta.json` written before the arm fingerprint existed is
+        # readable, and its empty fingerprint then fails the comparison in
+        # `ensure_encoded_corpus` and forces one re-encode. That is the intended behaviour
+        # — such a file cannot prove which tokenizer built it.
+        arm_source_id=str(meta.get("arm_source_id", "")),
+        arm_vocab_size=int(meta.get("arm_vocab_size", 0)),
+        arm_sha256=meta.get("arm_sha256"),
     )
 
 
@@ -288,9 +330,14 @@ def ensure_encoded_corpus(
 ) -> EncodedCorpus:
     """`encode_corpus`, skipped when `out_path` already holds exactly this encoding.
 
-    "Exactly this" is the arm name, the EOS id and the source file's sha256 — so a rebuilt
-    corpus, a different arm or a change of separator all force a re-encode, while a sweep
-    that runs three seeds of the same arm encodes once. A `.meta.json` that cannot be read
+    "Exactly this" is the arm's **identity** — its name, its `source_id`, its `vocab_size`
+    and the sha256 of its `tokenizer.json` where it has one (`arm_fingerprint`) — plus the
+    EOS id and the source file's sha256. The arm name alone is not enough: `T1_bpe_raw_64k`
+    means whichever tokenizer currently sits at that path, and re-training a vocabulary
+    changes every id in the `.bin` while leaving the name identical, so a name-keyed cache
+    would silently train the next run on the previous vocabulary's ids. Any mismatch
+    re-encodes and says which key differed at WARNING level, because a stale cache that is
+    *found* is more dangerous than one that is missing. A `.meta.json` that cannot be read
     is treated as absent rather than fatal.
     """
     meta_path = meta_path_for(out_path)
@@ -300,14 +347,28 @@ def ensure_encoded_corpus(
         except (json.JSONDecodeError, KeyError, OSError):
             logger.warning("%s: unreadable meta, re-encoding", meta_path)
         else:
-            if (
-                cached.arm == arm.name
-                and cached.eos_id == eos_id
-                and cached.source_sha256 == _sha256_file(corpus_path)
-            ):
+            source_id, vocab_size, arm_sha256 = arm_fingerprint(arm)
+            differences = [
+                name
+                for name, was, now in (
+                    ("arm", cached.arm, arm.name),
+                    ("arm_source_id", cached.arm_source_id, source_id),
+                    ("arm_vocab_size", cached.arm_vocab_size, vocab_size),
+                    ("arm_sha256", cached.arm_sha256, arm_sha256),
+                    ("eos_id", cached.eos_id, eos_id),
+                    ("source_sha256", cached.source_sha256, _sha256_file(corpus_path)),
+                )
+                if was != now
+            ]
+            if not differences:
                 logger.info("%s: reusing encoded corpus %s", arm.name, out_path)
                 return cached
-            logger.info("%s: encoded corpus %s is stale, re-encoding", arm.name, out_path)
+            logger.warning(
+                "%s: encoded corpus %s is stale (%s changed), re-encoding",
+                arm.name,
+                out_path,
+                ", ".join(differences),
+            )
     return encode_corpus(arm, corpus_path, out_path, eos_id=eos_id)
 
 
@@ -389,6 +450,14 @@ def iter_batches(
             ).astype(np.int64)
         )
         if device is not None and device != "cpu":
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            if device.startswith("cuda"):
+                # `non_blocking` only overlaps the copy with compute when the source is
+                # page-locked; from ordinary pageable memory it is a synchronous copy with
+                # the flag ignored. Pinning is a CUDA notion — on MPS the allocator has no
+                # page-locked pool, so the pair is a plain blocking `.to()` there.
+                x = x.pin_memory().to(device, non_blocking=True)
+                y = y.pin_memory().to(device, non_blocking=True)
+            else:
+                x, y = x.to(device), y.to(device)
         yield x, y
 

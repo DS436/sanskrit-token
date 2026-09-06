@@ -12,12 +12,14 @@ import pytest
 from sanskrit_tok.data.quality import (
     MIN_LETTER_FRACTION,
     QUALITY_RULES,
+    TYPOGRAPHIC_PUNCTUATION,
     check_quality,
     has_latin,
     is_clean_slp1,
     looks_hindi,
     mean_word_length,
     normalise_source,
+    normalise_typographic_punctuation,
     passes_quality,
     real_words,
     slp1_letter_fraction,
@@ -189,3 +191,54 @@ def test_check_quality_carries_the_slp1_text_of_a_line_it_transliterated() -> No
 def test_vedic_accents_do_not_by_themselves_drop_a_line() -> None:
     """The whole point of `normalise_source`: an accented Ṛgvedic line is good Sanskrit."""
     assert passes_quality("अ॑ग्निमी॒ळे पुरोहितं यज्ञस्य देवमृत्विजम् ।") == (True, None)
+
+
+# ------------------------------------------------- typographic punctuation normalisation
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("‘tat’", "'tat'"),
+        ("‚tat’", "'tat'"),
+        ("“tat”", '"tat"'),
+        ("„tat”", '"tat"'),
+        ("a–b", "a-b"),
+        ("a—b", "a-b"),
+        ("a‒b", "a-b"),
+        ("tat…", "tat..."),
+        ("tat\u00a0api", "tat api"),  # non-breaking space
+        ("tat api", "tat api"),
+        ("", ""),
+    ],
+)
+def test_normalise_typographic_punctuation(text: str, expected: str) -> None:
+    assert normalise_typographic_punctuation(text) == expected
+
+
+def test_normalise_typographic_punctuation_is_idempotent() -> None:
+    once = normalise_typographic_punctuation("“tat—api…”")
+    assert normalise_typographic_punctuation(once) == once
+
+
+def test_normalise_typographic_punctuation_leaves_devanagari_and_slp1_alone() -> None:
+    assert normalise_typographic_punctuation("नृपः नगरं गच्छति ।") == "नृपः नगरं गच्छति ।"
+    assert normalise_typographic_punctuation("nfpaH nagaraM gacCati .") == "nfpaH nagaraM gacCati ."
+
+
+def test_normalise_typographic_punctuation_makes_a_curly_quoted_line_clean() -> None:
+    """The whole point: these lines were dropped by `is_clean_slp1` for their typesetting."""
+    line = "“nfpaH nagaraM gacCati” — iti"
+    assert not is_clean_slp1(line)
+    assert is_clean_slp1(normalise_typographic_punctuation(line))
+
+
+def test_normalise_typographic_punctuation_does_not_rescue_a_non_slp1_letter() -> None:
+    """A candra vowel has no SLP1 phoneme; normalisation must not silently drop it."""
+    line = normalise_typographic_punctuation("“kaॉ”")
+    assert not is_clean_slp1(line)
+
+
+def test_typographic_table_maps_only_punctuation() -> None:
+    assert not any(character.isalpha() for character in TYPOGRAPHIC_PUNCTUATION)
+    assert not any(replacement.isalpha() for replacement in TYPOGRAPHIC_PUNCTUATION.values())

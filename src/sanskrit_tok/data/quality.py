@@ -31,6 +31,12 @@ on its SLP1 form, because each is only expressible on one side:
 6. `mean_word_length` — a line of run-together OCR (one 60-character "word") or of
    scattered fragments (`k z a`) has a mean far outside the observed 7.97.
 
+Before any of that, `normalise_typographic_punctuation` maps curly quotes, en/em dashes,
+the ellipsis and the non-breaking space to their ASCII equivalents. It is called by
+`build_corpus.py` on every source line and every held-out line rather than from inside
+`check_quality`, because the held-out texts are already SLP1 and never see the rules above,
+and they are exactly where the un-normalised characters were doing damage.
+
 Then `is_clean_slp1`, which is applied to *every* corpus line, not only the web sources:
 anything left outside the SLP1 alphabet, ASCII digits, ASCII punctuation and the space is
 a character no arm's vocabulary should have to spend an id on. It is what removes the
@@ -60,6 +66,7 @@ __all__ = [
     "QUALITY_RULES",
     "SLP1_LETTERS",
     "STRIPPED_DEVANAGARI_SIGNS",
+    "TYPOGRAPHIC_PUNCTUATION",
     "QualityResult",
     "check_quality",
     "has_latin",
@@ -67,6 +74,7 @@ __all__ = [
     "looks_hindi",
     "mean_word_length",
     "normalise_source",
+    "normalise_typographic_punctuation",
     "passes_quality",
     "real_words",
     "slp1_letter_fraction",
@@ -119,6 +127,29 @@ HINDI_MARKERS: Final[frozenset[str]] = frozenset(
         "हो",
     }
 )
+
+#: Typographic punctuation and the ASCII it stands for. Every one of these is a *typesetting*
+#: variant of a character SLP1 already admits — curly quotes for `'` and `"`, en/em/figure
+#: dashes for `-`, the ellipsis for three dots, the non-breaking space for a space — so
+#: mapping them loses no information about the Sanskrit while keeping the line inside the
+#: alphabet `is_clean_slp1` enforces. Nothing that is a *letter* appears here: a candra
+#: vowel has no SLP1 phoneme and its line is still dropped (docs/decisions.md, 2026-09-06,
+#: "Typographic punctuation normalised to ASCII before the SLP1-cleanliness check").
+TYPOGRAPHIC_PUNCTUATION: Final[dict[str, str]] = {
+    "‘": "'",  # ' left single quotation mark
+    "’": "'",  # ' right single quotation mark (also the apostrophe of edited prose)
+    "‚": "'",  # ‚ single low-9 quotation mark
+    "“": '"',  # " left double quotation mark
+    "”": '"',  # " right double quotation mark
+    "„": '"',  # „ double low-9 quotation mark
+    "–": "-",  # – en dash
+    "—": "-",  # — em dash
+    "‒": "-",  # ‒ figure dash
+    "…": "...",  # … horizontal ellipsis
+    " ": " ",  # non-breaking space
+}
+
+_TYPOGRAPHIC_TABLE: Final = str.maketrans(TYPOGRAPHIC_PUNCTUATION)
 
 #: Calibrated on the review's 201-line sample (docs/decisions.md, 2026-09-05).
 MIN_LETTER_FRACTION: Final = 0.85
@@ -216,6 +247,25 @@ def looks_hindi(line: str, min_markers: int = 2) -> bool:
             if len(found) >= min_markers:
                 return True
     return False
+
+
+def normalise_typographic_punctuation(text: str) -> str:
+    """`text` with every `TYPOGRAPHIC_PUNCTUATION` character replaced by its ASCII form.
+
+    Applied to every corpus line and every held-out line *before* transliteration, and
+    therefore on either side of it: the characters are script-neutral, `to_slp1` passes
+    them through unchanged, and a line that reaches `is_clean_slp1` still carrying a curly
+    quote is dropped for a reason that has nothing to do with its Sanskrit. On the
+    out-of-domain evaluation sets that reason accounted for 13.9% (Sāmayik `test_ood`) and
+    10.7% (FLORES devtest) of all lines, which made Experiment 05's held-out sets proper
+    subsets of the ones Experiments 02–03 measured on.
+
+    Not a general Unicode normal form and not NFKC: only the eleven characters listed are
+    touched, so nothing that carries phonemic information is rewritten. `…` becomes three
+    dots, which lengthens the line by two characters — the BPC denominator counts the text
+    as written to disk, and every arm sees the same text, so the convention is uniform.
+    """
+    return text.translate(_TYPOGRAPHIC_TABLE)
 
 
 def normalise_source(devanagari_line: str) -> str:

@@ -31,7 +31,13 @@ from collections.abc import Sequence
 
 from sanskrit_tok.tokenizers.base import MetricResult
 
-__all__ = ["BITS_PER_NAT", "BpcResult", "bits_per_char", "bpc_from_token_nll"]
+__all__ = [
+    "BITS_PER_NAT",
+    "BpcResult",
+    "bits_per_char",
+    "bpc_from_token_nll",
+    "bpc_from_total",
+]
 
 #: Nats to bits: `1 / ln 2`. Named so the conversion is never re-typed as `1.4427`.
 BITS_PER_NAT = 1.0 / math.log(2.0)
@@ -110,6 +116,43 @@ def bpc_from_token_nll(
         "total_nats": total_nats,
         "n_tokens": len(token_nll),
         "bits_per_token": total_nats * BITS_PER_NAT / len(token_nll),
+    }
+    if n_bytes is not None:
+        if n_bytes <= 0:
+            raise ValueError(f"n_bytes must be positive when given, got {n_bytes}")
+        result["bits_per_byte"] = total_nats * BITS_PER_NAT / n_bytes
+        result["n_bytes"] = n_bytes
+    return result
+
+
+def bpc_from_total(
+    total_nats: float, n_tokens: int, n_chars: int, n_bytes: int | None = None
+) -> BpcResult:
+    """The same `BpcResult` as `bpc_from_token_nll`, from an already-summed total.
+
+    An evaluator that runs a model over held-out text has the *sum* of the token negative
+    log-likelihoods and the number of tokens it summed, not a value per token: a batched
+    `cross_entropy` with `reduction="sum"` produces one number for thousands of positions.
+    Reconstructing a per-token sequence to hand to `bpc_from_token_nll` — spreading the
+    total evenly and summing it again — is arithmetic that can only lose precision and
+    allocate memory, so this is the entry point `train.evaluate_bpc` uses and
+    `bpc_from_token_nll` is the one a hand-computed test uses.
+
+    `total_nats` must be non-negative and `n_tokens` positive, for the same reasons
+    `bpc_from_token_nll` requires them.
+    """
+    if n_tokens <= 0:
+        raise ValueError(
+            f"n_tokens must be positive, got {n_tokens}: a BPC over no token predictions "
+            "is undefined"
+        )
+    result: BpcResult = {
+        "value": bits_per_char(total_nats, n_chars),
+        "n": n_chars,
+        "unit": "bits/char",
+        "total_nats": float(total_nats),
+        "n_tokens": n_tokens,
+        "bits_per_token": total_nats * BITS_PER_NAT / n_tokens,
     }
     if n_bytes is not None:
         if n_bytes <= 0:

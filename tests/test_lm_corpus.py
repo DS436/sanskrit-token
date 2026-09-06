@@ -801,3 +801,49 @@ def test_write_lines_reports_chars_bytes_and_digest(tmp_path: Path) -> None:
     assert stats.n_bytes == stats.n_chars
     assert path.read_text(encoding="utf-8") == "rAmaH vanam\nsItA gfhe\n"
     assert len(stats.sha256) == 64
+
+
+# ------------------------------------------------ held-out rebuild and typographic ASCII
+
+
+def test_build_heldout_rewrites_the_heldout_files_and_leaves_the_corpora_alone(
+    corpus_case: dict[str, Any],
+) -> None:
+    """`--heldout-only`: the evaluation text is rebuilt, M1 is not, the manifest agrees."""
+    tmp_path = corpus_case["tmp_path"]
+    manifest = build_corpus.build(corpus_case["config"], root=tmp_path, shingle_indices={})
+    out = tmp_path / "lm"
+    track1_sha = manifest["corpora"]["track1_raw"]["sha256"]
+    (out / "track1_raw.txt").write_text("not rebuilt\n", encoding="utf-8")
+    (out / "heldout_dcs.txt").unlink()
+
+    entry = build_corpus.build_heldout(corpus_case["config"], root=tmp_path)
+
+    assert _read_lines(out / "heldout_dcs.txt") == ["guruH CAtrAn pAWayati", "vAyuH vahati"]
+    assert (out / "track1_raw.txt").read_text(encoding="utf-8") == "not rebuilt\n"
+    patched = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert patched["corpora"]["track1_raw"]["sha256"] == track1_sha
+    assert patched["heldout"] == entry["heldout"]
+    assert patched["heldout_dropped"] == entry["heldout_dropped"]
+    assert "heldout_rebuilt" in patched
+
+
+def test_heldout_text_keeps_a_line_whose_only_defect_was_its_typesetting(
+    corpus_case: dict[str, Any],
+) -> None:
+    """A curly-quoted, em-dashed held-out line survives as ASCII instead of being dropped."""
+    tmp_path = corpus_case["tmp_path"]
+    heldout_path = tmp_path / "dcs" / "heldout.jsonl"
+    records = [json.loads(line) for line in _read_lines(heldout_path) if line.strip()]
+    records.append(
+        {
+            "text_slp1": "“vAyuH vahati” — iti…",
+            "oracle_split_slp1": "“vAyuH vahati” — iti…",
+        }
+    )
+    _write_jsonl(heldout_path, records)
+
+    build_corpus.build_heldout(corpus_case["config"], root=tmp_path)
+
+    lines = _read_lines(tmp_path / "lm" / "heldout_dcs.txt")
+    assert lines[-1] == '"vAyuH vahati" - iti...'

@@ -16,12 +16,27 @@ counted exactly once, and the total surprise is divided by the text's SLP1 chara
 lines for every arm, a constant handicap that cancels in every comparison, and excluding
 them would reward an arm for being bad at sentence boundaries.
 
+**The softmax runs over the logical vocabulary, in training and in evaluation alike.** The
+embedding is padded up to a multiple of 64 for kernel shapes (`config.round_up_vocab`), so
+a byte arm's 257 ids live in a 320-row table and 63 rows exist that no id ever names. Left
+alone they still sit in the softmax denominator, and a freshly initialised model then
+scores `ln(320)` nats per token instead of `ln(257)` — 3.7% of probability mass leaked to
+ids that cannot occur, straight into the reported BPC, and by an amount that depends on how
+far each arm's vocabulary happens to sit from a multiple of 64. `_masked_logits` sets those
+columns to `-inf` before the loss, so the distribution is over the logical vocabulary
+exactly. Training is masked too: the padded rows are never targets, but without the mask
+they receive gradient through the denominator and the model spends capacity pushing down
+ids it will never be scored on. The cost is that the loss is computed here rather than
+taken from vendored nanoGPT's `forward`, whose own (unmasked) loss is discarded.
+
 **Resume is not a convenience.** A Track 2 run is hours long and this project's numbers must
 survive a laptop lid closing, so the checkpoint holds the optimiser state, the step counter,
-the tokens and bytes consumed, the elapsed seconds, and the batch sampler's own RNG state —
-resuming continues the same stream of batches, not a fresh one. `curve.jsonl` is truncated
-back to the checkpoint's step on resume, so a run that died between an eval and a checkpoint
-does not leave two rows for one step.
+the tokens and bytes consumed, the elapsed seconds, the batch sampler's own RNG state and
+torch's global generator states (CPU, and CUDA/MPS where they exist) — resuming continues
+the same stream of batches and the same stream of every other random draw, not a fresh one.
+`curve.jsonl` is truncated back to the checkpoint's step on resume, and emptied on a start
+that is *not* a resume, so neither a crash between an eval and a checkpoint nor a re-used
+run directory can leave two rows for one step.
 
 **Parameters are counted twice, on purpose.** `non_embedding` excludes both `wte` and `wpe`,
 which is what makes 50M mean the same transformer body for a 256-id byte arm and a 64k BPE
@@ -31,6 +46,7 @@ Both are in `results.json`, along with which one the estimate used.
 """
 
 import argparse
+import io
 import json
 import logging
 import math
@@ -38,17 +54,19 @@ import platform
 import random
 import sys
 import time
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 
 from sanskrit_tok.experiment import load_config, provenance, write_results
-from sanskrit_tok.lm.bpc import BpcResult, bpc_from_token_nll
+from sanskrit_tok.lm.bpc import BpcResult, bpc_from_total
 from sanskrit_tok.lm.config import (
     TrainConfig,
     device_display_name,
@@ -74,6 +92,7 @@ __all__ = [
     "evaluate_bpc",
     "learning_rate_at",
     "main",
+    "masked_cross_entropy",
     "seed_everything",
     "train",
 ]
@@ -186,7 +205,8 @@ def build_model(config: TrainConfig, logical_vocab: int) -> GPT:
         dropout=config.dropout,
         bias=config.bias,
     )
-    return GPT(model_config)  # type: ignore[no-untyped-call]
+    with _vendor_stdout_to_log():
+        return GPT(model_config)  # type: ignore[no-untyped-call]
 
 
 def learning_rate_at(step: int, config: TrainConfig, total_steps: int) -> float:
@@ -210,6 +230,60 @@ def _autocast(device: str, dtype_name: str) -> AbstractContextManager[Any]:
     return torch.autocast(device_type=device, dtype=_TORCH_DTYPES[dtype_name])
 
 
+@contextmanager
+def _vendor_stdout_to_log() -> Iterator[None]:
+    """Route the vendored model's `print`s into this module's logger.
+
+    `model.py` is nanoGPT byte-for-byte and prints its parameter count and its optimiser
+    grouping to stdout. CLAUDE.md §8 wants logging, not prints, and a sweep that redirects
+    stdout to a file otherwise interleaves those lines with nothing to say which run they
+    belong to. The file itself is not edited — its sha256 is the provenance record — so the
+    stream is captured here instead.
+    """
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        yield
+    for line in buffer.getvalue().splitlines():
+        if line.strip():
+            logger.info("nanoGPT: %s", line.strip())
+
+
+def _masked_logits(logits: torch.Tensor, logical_vocab: int) -> torch.Tensor:
+    """`logits` with every column at or above `logical_vocab` set to `-inf`, in place.
+
+    The columns are the embedding's padding rows (`config.round_up_vocab`): real
+    parameters that no id ever names. `-inf` gives them exactly zero probability, so the
+    softmax normalises over the logical vocabulary and their gradient is zero rather than
+    the small negative pressure an unmasked denominator applies.
+
+    In place, deliberately: at 50M with a 64k vocabulary one logit tensor is over a
+    gigabyte and a masked copy would double the peak. It is safe because the only producer
+    of `logits` is the tied `lm_head` linear, whose backward saves its *input* and weight,
+    never its output; nothing else holds this tensor.
+    """
+    if logical_vocab < logits.size(-1):
+        logits[..., logical_vocab:] = float("-inf")
+    return logits
+
+
+def masked_cross_entropy(
+    logits: torch.Tensor, targets: torch.Tensor, logical_vocab: int, *, reduction: str = "mean"
+) -> torch.Tensor:
+    """Cross-entropy over the logical vocabulary only, ignoring `IGNORE_INDEX` targets.
+
+    The same reduction semantics as `torch.nn.functional.cross_entropy`: `"mean"` averages
+    over the non-ignored targets (what a training step wants) and `"sum"` totals them (what
+    an evaluator wants, since a mean would have to be multiplied back out).
+    """
+    masked = _masked_logits(logits, logical_vocab)
+    return F.cross_entropy(
+        masked.view(-1, masked.size(-1)),
+        targets.reshape(-1),
+        ignore_index=IGNORE_INDEX,
+        reduction=reduction,
+    )
+
+
 @torch.no_grad()
 def evaluate_bpc(
     model: GPT,
@@ -217,6 +291,7 @@ def evaluate_bpc(
     text_path: Path,
     *,
     eos_id: int,
+    logical_vocab: int,
     block_size: int,
     batch_size: int,
     device: str,
@@ -229,9 +304,14 @@ def evaluate_bpc(
     document-start marker (that prefix is context, never a target), and cut into
     non-overlapping windows of `block_size`. Every token of the text is a target exactly
     once; the final window is padded with EOS on the input side and `IGNORE_INDEX` on the
-    target side so the padding contributes nothing. The summed nats go to `bpc_from_token_nll`
+    target side so the padding contributes nothing. The summed nats go to `bpc_from_total`
     over the text's character and byte counts — see the module docstring for why the EOS
     tokens are charged to those characters.
+
+    The loss is computed here, from `logits`, rather than taken from the model's own
+    `forward`: the distribution has to be over `logical_vocab` ids and not over the padded
+    embedding's rows (`masked_cross_entropy`, and the module docstring). `reduction="sum"`
+    gives the batch's exact total, so nothing is multiplied back out of a mean.
     """
     tokenised = tokenise_text(arm, text_path, eos_id=eos_id, max_chars=max_chars)
     stream = np.asarray([eos_id, *tokenised.ids], dtype=np.int64)
@@ -257,10 +337,10 @@ def evaluate_bpc(
         if valid == 0:
             continue
         with _autocast(device, dtype_name):
-            _, loss = model(x, y)
-        # nanoGPT's forward reduces with `mean` over the non-ignored targets, so the sum of
-        # nats for this batch is that mean times how many targets it averaged over.
-        total_nats += float(loss.item()) * valid
+            # The model's own loss is discarded: it is a mean over the *padded* vocabulary.
+            logits = model(x, y)[0]
+            nats = masked_cross_entropy(logits, y, logical_vocab, reduction="sum")
+        total_nats += float(nats.item())
         counted += valid
     if was_training:
         model.train()
@@ -270,12 +350,8 @@ def evaluate_bpc(
             f"scored {counted} targets but the text has {n_targets} tokens; the windowing "
             "dropped or double-counted a token"
         )
-    # The model gives one mean per batch, not one nat value per token, so the sequence
-    # handed to `bpc_from_token_nll` is the exact total spread evenly over the tokens: its
-    # *sum* — the only thing BPC uses — is the measured total, and `n_tokens` is right.
-    mean_nats = total_nats / counted
-    return bpc_from_token_nll(
-        [mean_nats] * counted, tokenised.n_chars, n_bytes=tokenised.n_bytes
+    return bpc_from_total(
+        total_nats, counted, tokenised.n_chars, n_bytes=tokenised.n_bytes
     )
 
 
@@ -286,6 +362,56 @@ def _batch_rng_state(rng: np.random.Generator) -> dict[str, Any]:
 
 def _restore_batch_rng(rng: np.random.Generator, state: dict[str, Any]) -> None:
     rng.bit_generator.state = state
+
+
+def _torch_rng_states() -> dict[str, Any]:
+    """Every torch generator state this process has, for the checkpoint.
+
+    The batch sampler has its own `Generator` and is restored separately, but torch's
+    global stream is what dropout and any future initialisation draw from, so a resume that
+    restored only the batch RNG would still diverge from an uninterrupted run the moment
+    dropout was switched on. Captured on CPU (`torch.get_rng_state` returns a CPU
+    `ByteTensor`), plus the CUDA and MPS streams where the platform has them.
+    """
+    states: dict[str, Any] = {"cpu": torch.get_rng_state()}
+    if torch.cuda.is_available():
+        states["cuda"] = torch.cuda.get_rng_state_all()
+    if torch.backends.mps.is_available() and hasattr(torch.mps, "get_rng_state"):
+        states["mps"] = torch.mps.get_rng_state()
+    return states
+
+
+def _restore_torch_rng(states: dict[str, Any] | None) -> None:
+    """Put back what `_torch_rng_states` saved, skipping devices this machine lacks.
+
+    `torch.load(..., map_location=device)` moves every tensor in the checkpoint, generator
+    states included, so each is sent back to the CPU before being set — `set_rng_state`
+    wants a CPU `ByteTensor` and would otherwise raise on an MPS resume. A checkpoint
+    written before these states existed passes `None` and simply keeps the seeded stream.
+    """
+    if not states:
+        return
+    if "cpu" in states:
+        torch.set_rng_state(states["cpu"].cpu())
+    if "cuda" in states and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([state.cpu() for state in states["cuda"]])
+    if (
+        "mps" in states
+        and torch.backends.mps.is_available()
+        and hasattr(torch.mps, "set_rng_state")
+    ):
+        torch.mps.set_rng_state(states["mps"].cpu())
+
+
+def _clear_curve(curve_path: Path) -> None:
+    """Empty `curve.jsonl`, for a start that is not a resume.
+
+    A run directory can be re-used — a config edited and re-run with `resume: false`, or a
+    checkpoint deleted to start over — and appending to the previous run's curve would
+    produce a file with two rows for step 0 and a `curve_summary` mixing two trajectories.
+    The file is emptied rather than deleted so it always exists for `_summarise_curve`.
+    """
+    curve_path.write_text("", encoding="utf-8")
 
 
 def _truncate_curve(curve_path: Path, last_step: int) -> None:
@@ -336,11 +462,13 @@ def train(config: TrainConfig) -> Path:
         dtype_name,
     )
 
-    model = build_model(config, corpus.logical_vocab).to(device)
+    logical_vocab = corpus.logical_vocab
+    model = build_model(config, logical_vocab).to(device)
     params = count_parameters(model)
-    optimizer: torch.optim.Optimizer = model.configure_optimizers(  # type: ignore[no-untyped-call]
-        config.weight_decay, config.lr, (config.beta1, config.beta2), device
-    )
+    with _vendor_stdout_to_log():
+        optimizer: torch.optim.Optimizer = model.configure_optimizers(  # type: ignore[no-untyped-call]
+            config.weight_decay, config.lr, (config.beta1, config.beta2), device
+        )
     # Only CUDA ever runs in float16 here (`resolve_dtype`), and a disabled scaler is a
     # pass-through on every path; naming a device the scaler does not support would raise
     # even when disabled, so it is told "cpu" whenever it is off.
@@ -363,12 +491,16 @@ def train(config: TrainConfig) -> Path:
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
         _restore_batch_rng(batch_rng, checkpoint["batch_rng_state"])
+        _restore_torch_rng(checkpoint.get("torch_rng_state"))
         step = int(checkpoint["step"])
         tokens_seen = int(checkpoint["tokens_seen"])
         elapsed_before = float(checkpoint["elapsed_s"])
         resumed_from = step
         _truncate_curve(curve_path, step)
         logger.info("resumed %s at step %d (%d tokens seen)", ckpt_path, step, tokens_seen)
+    else:
+        # Not a resume: whatever is in this run directory belongs to a previous run.
+        _clear_curve(curve_path)
 
     batches = iter_batches(
         corpus.bin_path, config.block_size, config.batch_size, batch_rng, device=device
@@ -381,6 +513,7 @@ def train(config: TrainConfig) -> Path:
                 arm,
                 path,
                 eos_id=eos_id,
+                logical_vocab=logical_vocab,
                 block_size=config.block_size,
                 batch_size=config.eval_batch_size,
                 device=device,
@@ -404,7 +537,7 @@ def train(config: TrainConfig) -> Path:
         row: dict[str, Any] = {
             "step": at_step,
             "tokens_seen": tokens_seen,
-            "bytes_seen": int(round(tokens_seen * corpus.bytes_per_token)),
+            "bytes_seen_est": int(round(tokens_seen * corpus.bytes_per_token)),
             "epochs": tokens_seen / corpus.n_tokens,
             "flops_est": 6.0 * params.total * tokens_seen,
             "loss_train": loss if math.isfinite(loss) else None,
@@ -434,8 +567,9 @@ def train(config: TrainConfig) -> Path:
                 "tokens_seen": tokens_seen,
                 "elapsed_s": elapsed_before + (time.perf_counter() - started),
                 "batch_rng_state": _batch_rng_state(batch_rng),
+                "torch_rng_state": _torch_rng_states(),
                 "config": config.to_dict(),
-                "logical_vocab": corpus.logical_vocab,
+                "logical_vocab": logical_vocab,
             },
             ckpt_path,
         )
@@ -452,9 +586,13 @@ def train(config: TrainConfig) -> Path:
         for _ in range(config.grad_accum):
             x, y = next(batches)
             with _autocast(device, dtype_name):
-                _, loss = model(x, y)
-                loss = loss / config.grad_accum
-            scaler.scale(loss).backward()
+                # As in `evaluate_bpc`: the vendored forward's own loss is over the padded
+                # vocabulary, so it is discarded and the masked one is used instead. The
+                # padded rows are never targets, but an unmasked softmax denominator still
+                # sends them gradient, so train and eval have to agree on this.
+                logits = model(x, y)[0]
+                loss = masked_cross_entropy(logits, y, logical_vocab) / config.grad_accum
+            scaler.scale(loss).backward()  # type: ignore[no-untyped-call]
             accumulated += float(loss.item())
         if config.grad_clip > 0:
             scaler.unscale_(optimizer)
@@ -480,7 +618,11 @@ def train(config: TrainConfig) -> Path:
         save_checkpoint(step)
 
     elapsed = elapsed_before + (time.perf_counter() - started)
-    bytes_seen = int(round(tokens_seen * corpus.bytes_per_token))
+    # An *estimate*: batches are random windows of the corpus, so the exact source bytes
+    # behind them are not tracked. `tokens_seen` times the corpus's overall bytes-per-token
+    # is unbiased over the run and is what the equal-bytes budget is set against, but it is
+    # not a count of bytes actually read, hence the name.
+    bytes_seen_est = int(round(tokens_seen * corpus.bytes_per_token))
     curve_summary = _summarise_curve(curve_path, list(config.eval_sets))
 
     results: dict[str, Any] = {
@@ -493,7 +635,7 @@ def train(config: TrainConfig) -> Path:
         "resumed_from_step": resumed_from,
         "total_steps": total_steps,
         "tokens_seen": tokens_seen,
-        "bytes_seen": bytes_seen,
+        "bytes_seen_est": bytes_seen_est,
         "epochs": tokens_seen / corpus.n_tokens,
         "flops_est": 6.0 * params.total * tokens_seen,
         "loss_train_final": last_loss,
@@ -505,8 +647,8 @@ def train(config: TrainConfig) -> Path:
             "n_embd": config.model_size.n_embd,
             "n_head": config.model_size.n_head,
             "block_size": config.block_size,
-            "logical_vocab": corpus.logical_vocab,
-            "model_vocab_size": round_up_vocab(corpus.logical_vocab),
+            "logical_vocab": logical_vocab,
+            "model_vocab_size": round_up_vocab(logical_vocab),
             "dropout": config.dropout,
             "bias": config.bias,
         },
