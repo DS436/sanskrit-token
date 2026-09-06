@@ -11,6 +11,18 @@ Twelve posts, two a week (Tuesday and Thursday, morning IST), one experiment per
 - Alt text on every image (supplied below). Hashtags at the end, five at most: #NLP #Tokenization #Sanskrit #LLM #MachineLearning.
 - Reply to comments with numbers from the README, not from memory.
 
+## Before post 1: make the repository public
+
+The series only works if readers can open the repo and see the numbers. Before post 1 goes out:
+
+1. `LICENSE` at the root (MIT for the code; each data source keeps its own licence, listed in `data/README.md`).
+2. A visitor-facing `README.md`: what the project asks, a results table with one line per experiment linking to its README and figure, how to reproduce (`uv sync`, one command per experiment), what needs a download and what needs a GPU, how to cite.
+3. A tracked `results/` snapshot of every experiment's `results.json`, `config.yaml` and figures (the live `outputs/` folder stays gitignored), so results are viewable without running anything.
+4. Secrets and raw-data check: no tokens, no `data/raw` or `data/processed` files in history.
+5. Flip visibility to public and put the repo link in post 1's first comment.
+
+Post 2 then points at the decision log and the results folder as the proof that the numbers are checkable.
+
 ## Calendar
 
 | # | Day | Topic | Media |
@@ -42,7 +54,7 @@ Two claims, kept apart on purpose:
 - Claim A: Sanskrit is dense per word. True; we cite it, we don't test it.
 - Claim B: that density survives into tokens, measured per unit of meaning on parallel text. That is the experiment.
 
-Everything is open: five experiments, every number reproducible with one command, every design decision logged with its date and the alternative rejected. Repo in the comments.
+Everything is open: five experiments, every number reproducible with one command, every design decision logged with its date and the alternative rejected. The repository is public as of today; link in the first comment, results folder included so you can check any number without running anything.
 
 Over the next few weeks I'll post each experiment as it stands, including the two that came out against the hypothesis.
 
