@@ -90,44 +90,44 @@
     "n_cache_hits": 136790,
     "seconds": 74.71031883399701,
     "char_retention_definition": "non-space SLP1 characters in the output, summed over sentences, divided by non-space SLP1 characters in the raw SLP1 input, summed over the same sentences (pooled, not a mean of per-sentence ratios)",
-    "manifest_path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/split/manifest.json",
+    "manifest_path": "<repo>/data/processed/split/manifest.json",
     "manifest_git_commit": "1c0f7d8fdea297ce3ab453646e9ceb10f9a76a8e",
     "manifest_timestamp": "2026-09-04T23:30:42+00:00"
   },
   "tokenizer_sources": {
     "E1_bpe_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_bpe_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/E1_bpe_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "E1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_bpe_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/E1_bpe_32k/tokenizer.json"
       ],
       "sha256": "f639ee791e50f3e7366848b6b716c88a317570aa219c9ee121419c44f7d874ec"
     },
     "E1_bpe_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_bpe_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/E1_bpe_64k/tokenizer.json",
       "vocab_size": 64000,
       "family": "E1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_bpe_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/E1_bpe_64k/tokenizer.json"
       ],
       "sha256": "e57168ce7f9d4559a22d438013bc22ac2b532922c193b3b21143d7ec1cad4eef"
     },
     "E1_unigram_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_unigram_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/E1_unigram_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "E1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_unigram_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/E1_unigram_32k/tokenizer.json"
       ],
       "sha256": "62f737185c0ca50b61376446bb94e928b70962432444ab123be596c5b56aa70b"
     },
     "E1_unigram_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_unigram_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/E1_unigram_64k/tokenizer.json",
       "vocab_size": 62896,
       "family": "E1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/E1_unigram_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/E1_unigram_64k/tokenizer.json"
       ],
       "sha256": "b21ecf863056c0eb2d288ec298a9545255f2354f3c83289e4daaa3b6f35f9d62"
     },
@@ -140,77 +140,77 @@
       ]
     },
     "T1_bpe_raw_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T1_bpe_raw_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T1_bpe_raw_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "T1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T1_bpe_raw_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T1_bpe_raw_32k/tokenizer.json"
       ],
       "sha256": "e9ae328e26dba487da2e0a741cc8c937323f29c0ff75be0685e33ebaa987e94e"
     },
     "T1_bpe_raw_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T1_bpe_raw_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T1_bpe_raw_64k/tokenizer.json",
       "vocab_size": 64000,
       "family": "T1",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T1_bpe_raw_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T1_bpe_raw_64k/tokenizer.json"
       ],
       "sha256": "f74207d923a74ae2001b9360cda5c3de1893a4fda38b080f3694a2f4848a2cf1"
     },
     "T2_unigram_raw_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T2_unigram_raw_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T2_unigram_raw_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "T2",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T2_unigram_raw_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T2_unigram_raw_32k/tokenizer.json"
       ],
       "sha256": "09bc885de2eacebbdb46458c02fb2c09774557132112e9dd9c7335a85d105197"
     },
     "T2_unigram_raw_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T2_unigram_raw_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T2_unigram_raw_64k/tokenizer.json",
       "vocab_size": 64000,
       "family": "T2",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T2_unigram_raw_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T2_unigram_raw_64k/tokenizer.json"
       ],
       "sha256": "199e32f30ec11e76fb3a62981968f6fa2a26e041c4f19458a086e5282f82a936"
     },
     "T4_bpe_split_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_bpe_split_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T4_bpe_split_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "T4",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_bpe_split_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T4_bpe_split_32k/tokenizer.json"
       ],
       "sha256": "dbc24160f7aeaf3e46acb592a72e4c203ea4dcfc9258278b511550eb855f1153",
       "splitter_source_id": "chronbmm/sanskrit5-multitask@c0d2ada54f3d19903149425aa888a203601423f8"
     },
     "T4_bpe_split_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_bpe_split_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T4_bpe_split_64k/tokenizer.json",
       "vocab_size": 64000,
       "family": "T4",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_bpe_split_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T4_bpe_split_64k/tokenizer.json"
       ],
       "sha256": "0238c09973273ff316c58936033562b6ffb3913d0e00de8e693e4befc4d67740",
       "splitter_source_id": "chronbmm/sanskrit5-multitask@c0d2ada54f3d19903149425aa888a203601423f8"
     },
     "T4_unigram_split_32k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_unigram_split_32k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T4_unigram_split_32k/tokenizer.json",
       "vocab_size": 32000,
       "family": "T4",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_unigram_split_32k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T4_unigram_split_32k/tokenizer.json"
       ],
       "sha256": "2bac18ec09a47c0a4a6e82cf4233ea00806c25e85cccc4817810003e320474f9",
       "splitter_source_id": "chronbmm/sanskrit5-multitask@c0d2ada54f3d19903149425aa888a203601423f8"
     },
     "T4_unigram_split_64k": {
-      "source_id": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_unigram_split_64k/tokenizer.json",
+      "source_id": "<repo>/outputs/tokenizers/T4_unigram_split_64k/tokenizer.json",
       "vocab_size": 64000,
       "family": "T4",
       "attempted": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/tokenizers/T4_unigram_split_64k/tokenizer.json"
+        "<repo>/outputs/tokenizers/T4_unigram_split_64k/tokenizer.json"
       ],
       "sha256": "f744302959d9f67677b6b9997cafdfb568db58e38f0c4b43c95de0dc1bbbf03d",
       "splitter_source_id": "chronbmm/sanskrit5-multitask@c0d2ada54f3d19903149425aa888a203601423f8"

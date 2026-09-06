@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, `uv`, HF `tokenizers`, `transformers`, `tiktoken`, `numpy`, `matplotlib`, `pytest`, `ruff`, `mypy --strict`, `git` sparse checkout.
 
-Repo: /Users/devanshsharma/Desktop/Project/sanskrit-token, branch `main`, remote `origin`. Experiments 01–03 complete. Established patterns: `src/sanskrit_tok/experiment.py` (helpers), `experiments/03_sandhi_split/run.py`, `experiments/02_tpp_parallel/train_tokenizers.py` (sides, `select_training_sentences`, skip-if-trained), `src/sanskrit_tok/tokenizers/{corpus,registry,_train_common,train_bpe,train_unigram}.py`, `src/sanskrit_tok/data/exclusion.py`, `src/sanskrit_tok/sandhi/reconcile.py`.
+Repo: <repo>, branch `main`, remote `origin`. Experiments 01–03 complete. Established patterns: `src/sanskrit_tok/experiment.py` (helpers), `experiments/03_sandhi_split/run.py`, `experiments/02_tpp_parallel/train_tokenizers.py` (sides, `select_training_sentences`, skip-if-trained), `src/sanskrit_tok/tokenizers/{corpus,registry,_train_common,train_bpe,train_unigram}.py`, `src/sanskrit_tok/data/exclusion.py`, `src/sanskrit_tok/sandhi/reconcile.py`.
 
 ## Global Constraints
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, `uv`, `torch` (MPS/CUDA/CPU), `numpy`, `datasets`/`pyarrow` for parquet, HF `tokenizers`, `matplotlib`, `pytest`, `ruff`, `mypy --strict`.
 
-Repo: /Users/devanshsharma/Desktop/Project/sanskrit-token, `main`, `origin`. Experiments 01–04 complete. Patterns: `src/sanskrit_tok/experiment.py`, `experiments/04_morph_constrained/{ingest_dcs,run}.py`, `src/sanskrit_tok/data/{dcs,exclusion,parallel}.py`, `src/sanskrit_tok/tokenizers/registry.py` (`load_tokenizer`, `LoadedTokenizer.encode`, file-backed `_dcs` arms).
+Repo: <repo>, `main`, `origin`. Experiments 01–04 complete. Patterns: `src/sanskrit_tok/experiment.py`, `experiments/04_morph_constrained/{ingest_dcs,run}.py`, `src/sanskrit_tok/data/{dcs,exclusion,parallel}.py`, `src/sanskrit_tok/tokenizers/registry.py` (`load_tokenizer`, `LoadedTokenizer.encode`, file-backed `_dcs` arms).
 
 ## Global Constraints
 

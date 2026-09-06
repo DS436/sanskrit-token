@@ -1,6 +1,6 @@
 # Plan: Bootstrap repo and run Experiment 01 (baseline penalty, RQ1)
 
-Repo: /Users/devanshsharma/Desktop/Project/sanskrit-token. Branch: main (fresh repo, user consented).
+Repo: <repo>. Branch: main (fresh repo, user consented).
 Reference: CLAUDE.md §10 defines Experiment 01. This plan breaks it into six sequential tasks.
 
 ## Global Constraints (binding on every task; copied from CLAUDE.md)

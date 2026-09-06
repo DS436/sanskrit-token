@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, `uv`, HF `tokenizers` (training + loading), `transformers`, `tiktoken`, `numpy`, `matplotlib`, `pytest`, `ruff`, `mypy --strict`.
 
-Repo: /Users/devanshsharma/Desktop/Project/sanskrit-token, branch `main`, remote `origin` (github.com/DS436/sanskrit-token). Experiment 01 is complete; read `experiments/01_baseline_penalty/run.py` for the established patterns (config resolution, `results.json` shape, figure function).
+Repo: <repo>, branch `main`, remote `origin` (github.com/DS436/sanskrit-token). Experiment 01 is complete; read `experiments/01_baseline_penalty/run.py` for the established patterns (config resolution, `results.json` shape, figure function).
 
 ## Global Constraints
 

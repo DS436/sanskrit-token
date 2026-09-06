@@ -24,7 +24,7 @@
         "flops_params_kind": "total"
       },
       "corpus": {
-        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "path": "<repo>/data/processed/lm/track1_raw.txt",
         "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
         "n_tokens": 6809854,
         "n_chars": 31535529,
@@ -301,7 +301,7 @@
         }
       ],
       "run_dirs": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T1_bpe_raw_64k_dcs/seed0"
+        "<repo>/outputs/05_lm_training/smoke/track1/smoke/T1_bpe_raw_64k_dcs/seed0"
       ]
     },
     {
@@ -325,7 +325,7 @@
         "flops_params_kind": "total"
       },
       "corpus": {
-        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "path": "<repo>/data/processed/lm/track1_raw.txt",
         "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
         "n_tokens": 7103858,
         "n_chars": 31535529,
@@ -602,7 +602,7 @@
         }
       ],
       "run_dirs": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T5_morphbpe_rawseg_64k_dcs/seed0"
+        "<repo>/outputs/05_lm_training/smoke/track1/smoke/T5_morphbpe_rawseg_64k_dcs/seed0"
       ]
     },
     {
@@ -626,7 +626,7 @@
         "flops_params_kind": "total"
       },
       "corpus": {
-        "path": "/Users/devanshsharma/Desktop/Project/sanskrit-token/data/processed/lm/track1_raw.txt",
+        "path": "<repo>/data/processed/lm/track1_raw.txt",
         "sha256": "bc9f22568459a9fc9191ec7965e9b585236c6ecf0603deb2ba7823cdb6bb829f",
         "n_tokens": 32187536,
         "n_chars": 31535529,
@@ -903,11 +903,11 @@
         }
       ],
       "run_dirs": [
-        "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke/track1/smoke/T7_byt5/seed0"
+        "<repo>/outputs/05_lm_training/smoke/track1/smoke/T7_byt5/seed0"
       ]
     }
   ],
-  "output_dir": "/Users/devanshsharma/Desktop/Project/sanskrit-token/outputs/05_lm_training/smoke",
+  "output_dir": "<repo>/outputs/05_lm_training/smoke",
   "config": {
     "name": "smoke",
     "output_dir": "outputs/05_lm_training/smoke",

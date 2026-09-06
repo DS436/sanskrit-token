@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, `uv`, `torch` (CPU/MPS), `transformers` (`T5ForConditionalGeneration`), HF `tokenizers`, `numpy`, `matplotlib`, `pytest`, `ruff`, `mypy --strict`.
 
-Repo: /Users/devanshsharma/Desktop/Project/sanskrit-token, branch `main`, remote `origin`. Experiments 01–02 complete. Read `experiments/02_tpp_parallel/run.py`, `experiments/02_tpp_parallel/train_tokenizers.py`, `src/sanskrit_tok/tokenizers/{corpus,registry}.py`, `src/sanskrit_tok/data/exclusion.py`, `src/sanskrit_tok/encoding.py` for the established patterns.
+Repo: <repo>, branch `main`, remote `origin`. Experiments 01–02 complete. Read `experiments/02_tpp_parallel/run.py`, `experiments/02_tpp_parallel/train_tokenizers.py`, `src/sanskrit_tok/tokenizers/{corpus,registry}.py`, `src/sanskrit_tok/data/exclusion.py`, `src/sanskrit_tok/encoding.py` for the established patterns.
 
 ## Global Constraints
 
