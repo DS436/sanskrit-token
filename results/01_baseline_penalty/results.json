@@ -1,8 +1,8 @@
 {
   "experiment": "01_baseline_penalty",
-  "git_commit": "5960f019efc6df81a4f9e95c214d1675e2cff4b6",
-  "git_dirty": true,
-  "timestamp": "2026-09-04T11:49:31+00:00",
+  "git_commit": "25bf1fb754fcf88c73a3a7631b8cefec378f06fe",
+  "git_dirty": false,
+  "timestamp": "2026-09-06T18:42:17+00:00",
   "config": {
     "experiment": "01_baseline_penalty",
     "tokenizers": [

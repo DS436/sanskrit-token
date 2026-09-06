@@ -14,16 +14,16 @@ snapshot untouched, and you can diff the two.
 
 | Folder | Source run's `git_commit` | `git_dirty` | Run timestamp (UTC) |
 |---|---|---|---|
-| `01_baseline_penalty/` | `5960f019efc6df81a4f9e95c214d1675e2cff4b6` | **true** | 2026-09-04T11:49:31 |
+| `01_baseline_penalty/` | `25bf1fb754fcf88c73a3a7631b8cefec378f06fe` | false | 2026-09-06T18:42:17 |
 | `02_tpp_parallel/` | `b7302a8588b820772ff8db4e80c431afca5742da` | false | 2026-09-05T10:21:27 |
 | `03_sandhi_split/` | `b7302a8588b820772ff8db4e80c431afca5742da` | false | 2026-09-05T10:22:27 |
 | `04_morph_constrained/` | `eb53842b1c885e19b1ddd54110de382eb4e3b4e0` | false | 2026-09-05T15:54:56 |
 | `05_lm_training/smoke/` | `b13f6e0d69e7a4559140b5112381482387cc306b` | false | 2026-09-06T05:36:40 |
 
 Those fields are read straight out of each `results.json`, where every experiment records
-the commit it ran at and whether the working tree was clean. Experiment 01's run was made
-with a dirty tree, which is recorded rather than hidden; Experiments 02–05 were re-run at a
-clean tree after the review waves their READMEs describe.
+the commit it ran at and whether the working tree was clean. All five snapshots come from
+clean-tree runs: each experiment was re-run at a clean tree after the review waves its
+`README.md` describes.
 
 The commits above are **the runs' commits, not this snapshot's commit**. They differ
 because each experiment was re-run at the moment its last correction landed, and the
