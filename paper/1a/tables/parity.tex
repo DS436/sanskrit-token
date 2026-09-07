@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\footnotesize
+\begin{tabular}{lrrr}
+\toprule
+Arm & Sa/En & Sa/Hi & Sa (SLP1)/En \\
+\midrule
+\texttt{T0\_o200k} & 2.089 & 1.328 & 2.183 \\
+\texttt{T0\_llama4} & 2.187 & 1.325 & 2.241 \\
+\texttt{T0\_gemma3} & 1.774 & 1.353 & 2.189 \\
+\texttt{T0\_gpt2} & 7.857 & 1.060 & 2.518 \\
+\bottomrule
+\end{tabular}
+\caption{Parity ratios on 1,012 aligned FLORES-200 devtest sentences: Sanskrit tokens divided by the tokens the same tokenizer spends on the English or Hindi translation of the same sentence. Sa (SLP1)/En scores the SLP1 transliteration of the Sanskrit side against the same Latin-script English pivot. These four arms are deployed practice, not a controlled comparison: their vocabularies differ by more than five times (Appendix~\ref{sec:arms}).}
+\label{tab:parity}
+\end{table}

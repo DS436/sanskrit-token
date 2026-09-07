@@ -1,0 +1,28 @@
+\begin{table*}[t]
+\centering
+\scriptsize
+\begin{tabular}{llrrrrr}
+\toprule
+Corpus & Matched pair & 1-8 w. & 9-16 w. & 17-24 w. & 25-40 w. & 41+ w. \\
+\midrule
+S\=amayik test & \texttt{T1\_bpe\_raw\_32k}$^{*}$ / \texttt{E1\_bpe\_32k} & 1.225 & 1.101 & 1.035 & 0.992 & 0.920$^{\dagger}$ \\
+S\=amayik test & \texttt{T1\_bpe\_raw\_64k}$^{*}$ / \texttt{E1\_bpe\_64k} & 1.196 & 1.056 & 0.979 & \textbf{0.934} & \textbf{0.851}$^{\dagger}$ \\
+S\=amayik test & \texttt{T2\_unigram\_raw\_32k}$^{*}$ / \texttt{E1\_unigram\_32k} & 1.304 & 1.170 & 1.083 & 1.026 & 0.955$^{\dagger}$ \\
+S\=amayik test & \texttt{T2\_unigram\_raw\_64k}$^{*}$ / \texttt{E1\_unigram\_64k} & 1.280 & 1.136 & 1.049 & 0.981 & 0.910$^{\dagger}$ \\
+S\=amayik test\_ood & \texttt{T1\_bpe\_raw\_32k}$^{*}$ / \texttt{E1\_bpe\_32k} & 1.245 & 1.142 & 1.103 & 1.036 & \textbf{0.951} \\
+S\=amayik test\_ood & \texttt{T1\_bpe\_raw\_64k}$^{*}$ / \texttt{E1\_bpe\_64k} & 1.234 & 1.118 & 1.078 & 1.010 & \textbf{0.927} \\
+S\=amayik test\_ood & \texttt{T2\_unigram\_raw\_32k}$^{*}$ / \texttt{E1\_unigram\_32k} & 1.338 & 1.223 & 1.180 & 1.111 & 1.013 \\
+S\=amayik test\_ood & \texttt{T2\_unigram\_raw\_64k}$^{*}$ / \texttt{E1\_unigram\_64k} & 1.348 & 1.222 & 1.174 & 1.098 & 1.001 \\
+Itih\=asa test & \texttt{T1\_bpe\_raw\_32k}$^{*}$ / \texttt{E1\_bpe\_32k} & 8.944$^{\dagger}$ & 0.984 & \textbf{0.760} & \textbf{0.609} & \textbf{0.588} \\
+Itih\=asa test & \texttt{T1\_bpe\_raw\_64k}$^{*}$ / \texttt{E1\_bpe\_64k} & 7.944$^{\dagger}$ & \textbf{0.927} & \textbf{0.705} & \textbf{0.562} & \textbf{0.546} \\
+Itih\=asa test & \texttt{T2\_unigram\_raw\_32k}$^{*}$ / \texttt{E1\_unigram\_32k} & 9.833$^{\dagger}$ & 0.996 & \textbf{0.774} & \textbf{0.622} & \textbf{0.596} \\
+Itih\=asa test & \texttt{T2\_unigram\_raw\_64k}$^{*}$ / \texttt{E1\_unigram\_64k} & 8.889$^{\dagger}$ & \textbf{0.951} & \textbf{0.734} & \textbf{0.589} & \textbf{0.564} \\
+FLORES devtest & \texttt{T1\_bpe\_raw\_32k}$^{*}$ / \texttt{E1\_bpe\_32k} & 1.165$^{\dagger}$ & 1.155 & 1.148 & 1.136 & 1.091$^{\dagger}$ \\
+FLORES devtest & \texttt{T1\_bpe\_raw\_64k}$^{*}$ / \texttt{E1\_bpe\_64k} & 1.206$^{\dagger}$ & 1.164 & 1.151 & 1.130 & 1.102$^{\dagger}$ \\
+FLORES devtest & \texttt{T2\_unigram\_raw\_32k}$^{*}$ / \texttt{E1\_unigram\_32k} & 1.228$^{\dagger}$ & 1.212 & 1.211 & 1.204 & 1.143$^{\dagger}$ \\
+FLORES devtest & \texttt{T2\_unigram\_raw\_64k}$^{*}$ / \texttt{E1\_unigram\_64k} & 1.286$^{\dagger}$ & 1.237 & 1.227 & 1.209 & 1.132$^{\dagger}$ \\
+\bottomrule
+\end{tabular}
+\caption{Tokens per proposition under the matched control, stratified by the number of words in the English side of the pair. Bin edges: 1, 9, 17, 25, 41. Values only, to three decimals; bold marks a bin whose 95\% bootstrap interval lies entirely below 1.0, and the intervals themselves are in the snapshot's \texttt{results.json}. $^{\dagger}$~marks a bin the experiment flagged as sparse (fewer than 30 pairs).}
+\label{tab:tppbylength}
+\end{table*}

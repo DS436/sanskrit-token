@@ -1,0 +1,11 @@
+# LaTeX build artefacts. The generated tables/ and figures/ are tracked deliberately, so
+# the paper can be read without running anything; the PDF is not.
+main.pdf
+main.aux
+main.log
+main.out
+main.bbl
+main.blg
+main.fls
+main.fdb_latexmk
+main.synctex.gz

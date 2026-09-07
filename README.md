@@ -23,7 +23,9 @@ and exactly which half of the boundary set costs tokens is now measurable.
 ## Results
 
 Every number below is from the committed snapshot in [`results/`](results/README.md); no
-run is needed to read them.
+run is needed to read them. Experiments 01 and 02 are also written up as a paper draft in
+[`paper/1a/`](paper/1a/README.md), whose every table, figure and prose number is generated
+from that same snapshot.
 
 | # | Hypothesis | Verdict | Details | Figure |
 |---|---|---|---|---|

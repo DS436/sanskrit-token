@@ -1,0 +1,32 @@
+\begin{table*}[t]
+\centering
+\footnotesize
+\begin{tabular}{lllrrrr}
+\toprule
+Arm & Language & Script & Fertility & s.d. & Bytes/tok. & Words \\
+\midrule
+\texttt{T0\_o200k} & \texttt{san\_Deva} & original & 3.75 & 1.97 & 6.18 & 16,975 \\
+\texttt{T0\_o200k} & \texttt{san\_Deva} & slp1 & 3.50 & 1.92 & 2.38 & 16,975 \\
+\texttt{T0\_o200k} & \texttt{hin\_Deva} & original & 2.23 & 1.15 & 7.97 & 25,643 \\
+\texttt{T0\_o200k} & \texttt{hin\_Deva} & slp1$^{\dagger}$ & 2.56 & 1.29 & 2.31 & 25,643 \\
+\texttt{T0\_o200k} & \texttt{eng\_Latn} & original & 1.42 & 0.72 & 4.92 & 21,901 \\
+\texttt{T0\_llama4} & \texttt{san\_Deva} & original & 3.88 & 2.05 & 5.86 & 16,975 \\
+\texttt{T0\_llama4} & \texttt{san\_Deva} & slp1 & 3.56 & 1.98 & 2.31 & 16,975 \\
+\texttt{T0\_llama4} & \texttt{hin\_Deva} & original & 2.34 & 1.18 & 7.55 & 25,643 \\
+\texttt{T0\_llama4} & \texttt{hin\_Deva} & slp1$^{\dagger}$ & 2.57 & 1.30 & 2.27 & 25,643 \\
+\texttt{T0\_llama4} & \texttt{eng\_Latn} & original & 1.42 & 0.72 & 4.88 & 21,901 \\
+\texttt{T0\_gemma3} & \texttt{san\_Deva} & original & 3.11 & 1.67 & 7.21 & 16,975 \\
+\texttt{T0\_gemma3} & \texttt{san\_Deva} & slp1 & 3.50 & 1.94 & 2.36 & 16,975 \\
+\texttt{T0\_gemma3} & \texttt{hin\_Deva} & original & 1.79 & 0.96 & 9.49 & 25,643 \\
+\texttt{T0\_gemma3} & \texttt{hin\_Deva} & slp1$^{\dagger}$ & 2.52 & 1.30 & 2.30 & 25,643 \\
+\texttt{T0\_gemma3} & \texttt{eng\_Latn} & original & 1.35 & 0.73 & 4.87 & 21,901 \\
+\texttt{T0\_gpt2} & \texttt{san\_Deva} & original & 12.49 & 7.40 & 1.63 & 16,975 \\
+\texttt{T0\_gpt2} & \texttt{san\_Deva} & slp1 & 3.97 & 2.23 & 2.05 & 16,975 \\
+\texttt{T0\_gpt2} & \texttt{hin\_Deva} & original & 7.82 & 4.18 & 1.68 & 25,643 \\
+\texttt{T0\_gpt2} & \texttt{hin\_Deva} & slp1$^{\dagger}$ & 2.85 & 1.49 & 2.02 & 25,643 \\
+\texttt{T0\_gpt2} & \texttt{eng\_Latn} & original & 1.49 & 0.81 & 4.88 & 21,901 \\
+\bottomrule
+\end{tabular}
+\caption{Fertility and compression for every arm, language and script variant. $^{\dagger}$~The Hindi SLP1 rows are approximate and should never be quoted as a measurement of Hindi: SLP1 encodes the Sanskrit phoneme inventory, so of the 1,012 Hindi sentences 513 contain a nukta consonant that the transliterator emits as a literal ASCII digit, and 256 of the resulting strings still contain unconverted Devanagari. Both effects inflate the Hindi token count. No parity number in this paper uses an SLP1 Hindi pivot.}
+\label{tab:fertcompfull}
+\end{table*}

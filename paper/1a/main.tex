@@ -1,0 +1,473 @@
+% Paper 1a. Every number in this file is a macro from tables/numbers.tex, and every table
+% and figure is generated: `make all` regenerates them from the tracked results snapshot
+% before compiling. Do not type a measured value into this file.
+\documentclass[11pt]{article}
+
+% Review submission (anonymised, line numbers). For the camera-ready, swap to:
+%   \usepackage[final]{acl}
+\usepackage[review]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+\input{tables/numbers}
+
+\title{Fewer Words, Not Fewer Tokens: Measuring the Sanskrit Tokenization Penalty per
+Proposition}
+
+% Replace the affiliation if this work acquires one.
+\author{Devansh Sharma \\
+  Independent researcher \\
+  \texttt{sharmadevansh436@gmail.com}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Sanskrit fuses case, number, person and tense into word endings and chains clauses into
+single compounds, so it is information-dense per word. Whether that density survives
+subword tokenization is a separate question, and it has to be asked per unit of meaning
+rather than per word. On identical FLORES-200 devtest content, Sanskrit costs
+\numParitySaEnLo--\numParitySaEnHi{} times the English tokens under the deployed
+tokenizers with vocabularies of \numLargeVocabFloor{} ids or more, but only
+\numParitySaHiLo--\numParitySaHiHi{} times the Hindi tokens. Measured against a deployed
+English tokenizer, Sanskrit-trained subword arms then appear \emph{cheaper} per
+proposition than English on contemporary prose (\numTppBpeSixtyFourDeployed{}
+\numTppBpeSixtyFourDeployedCi). Against a matched English control, the same algorithm at
+the same vocabulary size trained on the English side of the same corpus, that flip
+disappears: all \numControlledPairs{} matched pairs sit above 1.0 on prose with
+\numCiLevel\%{} intervals excluding it (\numTppControlledSamayikLo--%
+\numTppControlledSamayikHi). The whole move is in the English denominator. What survives
+is a statement about deployed practice: Sanskrit costs \numDeployedLo--\numDeployedHi{}
+English tokens per proposition under the tokenizers people actually ship. Code, the
+results snapshot and every table in this paper are public.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Two claims about Sanskrit are easy to run together, and this paper depends on keeping
+them apart.
+
+\textbf{Claim A} is that Sanskrit is information-dense per word. Its eight cases mark on
+the noun what English marks with prepositions and word order; its verbs fuse person,
+number, tense, mood and voice into one ending; and compounding chains what would be a
+relative clause into a single orthographic word. We cite this claim rather than test it.
+The idea that Sanskrit's grammatical tradition encodes structure a computational system
+could use is old, and \citet{briggs-1985-knowledge} is its most-cited modern statement.
+
+\textbf{Claim B} is that the density survives tokenization. This is the claim we test, and
+it is not implied by Claim A. Fewer words is not fewer tokens. A subword learner takes
+whitespace as its cheapest boundary signal, and sandhi, the obligatory phonological fusion
+at word boundaries, deletes exactly that signal. A tokenizer may therefore spend its
+vocabulary rediscovering structure the language had already marked, and any measurement
+that divides by a word count will hide this, because Sanskrit's word count is small for
+the same reason its words are long.
+
+We measure the cost per unit of meaning on parallel text, where a Sanskrit sentence and
+its English translation carry approximately the same propositional content, and we add the
+control that turns the measurement into a comparison: an English tokenizer trained with
+the same algorithm, at the same vocabulary size, on the English side of the same corpus.
+Without that control, a Sanskrit tokenizer is being compared against an English tokenizer
+that differs from it in vocabulary size and training domain as well as in language, and a
+crossing below parity is not attributable to language.
+
+Our contributions are three.
+
+\begin{itemize}
+  \item \textbf{The measurement.} Parity and tokens-per-proposition for Sanskrit against
+    English and Hindi on identical content, across \numArmsDeployedGeneral{} deployed
+    general-purpose tokenizers, \numArmsDeployedIndic{} deployed Indic tokenizers and
+    \numTrainedArms{} tokenizers trained here, with paired bootstrap intervals throughout.
+    Fertility is reported alongside, and never as the headline.
+  \item \textbf{The matched control.} A same-algorithm, same-vocabulary, same-corpus
+    English control family. It removes the apparent Sanskrit advantage on prose, and we
+    show that the removal is exactly the size of the denominator's change.
+  \item \textbf{The artefacts.} A public repository in which each experiment is one
+    command, every evaluation sentence is excluded from every training set by a hashed
+    list on both sides, and every table and figure in this paper is regenerated from a
+    tracked results snapshot by a script.
+\end{itemize}
+
+\section{Background}
+\label{sec:background}
+
+Four features of Sanskrit matter for tokenization, and none of them is exotic once
+stated in NLP terms.
+
+\textbf{Sandhi} is euphonic combination at morpheme and word boundaries. \emph{tat} plus
+\emph{api} is written \emph{tadapi}: the boundary is not merely unmarked, the segments
+either side of it are altered. The rules are deterministic in the forward direction and
+ambiguous in reverse, which is why sandhi splitting is a research problem with its own
+literature \citep{hellwig-nehrdich-2018-sanskrit,sandhan-etal-2022-translist,%
+nehrdich-etal-2024-byt5} and its own datasets \citep{krishna-etal-2017-dataset}.
+
+\textbf{Sam\=asa} is compounding. Several stems fuse into one word and only the last one
+inflects, so a single orthographic word can carry what English writes as a noun phrase or
+a relative clause.
+
+\textbf{Vibhakti} are the case endings. Eight cases encode grammatical role on the noun
+itself, replacing much of what English spends prepositions and function words on.
+
+\textbf{SLP1} is a lossless one-character-per-phoneme ASCII transliteration. We compute
+every metric on the original script and on SLP1 separately and report both, because the
+choice is not neutral: a vocabulary that already covers Devanagari gains nothing from
+romanisation, and one that does not gains a great deal.
+
+The consequence for measurement is the reason this paper exists. Fertility, tokens per
+whitespace-delimited word, divides by a denominator that sandhi and compounding make
+small. A language that writes in fewer, longer words is penalised by that metric for the
+very property under test, and the penalty is arithmetic, not empirical. We therefore
+report fertility for comparability with the tokenizer-inequity literature
+\citep{petrov-etal-2023-tokenizers,ahia-etal-2023-languages,singh-etal-2024-indicgenbench,%
+arnett-etal-2025-inequities} and never lead with it.
+
+\section{Measurement}
+\label{sec:measurement}
+
+Let $T$ be a tokenizer, $s$ a sentence, $|T(s)|$ the number of tokens it produces, $w(s)$
+the number of whitespace-delimited words in $s$, and $b(s)$ the number of UTF-8 bytes in
+$s$. All four quantities below are ratios of sums over a corpus, not means of per-sentence
+ratios, so a single long sentence contributes in proportion to its length.
+
+\paragraph{Fertility.} Tokens per word, reported and never headlined:
+\begin{equation}
+  \mathrm{Fert}(T, C) = \frac{\sum_{s \in C} |T(s)|}{\sum_{s \in C} w(s)}.
+\end{equation}
+
+\paragraph{Compression.} Bytes per token, computed on the original script and on SLP1
+separately, since Devanagari is \numBytesPerDevanagariChar{} UTF-8 bytes per character and
+SLP1 is one:
+\begin{equation}
+  \mathrm{Comp}(T, C) = \frac{\sum_{s \in C} b(s)}{\sum_{s \in C} |T(s)|}.
+\end{equation}
+
+\paragraph{Parity.} For sentence-aligned corpora $A$ and $B$ of the same content, scored
+under \emph{the same} tokenizer on both sides \citep{petrov-etal-2023-tokenizers}:
+\begin{equation}
+  \mathrm{Par}(T, A, B) = \frac{\sum_{i} |T(a_i)|}{\sum_{i} |T(b_i)|}.
+\end{equation}
+
+\paragraph{Tokens per proposition.} The headline. For aligned pairs $(s_i, e_i)$ of
+Sanskrit source and English translation, scored under possibly \emph{different}
+tokenizers $X$ and $Y$:
+\begin{equation}
+  \mathrm{TPP}(X, Y) = \frac{\sum_{i} |X(s_i)|}{\sum_{i} |Y(e_i)|}.
+  \label{eq:tpp}
+\end{equation}
+A translated sentence pair is not a controlled propositional unit; it is the best
+available proxy for one, and the translator's verbosity lands in the denominator. Section
+\ref{sec:limitations} returns to this.
+
+\paragraph{The matched English control.} Equation \ref{eq:tpp} lets $Y$ be anything, and
+the choice decides the answer. Setting $Y$ to a deployed English tokenizer measures
+deployed practice: what Sanskrit costs against the tools people ship. It cannot measure
+language, because such a tokenizer differs from a Sanskrit arm in vocabulary size and
+training domain as well as in language. We therefore train a control family, \texttt{E1},
+in which $Y$ shares the Sanskrit arm's algorithm, its vocabulary size and its training
+corpus, differing only in which side of the parallel text it saw. Both readings are
+reported, and only the second supports a claim about Sanskrit.
+
+\paragraph{Intervals.} Every ratio carries a paired bootstrap interval: resample the
+aligned pairs with replacement, recompute the ratio of sums on each draw, and take the
+\numCiLevel{}\% percentile interval over \numBootstrap{} draws, seeded at
+\numBootstrapSeed{}. Pairing is what makes the interval meaningful, since the two sides of
+a pair are the same content.
+
+We do not report perplexity anywhere. It is not comparable across tokenizers with
+different vocabularies, and every comparison in this paper is across tokenizers.
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\paragraph{Corpora.} FLORES-200 devtest \citep{nllb-2022-flores} supplies
+\numFloresSents{} sentences aligned across \texttt{san\_Deva}, \texttt{hin\_Deva} and
+\texttt{eng\_Latn}; because all three are translations of the same source, it is the one
+corpus here where no language is the original. S\=amayik
+\citep{maheshwari-etal-2024-samayik} supplies contemporary English-Sanskrit prose:
+\numSamayikTest{} test pairs and \numSamayikOod{} out-of-domain pairs. Itih\=asa
+\citep{aralikatte-etal-2021-itihasa} supplies \numItihasaTest{} verse pairs. Prose is
+primary and verse secondary throughout, decided before any arm was run: meter constrains
+word choice and inflates compounding, so verse cannot carry a claim about tokenization.
+
+\paragraph{Arms.} \emph{Deployed general purpose:} \texttt{o200k\_base},
+Llama-4, Gemma-3 and GPT-2. \emph{Deployed Indic:} Sarvam-1 \citep{sarvam-2024}, SUTRA
+\citep{bendale-etal-2024-sutra} and BrahmicTokenizer-131K \citep{shravan-2026-brahmic}.
+IndicSuperTokenizer is listed in our design but is absent here: none of the three
+candidate repository identifiers resolves, and it is omitted from every table rather than
+imputed. \emph{Trained here:} BPE \citep{gage-1994-algorithm,sennrich-etal-2016-neural}
+and Unigram \citep{kudo-2018-subword,kudo-richardson-2018-sentencepiece} at
+\numVocabSmall{} and \numVocabLarge{} pieces, on the Sanskrit side of the S\=amayik and
+Itih\=asa training splits. \emph{Matched control:} the same four recipes on the English
+side of the same splits. Deployed vocabularies range from \numVocabMin{} to
+\numVocabMax{} ids, which is why they are reported as existing practice and never as a
+controlled comparison. Appendix \ref{sec:arms} records what each arm loaded.
+
+\paragraph{Substitutions to disclose.} The official Llama-4 and Gemma-3 repositories are
+gated and the machine running these experiments has no access token, so both arms load
+ungated re-uploads of the same releases. Their id-space sizes match the published ones,
+but the mirrors could not be byte-compared against the originals, because reading the
+originals is what the gate prevents. FLORES-200 is read from the official NLLB tarball
+rather than a dataset hub, for the same access reason.
+
+\paragraph{Leakage control.} Every evaluation sentence, on \emph{both} sides, is hashed
+into an exclusion list, and every training corpus is filtered against it before a
+tokenizer sees a line. Each run re-verifies the check: of the \numCheckedSentences{}
+evaluation sentences used here, \numLeakedSentences{} were missing from the list on either
+side.
+
+\paragraph{Reproducibility.} Every experiment is one command and writes a
+\texttt{results.json} and its \texttt{config.yaml}, each recording the git commit and
+whether the tree was clean. Every table and figure below is regenerated from the tracked
+snapshot by a script. The code and the snapshot are in an anonymised repository.
+% Non-anonymous: https://github.com/DS436/sanskrit-token
+% Reveal this URL in the camera-ready, when \usepackage[final]{acl} is set.
+
+\section{Results}
+\label{sec:results}
+
+\input{tables/parity}
+\input{tables/fertility_compression}
+
+\subsection{RQ1: how large is the penalty?}
+\label{sec:rq1}
+
+Table \ref{tab:parity} gives the parity ratios and Figure \ref{fig:parity} draws them.
+Under the three deployed tokenizers with vocabularies of \numLargeVocabFloor{} ids
+or more,
+Sanskrit costs \numParitySaEnLo--\numParitySaEnHi{} times the English tokens for the same
+FLORES content. Under GPT-2, whose \numVocabMin-id vocabulary predates any serious
+Devanagari coverage, it costs \numParitySaEnGptTwo{} times as many. Against Hindi, the
+natural control since it shares the script but has neither sandhi nor comparable fusion,
+the same tokenizers cost only \numParitySaHiLo--\numParitySaHiHi{} times as many tokens.
+
+Two pre-registered predictions fail here. Fertility above \numPreregFertLo{} on Sanskrit
+is refuted for every arm with a vocabulary of \numLargeVocabFloor{} ids or more
+(\numFertSaLo--\numFertSaHi, Table \ref{tab:fertcomp}); it holds only for GPT-2 on raw
+Devanagari (\numFertSaGptTwo), and the same arm's SLP1 variant falls back into the same
+band as the others (\numFertSaGptTwoSlpOne), so the high number is a property of an old
+vocabulary meeting three-byte characters rather than evidence about Sanskrit. A
+Sanskrit-over-Hindi parity above \numPreregParityThreshold{} is refuted outright.
+
+The gap between the two metrics is the substantive finding. Over these
+\numFloresSents{} sentences Sanskrit is written in \numSaWords{} whitespace words against
+English's \numEnWords{} and Hindi's \numHiWords, because sandhi and compounding fuse into
+one word what the other two write as several. Dividing by that smaller denominator makes
+the fertility-derived ratio overstate the penalty: Sanskrit over English reads
+\numFertRatioSaEnLo--\numFertRatioSaEnHi{} by fertility against a measured parity of
+\numParitySaEnLo--\numParitySaEnGptTwo, and Sanskrit over Hindi reads
+\numFertRatioSaHiLo--\numFertRatioSaHiHi{} by fertility against a measured
+\numParitySaHiLo--\numParitySaHiHi. Read off fertility, the Hindi hypothesis would have
+been \emph{falsely confirmed} for all four arms. That is not a rounding difference; it is
+the difference between counting tokens per word and counting tokens per unit of content.
+
+Compression makes the same point from the byte side and is why we report it on both
+encodings. Sanskrit in Devanagari reads
+\numCompSaOrigLo--\numCompSaOrigHi{} bytes per token against English's
+\numCompEnLo--\numCompEnHi, which compares nothing, since Devanagari costs
+\numBytesPerDevanagariChar{} UTF-8 bytes per character. In SLP1 the same text reads
+\numCompSaSlpLo--\numCompSaSlpHi.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/parity.pdf}
+  \caption{Measured parity (bars) against the ratio fertility implies (diamonds), on
+    \numFloresSents{} aligned FLORES-200 devtest sentences, original script. Every diamond
+    sits above its bar: fertility divides by a Sanskrit word count that sandhi and
+    compounding make small, so it overstates the penalty. GPT-2's Sanskrit-over-English
+    bar and its diamond run off the axis and carry their values instead; the axis is
+    scaled from the three arms whose vocabulary size is current practice.}
+  \label{fig:parity}
+\end{figure}
+
+\input{tables/tpp_deployed}
+
+\subsection{RQ2 under deployed practice}
+\label{sec:rq2-deployed}
+
+Table \ref{tab:tppdeployed} gives tokens per proposition on the primary prose corpus
+against the deployed English pivot. Every deployed arm, English-centric and Indic alike,
+puts Sanskrit above parity: across prose and FLORES the range is
+\numDeployedLo--\numDeployedHi{}, with intervals excluding 1.0 throughout. This is the
+robust finding of the paper. Under the tokenizers currently shipped, Sanskrit content
+costs roughly two to three times the English tokens for the same propositions, and the
+Indic-specialised arms do not fix it.
+
+The trained Sanskrit arms read very differently in the same table. The best of them,
+BPE at \numVocabLarge{} pieces, comes in at \numTppBpeSixtyFourDeployed{}
+\numTppBpeSixtyFourDeployedCi{}: below parity, with the interval clear of it. Taken at
+face value, that is the crossing the project pre-registered.
+
+\input{tables/tpp_controlled}
+
+\subsection{RQ2 under the matched control}
+\label{sec:rq2-controlled}
+
+It does not survive the control. Table \ref{tab:tppcontrolled} scores the same four
+Sanskrit arms against their \texttt{E1} twins, and Figure \ref{fig:denominator} puts the
+two readings side by side. On S\=amayik test, all \numControlledPairs{} matched pairs sit
+above 1.0 with intervals excluding it, from \numTppControlledSamayikLo{}
+\numTppControlledBestCi{} to \numTppControlledSamayikHi. The out-of-domain prose split
+gives \numTppControlledOodLo--\numTppControlledOodHi{} and FLORES gives
+\numTppControlledFloresLo--\numTppControlledFloresHi, in the same direction, with every
+interval above 1.0.
+
+Nothing about the Sanskrit side changed between \numTppBpeSixtyFourDeployed{} and
+\numTppControlledBest. The English side did. The control arm spends
+\numEnTokensEOneBpe{} tokens on the English half of S\=amayik test where the deployed
+tokenizer spends \numEnTokensOTwoHundredK{}, which is \numEnTokenSavingPct\%{} fewer,
+because it too was trained on this domain. Rescaling the deployed ratio by that factor
+reproduces the controlled value exactly. The apparent Sanskrit advantage was the English
+pivot's handicap.
+
+We state the scope of this precisely, because it is narrower than the hypothesis it
+addresses. The only Sanskrit-native tokenizers measured here are subword learners trained
+on raw, sandhied, compounded text; they are given no morphological information at all, and
+the project's own design lists them as baselines rather than as its proposal. What is
+shown is that matched-size raw subword training on Sanskrit does not by itself bring
+tokens per proposition below English on prose. Whether reversing sandhi first, or
+forbidding merges across morpheme boundaries, changes that is untested here.
+
+Two further caveats keep even this result provisional. Both sides are trained on the two
+parallel corpora, so the control equalises domain fit but not corpus size or diversity,
+and neither side has seen a monolingual corpus. And one control arm settles at
+\numUnigramSixtyFourPieces{} pieces rather than the \numVocabLarge{} requested, a
+\numUnigramSixtyFourShortfallPct\%{} shortfall; it makes the English side dearer, so it
+pushes that row down rather than up, and the row is above 1.0 regardless.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/denominator.pdf}
+  \caption{The same four Sanskrit arms, two English denominators, on each corpus in the
+    configured order (prose first). Circles score against the deployed English tokenizer,
+    squares against the matched control; the dashed line is parity, and
+    \numCiLevel\%{} bootstrap intervals are drawn but are narrower than the markers on
+    most points. The prose panels move from straddling parity to sitting above it when the
+    denominator is controlled. Only the verse panel stays below.}
+  \label{fig:denominator}
+\end{figure}
+
+\subsection{Verse}
+\label{sec:verse}
+
+Itih\=asa is the one corpus where the crossing survives the control:
+\numTppControlledItihasaLo--\numTppControlledItihasaHi, every interval excluding 1.0. We
+do not read this as a result about tokenization. Itih\=asa is \'sloka, and meter
+constrains word choice and rewards compounding; its English side is a nineteenth-century
+verse translation whose own verbosity sits in the denominator. Prose was designated the
+primary register before any arm was run, for these reasons. The verse number is a lead to
+follow, not a finding to report.
+
+\subsection{Tokens per proposition by sentence length}
+\label{sec:length}
+
+% TODO(1b-of-task): prose for this subsection. The measurement landed in the snapshot
+% while this draft was being written, so tables/tpp_by_length.tex is now generated from
+% `results/02_tpp_parallel/results.json`'s `tpp_by_length` key and Table~\ref{tab:tppbylength}
+% is real. What is still missing is the reading: the controlled ratio falls monotonically
+% with English sentence length and crosses below 1.0 in the longest bins on prose, which
+% bears directly on Section~\ref{sec:rq2-controlled} and needs stating carefully, with the
+% sparse-bin flags respected. scripts/paper_figures.py already writes
+% figures/length.{pdf,png} from the same key; include it here when the prose is written.
+\textit{Draft: prose pending. Table~\ref{tab:tppbylength} is generated and its numbers are
+final; the reading of it is not yet written.}
+
+\input{tables/tpp_by_length}
+
+\subsection{R\'enyi efficiency}
+\label{sec:renyi}
+
+% TODO(1b-of-task): prose for this subsection. As with the length strata, the measurement
+% landed in the snapshot mid-draft, so tables/renyi.tex is generated from the `renyi` and
+% `renyi_english` keys and Table~\ref{tab:renyi} is real. The prose must report it as a
+% diagnostic only and say why: \citet{zouhar-etal-2023-tokenization} introduce the measure
+% and \citet{cognetta-etal-2024-counterexamples} show it can be gamed, so it supports no
+% claim here on its own. It also needs the script-variant comparison, since the original
+% and SLP1 columns are the same text under the same vocabulary.
+\textit{Draft: prose pending. Table~\ref{tab:renyi} is generated and its numbers are final;
+the reading of it is not yet written.}
+
+\input{tables/renyi}
+
+\input{tables/preregistration}
+
+\subsection{The pre-registration}
+\label{sec:prereg}
+
+Table \ref{tab:prereg} sets the predictions written before any arm was run against what
+was measured. Three of the five are refuted or not observed. We report them as written
+rather than as they would read with hindsight, because the value of a pre-registration is
+entirely in not editing it.
+
+\section{Limitations}
+\label{sec:limitations}
+
+\paragraph{Verse and meter.} The one corpus on which Sanskrit stays below parity under the
+control is verse, where meter is a confound that this design cannot separate from
+tokenization. We report the number and decline to interpret it.
+
+\paragraph{Translation length bias.} Tokens per proposition uses a translation as the
+denominator, and translations are systematically longer than sources. Itih\=asa's English
+is a nineteenth-century verse rendering, which is the worst case for this. FLORES
+mitigates it, since every language there is a translation of the same source, but it does
+not remove it.
+
+\paragraph{The Indic arms are deployed practice.} The Indic-specialised tokenizers differ
+from every other arm in training corpus and vocabulary size. They answer what Sanskrit
+costs under current Indic tooling. They cannot answer whether Indic-specialisation helps,
+and we do not claim they do.
+
+\paragraph{A single control language.} The control is English, one language, on the
+English side of two corpora. Whether the same result holds against a matched Hindi
+control, or against a matched control in a third morphologically rich language, is
+untested.
+
+\paragraph{No morphology claims.} Nothing here uses gold morpheme boundaries, so this
+paper makes no claim about morphological alignment. Measuring whether a tokenizer's
+boundaries agree with a language's own \citep{arnett-etal-2025-morphscore} requires a
+gold-annotated corpus and is out of scope.
+
+\paragraph{One corpus size.} Every trained arm saw the same roughly hundred thousand
+sentences of parallel text. Tokenizer behaviour changes with corpus scale, and none of
+these arms has been trained on a monolingual Sanskrit corpus of realistic size.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Sanskrit's density is real at the word level and does not survive an English-centric
+tokenizer, and matched-size raw subword training on Sanskrit does not by itself buy it
+back on prose. The follow-up tests the two interventions this result leaves open,
+reversing sandhi before subword learning and forbidding merges across gold morpheme
+boundaries, and asks whether either moves the controlled ratio below parity or reaches a
+reference bits-per-character sooner in language-model training.
+
+\section*{Acknowledgements}
+
+% TODO: acknowledgements before the camera-ready.
+
+% acl.sty already issues \bibliographystyle{acl_natbib}; repeating it here puts a second
+% \bibstyle into the .aux and BibTeX rejects the file. The style in force is acl_natbib.
+\bibliography{refs}
+
+\appendix
+
+\section{Full per-corpus tables}
+\label{sec:fulltables}
+
+\input{tables/tpp_deployed_all}
+\input{tables/tpp_hindi}
+\input{tables/fertility_compression_full}
+
+\section{Arm details}
+\label{sec:arms}
+
+\input{tables/arms}
+
+\end{document}

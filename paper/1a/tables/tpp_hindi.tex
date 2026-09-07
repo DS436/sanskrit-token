@@ -1,0 +1,19 @@
+\begin{table*}[t]
+\centering
+\footnotesize
+\begin{tabular}{llll}
+\toprule
+Arm & Vocab. & Sa/Hi (original) & Sa/Hi (SLP1) \\
+\midrule
+\texttt{T0\_o200k} & 200,019 & 1.328 [1.315, 1.342] & 0.907 [0.898, 0.917]$^{\dagger}$ \\
+\texttt{T0\_llama4} & 201,135 & 1.325 [1.312, 1.339] & 0.919 [0.910, 0.929]$^{\dagger}$ \\
+\texttt{T0\_gemma3} & 262,145 & 1.353 [1.339, 1.368] & 0.914 [0.905, 0.924]$^{\dagger}$ \\
+\texttt{T0\_gpt2} & 50,257 & 1.060 [1.050, 1.071] & 0.922 [0.913, 0.933]$^{\dagger}$ \\
+\texttt{T3\_sarvam} & 68,096 & 1.405 [1.390, 1.423] & 0.946 [0.936, 0.955]$^{\dagger}$ \\
+\texttt{T3\_sutra} & 256,061 & 1.413 [1.398, 1.429] & 0.946 [0.937, 0.957]$^{\dagger}$ \\
+\texttt{T3\_brahmic131k} & 131,072 & 1.327 [1.314, 1.341] & 0.924 [0.915, 0.934]$^{\dagger}$ \\
+\bottomrule
+\end{tabular}
+\caption{Sanskrit over Hindi on FLORES devtest, both sides under the same tokenizer. $^{\dagger}$~The SLP1 column is an artifact, not a result: Hindi characters outside SLP1's Sanskrit inventory inflate the Hindi token count, which sits in this ratio's denominator and mechanically depresses it. Read the original-script column. The trained arms are excluded by design: the Hindi pivot is defined over the deployed arms only.}
+\label{tab:tpphindi}
+\end{table*}

@@ -1,0 +1,23 @@
+\begin{table*}[t]
+\centering
+\footnotesize
+\begin{tabular}{lllll}
+\toprule
+Arm & Vocab. & SLP1 vs \texttt{o200k} & Orig.\ vs \texttt{o200k} & Fert. \\
+\midrule
+\texttt{T0\_o200k} & 200,019 & 1.835 [1.813, 1.858] & 1.901 [1.874, 1.926] & 3.15 \\
+\texttt{T0\_llama4} & 201,135 & 1.882 [1.858, 1.905] & 1.985 [1.958, 2.011] & 3.21 \\
+\texttt{T0\_gemma3} & 262,145 & 1.831 [1.809, 1.854] & 1.654 [1.632, 1.675] & 3.13 \\
+\texttt{T0\_gpt2} & 50,257 & 2.123 [2.096, 2.151] & 6.562 [6.470, 6.652] & 3.57 \\
+\texttt{T3\_sarvam} & 68,096 & 2.416 [2.386, 2.447] & 1.807 [1.782, 1.831] & 4.08 \\
+\texttt{T3\_sutra} & 256,061 & 1.930 [1.905, 1.955] & 1.760 [1.735, 1.783] & 3.26 \\
+\texttt{T3\_brahmic131k} & 131,072 & 1.873 [1.850, 1.896] & 1.899 [1.872, 1.924] & 3.22 \\
+\texttt{T1\_bpe\_raw\_32k}$^{*}$ & 32,000 & \textbf{0.984 [0.970, 0.998]} & n/a & 1.65 \\
+\texttt{T1\_bpe\_raw\_64k}$^{*}$ & 64,000 & \textbf{0.887 [0.875, 0.899]} & n/a & 1.49 \\
+\texttt{T2\_unigram\_raw\_32k}$^{*}$ & 32,000 & 1.069 [1.055, 1.085] & n/a & 1.80 \\
+\texttt{T2\_unigram\_raw\_64k}$^{*}$ & 64,000 & 1.002 [0.988, 1.017] & n/a & 1.69 \\
+\bottomrule
+\end{tabular}
+\caption{Deployed practice on S\=amayik test (prose, primary; $n=2{,}417$ aligned pairs). Tokens per proposition: Sanskrit tokens under the named arm divided by English tokens under a deployed 200k-vocabulary English tokenizer, with 95\% paired bootstrap intervals. This is not a controlled comparison: vocabulary size and training domain vary alongside language, which is what Table~\ref{tab:tppcontrolled} holds fixed. $^{*}$~marks the provisional trained arms. Fertility is in the last column for completeness and is not part of any claim here. Bold marks an interval entirely below 1.0. The second English pivot, and the other three corpora, are in Appendix~\ref{sec:fulltables}. \texttt{T3\_indicsuper} is omitted: no candidate repository resolved.}
+\label{tab:tppdeployed}
+\end{table*}

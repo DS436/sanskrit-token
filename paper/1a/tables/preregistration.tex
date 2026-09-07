@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{p{0.26\textwidth}p{0.42\textwidth}p{0.24\textwidth}}
+\toprule
+Pre-registered prediction & Measured & Outcome \\
+\midrule
+T0 fertility on Sanskrit 5--12 & 3.11--3.88 at $\geq$200k vocab; 12.49 for GPT-2 & Refuted, except GPT-2 on Devanagari \\
+Hindi 2--4 under the same tokenizer & 1.79--2.34 at $\geq$200k vocab & Held \\
+Sa/Hi parity $>1.5$ & 1.060--1.353 & Refuted \\
+T3 closes most of the gap vs Hindi & Sa/Hi 1.327--1.413 for T3 against 1.060--1.353 for T0 & Not observed; no gap to close \\
+TPP crosses below 1.0 against \texttt{o200k} & 0.887 [0.875, 0.899] on prose; 1.035 [1.021, 1.049] under the matched control & Observed against the pivot, not under control \\
+\bottomrule
+\end{tabular}
+\caption{The pre-registered predictions of the project's design document against what was measured. The predictions were written before any arm was run and are dated in the repository's history. The last row is the paper's central negative result: the crossing is real against the deployed English pivot and disappears against the matched English control, so it is a statement about the pivot's vocabulary and domain rather than about Sanskrit.}
+\label{tab:prereg}
+\end{table*}
