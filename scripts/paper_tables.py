@@ -13,11 +13,12 @@ Framing rules obeyed here, from CLAUDE.md §2:
   the T1/T2 over E1 pairs are matched on algorithm, vocabulary size and training corpus.
 * Ratios print to three decimals, fertility and compression to two.
 
-Two writers (`tpp_by_length.tex`, `renyi.tex`) emit a one-line LaTeX comment when the
-snapshot has no `tpp_by_length` / `renyi` key, so this script already runs against a
-snapshot that lacks them. Every reader here addresses the keys it needs by name and
-ignores the rest, so a snapshot that gains keys (Experiment 02 is still adding analyses)
-changes nothing that is not read.
+The length writers (`tpp_by_length.tex`, `tpp_by_length_sa.tex`,
+`tpp_by_length_all.tex`) and `renyi.tex` emit a one-line LaTeX comment when the
+snapshot has no `tpp_by_length` / `tpp_by_length_sa` / `renyi` key, so this script
+already runs against a snapshot that lacks them. Every reader here addresses the keys
+it needs by name and ignores the rest, so a snapshot that gains keys (Experiment 02 is
+still adding analyses) changes nothing that is not read.
 
 Usage::
 
@@ -80,6 +81,23 @@ PREREG_PARITY_THRESHOLD = "1.5"
 #: against `data/exclusion_hashes.txt` and exact deduplication.
 SAMAYIK_TRAIN_PAIRS = 43_493
 ITIHASA_TRAIN_PAIRS = 75_161
+
+#: The two length stratifications, as (results key, bin-edge config key, binned side).
+#: Both are reported because binning on one side selects that side's noise into the bin,
+#: which biases the ratio in a known direction: down for English bins, up for Sanskrit
+#: bins (`docs/decisions.md`, "Length strata reported under both ... binning").
+LENGTH_STRATA: tuple[tuple[str, str, str], ...] = (
+    ("tpp_by_length", "length_bin_edges", "English"),
+    ("tpp_by_length_sa", "length_bin_edges_sa", "Sanskrit"),
+)
+
+#: The corpora the body's length tables carry: the two the verse/prose reading compares,
+#: prose first (CLAUDE.md §2.7). All four are in the appendix table.
+LENGTH_BODY_CORPORA = ("samayik_test", "itihasa_test")
+
+#: The prose corpus and the verse corpus of that comparison, in that order.
+LENGTH_PROSE_CORPUS = "samayik_test"
+LENGTH_VERSE_CORPUS = "itihasa_test"
 
 #: The α at which the prose of §5.6 reads the Rényi table. Both α values are tabulated.
 RENYI_PROSE_ALPHA = "2.5"
@@ -173,6 +191,37 @@ MACROS: tuple[str, ...] = (
     "numRenyiUnigramHi",
     "numRenyiEnglishLo",
     "numRenyiEnglishHi",
+    "numLengthSparseBelow",
+    "numSamayikMeanEnWords",
+    "numSamayikMeanSaWords",
+    "numItihasaMeanEnWords",
+    "numItihasaMeanSaWords",
+    "numLengthGradientsFlipped",
+    "numLengthGradientsTotal",
+    "numLengthEnFirstBin",
+    "numLengthEnFirstLo",
+    "numLengthEnFirstHi",
+    "numLengthEnLastBin",
+    "numLengthEnLastLo",
+    "numLengthEnLastHi",
+    "numLengthPairsBelowOneEn",
+    "numLengthSaFirstBin",
+    "numLengthSaFirstLo",
+    "numLengthSaFirstHi",
+    "numLengthSaLastBin",
+    "numLengthSaLastLo",
+    "numLengthSaLastHi",
+    "numLengthPairsBelowOneSa",
+    "numVerseBelowProseComparisons",
+    "numVerseBelowProseTotal",
+    "numVerseProseGapMin",
+    "numVerseProseGapMax",
+    "numEnglishBinExample",
+    "numEnglishBinItihasaSaWords",
+    "numEnglishBinSamayikSaWords",
+    "numSanskritBinExample",
+    "numSanskritBinItihasaEnWords",
+    "numSanskritBinSamayikEnWords",
 )
 
 
@@ -719,57 +768,175 @@ def arms_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     return table_float(body, caption, "tab:arms", wide=True)
 
 
+def matched_pair_short(sa_arm: str) -> str:
+    """`T1_bpe_raw_32k` -> `BPE 32k`. The caption spells the pairs out in full."""
+    algorithm = "BPE" if "_bpe_" in sa_arm else "Unigram"
+    return f"{algorithm} {sa_arm.rsplit('_', 1)[-1]}"
+
+
+def bin_label_tex(name: str) -> str:
+    """A bin name as the prose sets it: `25-40` -> `25--40`, `41+` unchanged."""
+    return name.replace("-", "--")
+
+
+def controlled_pair_keys(exp02: dict[str, Any]) -> list[str]:
+    """The four matched pairs, as they key the by-length blocks."""
+    return [f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]]
+
+
+def _length_cell(node: dict[str, Any] | None) -> str:
+    """`value [lo, hi]`, bold when the interval is below 1.0, daggered when sparse."""
+    if node is None or node.get("value") is None:
+        return "n/a"
+    text = f"{ratio(float(node['value']))} {ci(node)}"
+    if float(node["ci_high"]) < 1.0:
+        text = f"\\textbf{{{text}}}"
+    if bool(node.get("sparse", False)):
+        text += "$^{\\dagger}$"
+    return text
+
+
+def _length_block(
+    strata: dict[str, Any], corpus: str, pairs: list[str], bins: list[str]
+) -> list[list[str]]:
+    """One corpus inside a length table: a heading, the bins' `n`, then the four pairs.
+
+    `n` is a row rather than a per-cell annotation because it is a property of the bin,
+    not of the pair: all four matched pairs score the same sentences.
+    """
+    width = len(bins) + 1
+    heading = CORPUS_LABELS.get(corpus, tex_escape(corpus))
+    rows: list[list[str]] = [[f"\\multicolumn{{{width}}}{{l}}{{\\emph{{{heading}}}}}"]]
+    counts = ["$n$ pairs"]
+    for name in bins:
+        node = strata[corpus][pairs[0]].get(name)
+        if node is None or node.get("value") is None:
+            counts.append("--")
+            continue
+        cell = count(int(node["n_pairs"]))
+        counts.append(f"{cell}$^{{\\dagger}}$" if node.get("sparse") else cell)
+    rows.append(counts)
+    for pair in pairs:
+        cells = [matched_pair_short(pair.split("/")[0])]
+        cells.extend(_length_cell(strata[corpus][pair].get(name)) for name in bins)
+        rows.append(cells)
+    return rows
+
+
+def _length_tabular(header: list[str], blocks: list[list[list[str]]]) -> str:
+    """A booktabs tabular whose corpus blocks are separated by their own rules."""
+    lines = [
+        "\\setlength{\\tabcolsep}{3.5pt}",
+        "\\scriptsize",
+        "\\begin{tabular}{l" + "r" * (len(header) - 1) + "}",
+        "\\toprule",
+        " & ".join(header) + r" \\",
+    ]
+    for block in blocks:
+        lines.append("\\midrule")
+        lines.extend(" & ".join(row) + r" \\" for row in block)
+    lines.extend(["\\bottomrule", "\\end{tabular}"])
+    return "\n".join(lines)
+
+
+def _length_caption(exp02: dict[str, Any], side: str, edges_key: str, tail: str) -> str:
+    """The shared body of both length captions: what is binned, and how to read a cell."""
+    edges = ", ".join(str(edge) for edge in exp02["config"][edges_key])
+    level = int(float(exp02["config"].get("ci", 0.95)) * 100)
+    floor = int(exp02["config"]["length_sparse_below"])
+    script = " word count in the original script" if side == "Sanskrit" else " word count"
+    return (
+        "Tokens per proposition under the matched control, stratified by the "
+        f"\\textbf{{{side}}} side's whitespace{script} (bin edges {edges}). Each cell is "
+        f"the ratio with its {level}\\% paired bootstrap interval; bold marks an interval "
+        "entirely below 1.0. Rows name the matched pairs of "
+        "Table~\\ref{tab:tppcontrolled} in short form: BPE 32k is "
+        "\\texttt{T1\\_bpe\\_raw\\_32k} over \\texttt{E1\\_bpe\\_32k}, Unigram 64k is "
+        "\\texttt{T2\\_unigram\\_raw\\_64k} over \\texttt{E1\\_unigram\\_64k}, and so on; "
+        "all four pairs score the same sentences, so the $n$ row belongs to the bin. "
+        f"$^{{\\dagger}}$~marks a bin with fewer than {floor} pairs. {tail}"
+    )
+
+
 def tpp_by_length_table(exp02: dict[str, Any]) -> str:
-    """Length-stratified TPP, when the snapshot carries it.
+    """The English-binned strata for the two primary corpora, prose first.
 
     Restricted to the matched pairs, since a length breakdown of the uncontrolled
-    deployed-practice ratios would answer a question this paper does not ask.
+    deployed-practice ratios would answer a question this paper does not ask
+    (CLAUDE.md §2.5). The companion Sanskrit-binned table is the point: binning on one
+    side biases the ratio in that side's direction, so neither table is read alone.
     """
     if "tpp_by_length" not in exp02:
         return "% not available in this snapshot\n"
     strata: dict[str, Any] = exp02["tpp_by_length"]
-    controlled = [f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]]
-    corpora = list(strata.keys())
-    bins = list(strata[corpora[0]][controlled[0]].keys())
-    rows: list[list[str]] = []
-    sparse_seen = False
-    for corpus in corpora:
-        for pair in controlled:
-            sa_arm, en_arm = pair.split("/")
-            cells = [
-                SHORT_CORPUS_LABELS.get(corpus, tex_escape(corpus)),
-                f"{arm_tt(sa_arm, provisional=True)} / {arm_tt(en_arm)}",
-            ]
-            for name in bins:
-                node = strata[corpus][pair].get(name)
-                if node is None or node.get("value") is None:
-                    cells.append("n/a")
-                    continue
-                sparse = bool(node.get("sparse", False))
-                sparse_seen = sparse_seen or sparse
-                text = ratio(float(node["value"]))
-                if float(node["ci_high"]) < 1.0:
-                    text = f"\\textbf{{{text}}}"
-                cells.append(f"{text}$^{{\\dagger}}$" if sparse else text)
-            rows.append(cells)
-    header = ["Corpus", "Matched pair"]
-    header.extend(f"{tex_escape(name)} w." for name in bins)
-    body = tabular("ll" + "r" * len(bins), header, rows, size="\\scriptsize")
-    edges = ", ".join(str(edge) for edge in exp02["config"]["length_bin_edges"])
-    caption = (
-        "Tokens per proposition under the matched control, stratified by the number of "
-        "words in the English side of the pair. Bin edges: "
-        f"{edges}. Values only, to three decimals; bold marks a bin whose "
-        f"{int(float(exp02['config'].get('ci', 0.95)) * 100)}\\% bootstrap interval lies "
-        "entirely below 1.0, and the intervals themselves are in the snapshot's "
-        "\\texttt{results.json}."
+    pairs = controlled_pair_keys(exp02)
+    bins = list(strata[LENGTH_BODY_CORPORA[0]][pairs[0]].keys())
+    blocks = [_length_block(strata, corpus, pairs, bins) for corpus in LENGTH_BODY_CORPORA]
+    header = ["Matched pair"]
+    header.extend(f"{bin_label_tex(name)} En.\\ words" for name in bins)
+    tail = (
+        "Selecting pairs by a high English word count preferentially selects pairs whose "
+        "English side is long for its content, and that side is this ratio's denominator, "
+        "so the gradient across these columns runs downwards whether or not density "
+        "changes with length. Table~\\ref{tab:tppbylengthsa} is the mirror. The other two "
+        "corpora are in Appendix~\\ref{sec:lengthstrata}."
     )
-    if sparse_seen:
-        caption += (
-            " $^{\\dagger}$~marks a bin the experiment flagged as sparse (fewer than "
-            f"{int(exp02['config']['length_sparse_below'])} pairs)."
+    caption = _length_caption(exp02, "English", "length_bin_edges", tail)
+    return table_float(_length_tabular(header, blocks), caption, "tab:tppbylength", wide=True)
+
+
+def tpp_by_length_sa_table(exp02: dict[str, Any]) -> str:
+    """The Sanskrit-binned strata for the same two corpora, on the same pairs."""
+    if "tpp_by_length_sa" not in exp02:
+        return "% not available in this snapshot\n"
+    strata: dict[str, Any] = exp02["tpp_by_length_sa"]
+    pairs = controlled_pair_keys(exp02)
+    bins = list(strata[LENGTH_BODY_CORPORA[0]][pairs[0]].keys())
+    blocks = [_length_block(strata, corpus, pairs, bins) for corpus in LENGTH_BODY_CORPORA]
+    header = ["Matched pair"]
+    header.extend(f"{bin_label_tex(name)} Sa.\\ words" for name in bins)
+    tail = (
+        "The bias runs the other way here: the binned side is now the numerator, so the "
+        "gradient across these columns runs upwards for the same reason "
+        "Table~\\ref{tab:tppbylength}'s runs downwards. Every within-corpus gradient "
+        "changes sign between the two, which is what selection on the binned side looks "
+        "like; the verse-below-prose ordering does not. The other two corpora are in "
+        "Appendix~\\ref{sec:lengthstrata}."
+    )
+    caption = _length_caption(exp02, "Sanskrit", "length_bin_edges_sa", tail)
+    return table_float(
+        _length_tabular(header, blocks), caption, "tab:tppbylengthsa", wide=True
+    )
+
+
+def tpp_by_length_all_tables(exp02: dict[str, Any]) -> str:
+    """Appendix: every corpus under both stratifications, as two floats."""
+    if "tpp_by_length" not in exp02:
+        return "% not available in this snapshot\n"
+    pairs = controlled_pair_keys(exp02)
+    parts: list[str] = []
+    for key, edges_key, side in LENGTH_STRATA:
+        if key not in exp02:  # pragma: no cover - both keys are in this snapshot
+            continue
+        strata: dict[str, Any] = exp02[key]
+        corpora = list(strata.keys())
+        bins = list(strata[corpora[0]][pairs[0]].keys())
+        blocks = [_length_block(strata, corpus, pairs, bins) for corpus in corpora]
+        abbreviation = "Sa" if side == "Sanskrit" else "En"
+        header = ["Matched pair"]
+        header.extend(f"{bin_label_tex(name)} {abbreviation}.\\ words" for name in bins)
+        tail = (
+            "Every corpus, at the same bins as the body's "
+            f"Table~\\ref{{tab:tppbylength{'sa' if side == 'Sanskrit' else ''}}}, which "
+            "carries the two primary ones. Read against its companion on the other side: "
+            "a gradient that keeps its sign under both stratifications is a length effect "
+            "and one that changes sign is selection, and here all "
+            "\\numLengthGradientsTotal{} change sign."
         )
-    return table_float(body, caption, "tab:tppbylength", wide=True)
+        caption = _length_caption(exp02, side, edges_key, tail)
+        label = "tab:tppbylengthall" + ("sa" if side == "Sanskrit" else "")
+        parts.append(table_float(_length_tabular(header, blocks), caption, label, wide=True))
+    return "\n".join(parts)
 
 
 def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
@@ -855,6 +1022,178 @@ def renyi_macros(exp02: dict[str, Any]) -> dict[str, str]:
         "numRenyiEnglishLo": ratio(min(english_values)),
         "numRenyiEnglishHi": ratio(max(english_values)),
     }
+
+
+def _dense_bins(entries: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """The populated, non-sparse bins of one corpus x pair, in bin order."""
+    return [
+        (name, node)
+        for name, node in entries.items()
+        if node.get("value") is not None and not node.get("sparse", False)
+    ]
+
+
+def _gradient_sign(entries: dict[str, Any]) -> float | None:
+    """Last dense bin minus first dense bin, the gradient this section reads."""
+    dense = _dense_bins(entries)
+    if len(dense) < 2:
+        return None
+    return float(dense[-1][1]["value"]) - float(dense[0][1]["value"])
+
+
+def length_gradient_flips(exp02: dict[str, Any]) -> tuple[int, int]:
+    """How many corpus x pair gradients change sign between the two stratifications."""
+    pairs = controlled_pair_keys(exp02)
+    flipped = 0
+    total = 0
+    for corpus in exp02["tpp_by_length"]:
+        for pair in pairs:
+            english = _gradient_sign(exp02["tpp_by_length"][corpus][pair])
+            sanskrit = _gradient_sign(exp02["tpp_by_length_sa"][corpus][pair])
+            if english is None or sanskrit is None:  # pragma: no cover - not this snapshot
+                continue
+            total += 1
+            if (english > 0) != (sanskrit > 0):
+                flipped += 1
+    return flipped, total
+
+
+def verse_below_prose(exp02: dict[str, Any]) -> tuple[int, int, float, float]:
+    """Verse against prose at every bin both corpora populate, under both stratifications.
+
+    A comparison is one bin x one matched pair x one stratification, counted only where
+    both corpora hold at least `length_sparse_below` pairs in that bin, so that neither
+    side of the comparison rests on a handful of sentences. Returns the number of those
+    in which verse sits below prose, the total, and the smallest and largest gap.
+    """
+    pairs = controlled_pair_keys(exp02)
+    floor = int(exp02["config"]["length_sparse_below"])
+    below = 0
+    total = 0
+    gaps: list[float] = []
+    for key, _edges_key, _side in LENGTH_STRATA:
+        strata = exp02[key]
+        prose = strata[LENGTH_PROSE_CORPUS]
+        verse = strata[LENGTH_VERSE_CORPUS]
+        for name in prose[pairs[0]]:
+            if int(prose[pairs[0]][name]["n_pairs"]) < floor:
+                continue
+            if int(verse[pairs[0]][name]["n_pairs"]) < floor:
+                continue
+            for pair in pairs:
+                total += 1
+                gap = float(prose[pair][name]["value"]) - float(verse[pair][name]["value"])
+                gaps.append(gap)
+                if gap > 0:
+                    below += 1
+    return below, total, min(gaps), max(gaps)
+
+
+def _corpus_mean_words(exp02: dict[str, Any], corpus: str) -> tuple[float, float]:
+    """A corpus's mean English and Sanskrit word counts, pooled over its English bins."""
+    pair = controlled_pair_keys(exp02)[0]
+    entries = exp02["tpp_by_length"][corpus][pair]
+    total = 0
+    english = 0.0
+    sanskrit = 0.0
+    for node in entries.values():
+        n = int(node["n_pairs"])
+        if n == 0:  # pragma: no cover - every bin is populated in this snapshot
+            continue
+        total += n
+        english += n * float(node["mean_words_en"])
+        sanskrit += n * float(node["mean_words_sa"])
+    return english / total, sanskrit / total
+
+
+def _extreme_dense_bin(
+    exp02: dict[str, Any], key: str, corpus: str, last: bool
+) -> tuple[str, list[float]]:
+    """The first or last dense bin of `corpus`, and its value under each matched pair."""
+    pairs = controlled_pair_keys(exp02)
+    dense = _dense_bins(exp02[key][corpus][pairs[0]])
+    name = dense[-1][0] if last else dense[0][0]
+    return name, [float(exp02[key][corpus][pair][name]["value"]) for pair in pairs]
+
+
+def _busiest_joint_bin(exp02: dict[str, Any], key: str) -> str:
+    """The jointly populated bin holding the most verse pairs, under one stratification.
+
+    Jointly populated means both corpora clear `length_sparse_below` there, which is the
+    same floor the verse-against-prose count uses.
+    """
+    pair = controlled_pair_keys(exp02)[0]
+    floor = int(exp02["config"]["length_sparse_below"])
+    prose = exp02[key][LENGTH_PROSE_CORPUS][pair]
+    verse = exp02[key][LENGTH_VERSE_CORPUS][pair]
+    joint: list[str] = [
+        str(name)
+        for name in prose
+        if int(prose[name]["n_pairs"]) >= floor and int(verse[name]["n_pairs"]) >= floor
+    ]
+    return max(joint, key=lambda name: int(verse[name]["n_pairs"]))
+
+
+def length_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §5.5 reads. Empty when the snapshot predates the length strata."""
+    if "tpp_by_length" not in exp02 or "tpp_by_length_sa" not in exp02:
+        return {}
+    values: dict[str, str] = {}
+    values["numLengthSparseBelow"] = str(int(exp02["config"]["length_sparse_below"]))
+
+    for key, corpus in (
+        ("numSamayik", LENGTH_PROSE_CORPUS),
+        ("numItihasa", LENGTH_VERSE_CORPUS),
+    ):
+        english, sanskrit = _corpus_mean_words(exp02, corpus)
+        values[f"{key}MeanEnWords"] = f"{english:.1f}"
+        values[f"{key}MeanSaWords"] = f"{sanskrit:.1f}"
+
+    flipped, total = length_gradient_flips(exp02)
+    values["numLengthGradientsFlipped"] = str(flipped)
+    values["numLengthGradientsTotal"] = str(total)
+
+    for prefix, key in (("numLengthEn", "tpp_by_length"), ("numLengthSa", "tpp_by_length_sa")):
+        for position, last in (("First", False), ("Last", True)):
+            name, bin_values = _extreme_dense_bin(exp02, key, LENGTH_PROSE_CORPUS, last)
+            values[f"{prefix}{position}Bin"] = bin_label_tex(name)
+            values[f"{prefix}{position}Lo"] = ratio(min(bin_values))
+            values[f"{prefix}{position}Hi"] = ratio(max(bin_values))
+    # The prose says where the prose corpus crosses under each stratification: the last
+    # dense English bin, and the first dense Sanskrit bin, are the crossings that exist.
+    _, en_last = _extreme_dense_bin(exp02, "tpp_by_length", LENGTH_PROSE_CORPUS, True)
+    _, sa_first = _extreme_dense_bin(exp02, "tpp_by_length_sa", LENGTH_PROSE_CORPUS, False)
+    values["numLengthPairsBelowOneEn"] = str(sum(1 for value in en_last if value < 1.0))
+    values["numLengthPairsBelowOneSa"] = str(sum(1 for value in sa_first if value < 1.0))
+
+    below, comparisons, gap_min, gap_max = verse_below_prose(exp02)
+    values["numVerseBelowProseComparisons"] = str(below)
+    values["numVerseBelowProseTotal"] = str(comparisons)
+    values["numVerseProseGapMin"] = ratio(gap_min)
+    values["numVerseProseGapMax"] = ratio(gap_max)
+
+    # The two bin-mean examples: a bin equates the corpora on the side it is cut on and
+    # leaves the other side free, which is why the separation is bracketed, not isolated.
+    # The illustrating bin is the jointly populated one holding the most verse pairs,
+    # under each stratification, so the example is the bulk of the verse corpus.
+    pair = controlled_pair_keys(exp02)[0]
+    en_bin_name = _busiest_joint_bin(exp02, "tpp_by_length")
+    values["numEnglishBinExample"] = bin_label_tex(en_bin_name)
+    for label, corpus in (
+        ("numEnglishBinItihasa", LENGTH_VERSE_CORPUS),
+        ("numEnglishBinSamayik", LENGTH_PROSE_CORPUS),
+    ):
+        node = exp02["tpp_by_length"][corpus][pair][en_bin_name]
+        values[f"{label}SaWords"] = f"{float(node['mean_words_sa']):.1f}"
+    sa_bin_name = _busiest_joint_bin(exp02, "tpp_by_length_sa")
+    values["numSanskritBinExample"] = bin_label_tex(sa_bin_name)
+    for label, corpus in (
+        ("numSanskritBinItihasa", LENGTH_VERSE_CORPUS),
+        ("numSanskritBinSamayik", LENGTH_PROSE_CORPUS),
+    ):
+        node = exp02["tpp_by_length_sa"][corpus][pair][sa_bin_name]
+        values[f"{label}EnWords"] = f"{float(node['mean_words_en']):.1f}"
+    return values
 
 
 def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
@@ -999,6 +1338,7 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     values["numTrainPairsTotal"] = count(SAMAYIK_TRAIN_PAIRS + ITIHASA_TRAIN_PAIRS)
 
     values.update(renyi_macros(exp02))
+    values.update(length_macros(exp02))
 
     missing = [name for name in MACROS if name not in values]
     if missing:
@@ -1033,6 +1373,8 @@ def build(exp01: dict[str, Any], exp02: dict[str, Any]) -> dict[str, str]:
         "preregistration.tex": preregistration_table(exp01, exp02),
         "arms.tex": arms_table(exp01, exp02),
         "tpp_by_length.tex": tpp_by_length_table(exp02),
+        "tpp_by_length_sa.tex": tpp_by_length_sa_table(exp02),
+        "tpp_by_length_all.tex": tpp_by_length_all_tables(exp02),
         "renyi.tex": renyi_table(exp02),
         "numbers.tex": numbers_macros(exp01, exp02),
     }

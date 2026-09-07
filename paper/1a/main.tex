@@ -44,7 +44,9 @@ proposition than English on contemporary prose (\numTppBpeSixtyFourDeployed{}
 the same vocabulary size trained on the English side of the same corpus, that flip
 disappears: all \numControlledPairs{} matched pairs sit above 1.0 on prose with
 \numCiLevel\%{} intervals excluding it (\numTppControlledSamayikLo--%
-\numTppControlledSamayikHi). The whole move is in the English denominator. What survives
+\numTppControlledSamayikHi). The whole move is in the English denominator. Stratifying by sentence
+length on either side leaves the verse and prose separation intact, while every
+within-corpus length gradient reverses with the side the bins are cut on. What survives
 is a statement about deployed practice: Sanskrit costs \numDeployedLo--\numDeployedHi{}
 English tokens per proposition under the tokenizers people actually ship. Code, the
 results snapshot and every table in this paper are public.
@@ -251,7 +253,6 @@ snapshot by a script. The code and the snapshot are in an anonymised repository.
 \label{sec:results}
 
 \input{tables/parity}
-\input{tables/fertility_compression}
 
 \subsection{RQ1: how large is the penalty?}
 \label{sec:rq1}
@@ -268,7 +269,9 @@ the same tokenizers cost only \numParitySaHiLo--\numParitySaHiHi{} times as many
 
 Two pre-registered predictions fail here. Fertility above \numPreregFertLo{} on Sanskrit
 is refuted for every arm with a vocabulary of \numLargeVocabFloor{} ids or more
-(\numFertSaLo--\numFertSaHi, Table \ref{tab:fertcomp}); it holds only for GPT-2 on raw
+(\numFertSaLo--\numFertSaHi, Table \ref{tab:fertcomp}, which sits in
+Appendix \ref{sec:fulltables} because fertility is reported here and never led with); it
+holds only for GPT-2 on raw
 Devanagari (\numFertSaGptTwo), and the same arm's SLP1 variant falls back into the same
 band as the others (\numFertSaGptTwoSlpOne), so the high number is a property of an old
 vocabulary meeting three-byte characters rather than evidence about Sanskrit. A
@@ -387,18 +390,72 @@ follow, not a finding to report.
 \subsection{Tokens per proposition by sentence length}
 \label{sec:length}
 
-% TODO(1b-of-task): prose for this subsection. The measurement landed in the snapshot
-% while this draft was being written, so tables/tpp_by_length.tex is now generated from
-% `results/02_tpp_parallel/results.json`'s `tpp_by_length` key and Table~\ref{tab:tppbylength}
-% is real. What is still missing is the reading: the controlled ratio falls monotonically
-% with English sentence length and crosses below 1.0 in the longest bins on prose, which
-% bears directly on Section~\ref{sec:rq2-controlled} and needs stating carefully, with the
-% sparse-bin flags respected. scripts/paper_figures.py already writes
-% figures/length.{pdf,png} from the same key; include it here when the prose is written.
-\textit{Draft: prose pending. Table~\ref{tab:tppbylength} is generated and its numbers are
-final; the reading of it is not yet written.}
+A corpus-level ratio compares one whole corpus with another, and the two primary corpora
+differ in length as well as register. A S\=amayik test pair averages
+\numSamayikMeanEnWords{} English words to \numSamayikMeanSaWords{} Sanskrit ones; over
+Itih\=asa test the Sanskrit side is barely longer at \numItihasaMeanSaWords{} words, while
+the English side runs to \numItihasaMeanEnWords. So the strata ask one question: is the
+verse result of Section \ref{sec:verse} a length effect?
+
+They have to be read in pairs, because binning is itself a selection. Within a corpus a
+sentence's length on one side is its content plus how wordy that side happened to be, so
+selecting pairs by a high English word count preferentially selects pairs whose English
+side is long for their content, and that side is this ratio's denominator; the ratio then
+falls as the bin rises whether or not anything about density changes with length. Binning
+on the Sanskrit side puts the same selection in the numerator and makes the ratio rise.
+Neither stratification is the truth, and together they bracket it: a gradient that kept
+its sign under both would be consistent with a length effect; one that changes sign is
+selection.
+
+Every within-corpus gradient changes sign. Across corpora and matched pairs,
+\numLengthGradientsFlipped{} of \numLengthGradientsTotal{} gradients run one way under
+English bins and the other under Sanskrit bins (Tables \ref{tab:tppbylength} and
+\ref{tab:tppbylengthsa}, Figure \ref{fig:length}). On S\=amayik test the controlled ratio
+falls from \numLengthEnFirstLo--\numLengthEnFirstHi{} at \numLengthEnFirstBin{} English
+words to \numLengthEnLastLo--\numLengthEnLastHi{} at \numLengthEnLastBin, dropping below
+1.0 for \numLengthPairsBelowOneEn{} of the \numControlledPairs{} pairs; under Sanskrit bins
+the same pairs rise from \numLengthSaFirstLo--\numLengthSaFirstHi{} at
+\numLengthSaFirstBin{} Sanskrit words to \numLengthSaLastLo--\numLengthSaLastHi{} at
+\numLengthSaLastBin, and the \numLengthPairsBelowOneSa{} pairs below 1.0 are now all in the
+\emph{shortest} bin. We therefore draw no claim about tokens per proposition changing with
+sentence length from these tables, and in particular the apparent crossing below 1.0 at
+long English sentences is not a finding.
+
+The verse and prose separation behaves differently. At every bin where both Itih\=asa test
+and S\=amayik test hold at least \numLengthSparseBelow{} pairs, verse sits below prose for
+every matched pair under \emph{both} stratifications: \numVerseBelowProseComparisons{} of
+\numVerseBelowProseTotal{} comparisons, with gaps from \numVerseProseGapMin{} to
+\numVerseProseGapMax{} tokens per proposition. That separation is therefore not
+attributable to sentence length on either side. It remains bracketed rather than isolated,
+since a bin equates the two corpora on the side it is cut on and leaves the other side
+free: at \numEnglishBinExample{} English words Itih\=asa's Sanskrit side still averages
+\numEnglishBinItihasaSaWords{} whitespace words against S\=amayik's
+\numEnglishBinSamayikSaWords, and at \numSanskritBinExample{} Sanskrit words Itih\=asa's
+English side averages \numSanskritBinItihasaEnWords{} against S\=amayik's
+\numSanskritBinSamayikEnWords. This is consistent with the confounds Section
+\ref{sec:verse} already flags for verse, and nothing here measures meter.
+
+None of it touches Section \ref{sec:rq2-controlled}: the controlled prose result above 1.0
+is a statement about the corpus as a whole, and the strata neither strengthen nor weaken
+it.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/length.pdf}
+  \caption{Tokens per proposition under the matched control by sentence length, prose left
+    and verse right. The top row bins pairs on the English side's whitespace word count
+    and the bottom row on the Sanskrit side's; bars are \numCiLevel\%{} bootstrap
+    intervals, markers are hollow where a bin holds fewer than \numLengthSparseBelow{}
+    pairs, and the dashed line is parity. Each panel is scaled to its own non-sparse bins,
+    and a point outside that range is drawn as a triangle at the edge carrying its value.
+    Every gradient reverses between the two rows, which is what selection on the binned
+    side looks like and what a length effect is not; the verse panels stay below the prose
+    panels under both.}
+  \label{fig:length}
+\end{figure}
 
 \input{tables/tpp_by_length}
+\input{tables/tpp_by_length_sa}
 
 \subsection{R\'enyi efficiency}
 \label{sec:renyi}
@@ -455,7 +512,9 @@ it.
 
 \paragraph{Verse and meter.} The one corpus on which Sanskrit stays below parity under the
 control is verse, where meter is a confound that this design cannot separate from
-tokenization. We report the number and decline to interpret it.
+tokenization. The length strata show that this number is not a sentence-length effect,
+under binning on either side, but they do not identify what it is. We report the number and
+decline to interpret it.
 
 \paragraph{Translation length bias.} Tokens per proposition uses a translation as the
 denominator, and translations are systematically longer than sources. Itih\=asa's English
@@ -491,7 +550,10 @@ has been trained on a monolingual Sanskrit corpus of realistic size.
 
 Sanskrit's density is real at the word level and does not survive an English-centric
 tokenizer, and matched-size raw subword training on Sanskrit does not by itself buy it
-back on prose. The follow-up tests the two interventions this result leaves open,
+back on prose. Length stratification leaves that reading where it stands: the verse and
+prose separation survives binning on either side, while any within-corpus gradient in
+tokens per proposition reverses with the side the bins are cut on, so it is an artefact of
+the stratification rather than an effect of length. The follow-up tests the two interventions this result leaves open,
 reversing sandhi before subword learning and forbidding merges across gold morpheme
 boundaries, and asks whether either moves the controlled ratio below parity or reaches a
 reference bits-per-character sooner in language-model training.
@@ -511,7 +573,13 @@ reference bits-per-character sooner in language-model training.
 
 \input{tables/tpp_deployed_all}
 \input{tables/tpp_hindi}
+\input{tables/fertility_compression}
 \input{tables/fertility_compression_full}
+
+\subsection{Length strata, all corpora}
+\label{sec:lengthstrata}
+
+\input{tables/tpp_by_length_all}
 
 \section{Arm details}
 \label{sec:arms}

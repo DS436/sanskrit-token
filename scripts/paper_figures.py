@@ -12,9 +12,11 @@ Every figure is written from `results/01_baseline_penalty/results.json` and
   against two different English denominators: the deployed 200k-vocabulary tokenizer and
   the matched English control. Nothing about the Sanskrit side changes between the two
   series.
-* `figures/length.{pdf,png}` — the controlled ratio for each matched pair, stratified by
-  the number of words in the English side of the pair. Skipped, with a log line, if the
-  snapshot has no `tpp_by_length` key.
+* `figures/length.{pdf,png}` — the controlled ratio for each matched pair by sentence
+  length, in two rows: bins cut on the English side's word count, then on the Sanskrit
+  side's. Which side the bins are cut on biases the ratio in that side's direction, so
+  neither row is read alone. Skipped, with a log line, if the snapshot has no
+  `tpp_by_length` key.
 
 The style mirrors `scripts/social_figures.py`, which is not imported: that module inserts
 `src/` on `sys.path` and switches the matplotlib backend at import time, so it is not
@@ -45,6 +47,8 @@ from matplotlib import font_manager  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
+from matplotlib.ticker import MaxNLocator  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -329,54 +333,247 @@ def figure_denominator(exp02: dict[str, Any]) -> Figure:
 # --------------------------------------------------------------------------------------
 
 
-def figure_length(exp02: dict[str, Any]) -> Figure | None:
-    """Controlled TPP by English sentence length, or None if not measured yet.
+LENGTH_CORPORA = ("samayik_test", "itihasa_test")
+#: One-line panel titles: the two-line forms of `CORPUS_LABELS` are too tall for a
+#: four-panel figure sized to one column.
+LENGTH_CORPUS_TITLES: dict[str, str] = {
+    "samayik_test": "Sāmayik test (prose)",
+    "itihasa_test": "Itihāsa test (verse)",
+}
+#: The two stratifications, as (results key, what the bins count). Both are drawn because
+#: binning on one side biases the ratio in that side's direction; the pair brackets it.
+LENGTH_STRATA: tuple[tuple[str, str], ...] = (
+    ("tpp_by_length", "English words per sentence"),
+    ("tpp_by_length_sa", "Sanskrit words per sentence"),
+)
+#: Headroom above and below a panel's own data, as a fraction of its span.
+LENGTH_Y_PAD = 0.10
+#: How far left of its triangle an off-scale number is set in the last bins, in bin
+#: widths. A number set flush against the triangle there is struck through by the tall
+#: error bar the neighbouring in-range point carries into the reserved rows.
+LENGTH_LABEL_GAP = 0.42
+#: Height of one reserved off-scale annotation row, as a fraction of a panel's data span.
+#: Each off-scale arm gets a row of its own beyond the data band, so a triangle and its
+#: number never land on another arm's markers.
+LENGTH_OFF_SCALE_ROW = 0.085
 
-    Restricted to the matched pairs, for the same reason as the table: a length breakdown
-    of the uncontrolled deployed-practice ratios answers a question this paper does not
-    ask.
+
+def _length_ylim(
+    series: list[tuple[list[float], list[float], list[float], list[bool]]],
+) -> tuple[float, float]:
+    """A panel's own y range: the CI bounds of its non-sparse bins, and 1.0.
+
+    Sparse bins are excluded from the scale, not from the plot. Itihāsa's nine-pair
+    shortest English bin sits at 8.9 with an interval reaching 21.5, and letting it set
+    the scale flattens every other bin of the figure into the reference line. 1.0 stays
+    inside the range because it is the threshold every panel is read against.
+    """
+    dense: list[float] = []
+    every: list[float] = []
+    for _values, lows, highs, sparse in series:
+        for low, high, is_sparse in zip(lows, highs, sparse, strict=True):
+            every.extend((low, high))
+            if not is_sparse:
+                dense.extend((low, high))
+    bounds = dense or every
+    if not bounds:  # pragma: no cover - a panel with no points at all
+        return 0.0, 2.0
+    low, high = min([*bounds, 1.0]), max([*bounds, 1.0])
+    span = high - low
+    pad = span * LENGTH_Y_PAD if span > 0 else max(abs(high) * 0.2, 0.1)
+    return low - pad, high + pad
+
+
+def _off_scale(
+    ax: Axes,
+    x: float,
+    y: float,
+    value: float,
+    colour: str,
+    *,
+    above: bool,
+    to_left: bool,
+) -> None:
+    """Mark an off-scale value in the panel's reserved margin, with its number beside it.
+
+    `y` is the middle of the row reserved for this arm, which lies beyond the data band,
+    so the annotation cannot collide with a plotted marker or with another arm's. The
+    number is set beside the triangle rather than under it, and to its left with a bin
+    width's clearance in the last bins, where a label to the right would run off the
+    panel and one flush against the triangle would meet a neighbouring error bar.
+
+    Mirrors `_draw_off_scale` in `experiments/02_tpp_parallel/run.py`: a dropped point and
+    a bin the corpus has no sentences in would otherwise look identical.
+    """
+    ax.scatter(
+        [x],
+        [y],
+        marker="^" if above else "v",
+        s=16,
+        edgecolors=colour,
+        facecolors="none",
+        linewidths=0.8,
+        zorder=5,
+    )
+    ax.annotate(
+        f"{value:.2f}",
+        (x - LENGTH_LABEL_GAP if to_left else x, y),
+        textcoords="offset points",
+        xytext=(0.0 if to_left else 3.5, 0.0),
+        ha="right" if to_left else "left",
+        va="center",
+        fontsize=5.0,
+        color=colour,
+        zorder=5,
+    )
+
+
+def _data_band(ax: Axes, bottom: float, top: float) -> Rectangle:
+    """An invisible rectangle over a panel's data band, used to clip the data to it.
+
+    The reserved off-scale rows sit outside this band. Without the clip a confidence
+    interval that runs past the panel's scale would draw its whisker up through those
+    rows and across an annotation, which is the one collision the reserved rows cannot
+    prevent on their own.
+    """
+    left, right = ax.get_xlim()
+    band = Rectangle(
+        (left, bottom),
+        right - left,
+        top - bottom,
+        transform=ax.transData,
+        facecolor="none",
+        edgecolor="none",
+    )
+    ax.add_patch(band)
+    return band
+
+
+def figure_length(exp02: dict[str, Any]) -> Figure | None:
+    """The controlled ratio by sentence length, under both stratifications.
+
+    Rows are the two stratifications (English-side bins, then Sanskrit-side bins) and
+    columns the two primary corpora, prose before verse (CLAUDE.md §2.7). Only the matched
+    pairs are drawn, for the same reason the tables carry only those: an off-the-shelf
+    200k English vocabulary against a 32k Sanskrit one is deployed practice, never a
+    controlled comparison, and on a figure about differences between length bands it would
+    read as one. Returns None if the snapshot predates the analysis.
     """
     if "tpp_by_length" not in exp02:
         return None
-    strata: dict[str, Any] = exp02["tpp_by_length"]
+    strata_keys = [(key, axis) for key, axis in LENGTH_STRATA if key in exp02]
     pairs = [f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]]
-    corpora = list(strata.keys())
-    bins = list(strata[corpora[0]][pairs[0]].keys())
+    corpora = [corpus for corpus in LENGTH_CORPORA if corpus in exp02[strata_keys[0][0]]]
 
-    fig, axes = plt.subplots(1, len(corpora), figsize=(7.1, 3.1), sharey=True)
-    axes_list = list(axes) if len(corpora) > 1 else [axes]
-    for ax, corpus in zip(axes_list, corpora, strict=True):
-        for index, pair in enumerate(pairs):
-            nodes = [strata[corpus][pair].get(name) for name in bins]
-            xs = [position for position, node in enumerate(nodes) if node is not None]
-            values = [float(nodes[position]["value"]) for position in xs]
-            lows = [float(nodes[position]["ci_low"]) for position in xs]
-            highs = [float(nodes[position]["ci_high"]) for position in xs]
-            ax.errorbar(
-                xs,
-                values,
-                yerr=[
-                    [max(v - lo, 0.0) for v, lo in zip(values, lows, strict=True)],
-                    [max(hi - v, 0.0) for v, hi in zip(values, highs, strict=True)],
-                ],
-                fmt="o-",
-                markersize=3.0,
-                linewidth=1.0,
-                color=ACCENT_RAMP[index % len(ACCENT_RAMP)],
-                ecolor=ACCENT_RAMP[index % len(ACCENT_RAMP)],
-                elinewidth=0.9,
-                capsize=1.5,
-                label=pair.split("/")[0] if corpus == corpora[0] else None,
+    fig, axes = plt.subplots(
+        len(strata_keys), len(corpora), figsize=(3.3, 3.96), squeeze=False
+    )
+    for row, (key, axis_label) in enumerate(strata_keys):
+        for column, corpus in enumerate(corpora):
+            ax = axes[row][column]
+            entries = exp02[key][corpus]
+            bins = list(entries[pairs[0]].keys())
+            drawn: list[tuple[list[float], list[float], list[float], list[bool]]] = []
+            for pair in pairs:
+                nodes = [entries[pair].get(name) for name in bins]
+                values = [float(node["value"]) for node in nodes if node is not None]
+                lows = [float(node["ci_low"]) for node in nodes if node is not None]
+                highs = [float(node["ci_high"]) for node in nodes if node is not None]
+                sparse = [bool(node.get("sparse")) for node in nodes if node is not None]
+                drawn.append((values, lows, highs, sparse))
+            bottom, top = _length_ylim(drawn)
+            # One reserved row per arm that runs off the panel, on the side it runs off,
+            # so the triangles and their numbers sit beyond the data rather than on it.
+            rows_above: dict[int, int] = {}
+            rows_below: dict[int, int] = {}
+            for index, (values, *_rest) in enumerate(drawn):
+                for value in values:
+                    if value > top:
+                        rows_above.setdefault(index, len(rows_above))
+                    elif value < bottom:
+                        rows_below.setdefault(index, len(rows_below))
+            row_height = (top - bottom) * LENGTH_OFF_SCALE_ROW
+            ax.set_ylim(
+                bottom - row_height * len(rows_below), top + row_height * len(rows_above)
             )
-        ax.axhline(1.0, color=NEUTRAL_LIGHT, linestyle="--", linewidth=0.9)
-        ax.set_xticks(range(len(bins)))
-        ax.set_xticklabels(bins, fontsize=7.0, rotation=40, ha="right")
-        ax.set_title(CORPUS_LABELS.get(corpus, corpus), fontsize=8, color=SUBTLE_INK, pad=6)
-        style_axes(ax)
-    axes_list[0].set_ylabel("tokens per proposition (Sa / En)", fontsize=9)
-    fig.legend(fontsize=7, loc="lower center", ncol=len(pairs), bbox_to_anchor=(0.5, -0.16))
-    fig.tight_layout()
+            ax.set_xlim(-0.6, len(bins) - 0.4)
+            band = _data_band(ax, bottom, top)
+            # Ticks are chosen over the data band and fixed, so that the reserved rows
+            # do not coarsen the scale and no tick is drawn inside them.
+            ticks = MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]).tick_values(bottom, top)
+            ax.set_yticks([tick for tick in ticks if bottom <= tick <= top])
+
+            for index, (pair, (values, lows, highs, sparse)) in enumerate(
+                zip(pairs, drawn, strict=True)
+            ):
+                colour = ACCENT_RAMP[index % len(ACCENT_RAMP)]
+                nudge = (index - (len(pairs) - 1) / 2) * 0.22
+                line_x: list[float] = []
+                line_y: list[float] = []
+                for position, value in enumerate(values):
+                    if not bottom <= value <= top:
+                        above = value > top
+                        rank = rows_above[index] if above else rows_below[index]
+                        edge = (
+                            top + row_height * (rank + 0.5)
+                            if above
+                            else bottom - row_height * (rank + 0.5)
+                        )
+                        _off_scale(
+                            ax,
+                            position + nudge,
+                            edge,
+                            value,
+                            colour,
+                            above=above,
+                            # A number set to the right of a triangle in the last bins
+                            # would run off the panel, so those are set to its left.
+                            to_left=position > len(bins) - 3,
+                        )
+                        continue
+                    line_x.append(position)
+                    line_y.append(value)
+                    container = ax.errorbar(
+                        [position],
+                        [value],
+                        yerr=_errbars(value, lows[position], highs[position]),
+                        fmt="o",
+                        markersize=2.6,
+                        markerfacecolor="none" if sparse[position] else colour,
+                        color=colour,
+                        ecolor=colour,
+                        elinewidth=0.8,
+                        capsize=1.2,
+                        zorder=3,
+                    )
+                    for whisker in (*container.lines[1], *container.lines[2]):
+                        whisker.set_clip_path(band)
+                ax.plot(line_x, line_y, linewidth=0.9, color=colour, zorder=2,
+                        label=_pair_label(pair) if (row, column) == (0, 0) else None)
+            ax.axhline(1.0, color=NEUTRAL_LIGHT, linestyle="--", linewidth=0.8, zorder=1)
+            ax.set_xticks(range(len(bins)))
+            ax.set_xticklabels(bins, fontsize=6.0, rotation=40, ha="right")
+            ax.tick_params(axis="y", labelsize=6.0)
+            if row == 0:
+                ax.set_title(LENGTH_CORPUS_TITLES.get(corpus, corpus),
+                             fontsize=7.0, color=SUBTLE_INK, pad=4)
+            ax.set_xlabel(axis_label, fontsize=7.0, labelpad=2)
+            if column == 0:
+                ax.set_ylabel("TPP (Sa / En)", fontsize=7.0)
+            style_axes(ax)
+
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=6.0, loc="lower center", ncol=2,
+               bbox_to_anchor=(0.5, -0.07), handlelength=1.6, columnspacing=1.2)
+    fig.tight_layout(h_pad=1.4, w_pad=1.0)
     return fig
+
+
+def _pair_label(pair: str) -> str:
+    """`T1_bpe_raw_32k/E1_bpe_32k` -> `BPE 32k`, as the tables abbreviate it."""
+    sanskrit = pair.split("/")[0]
+    algorithm = "BPE" if "_bpe_" in sanskrit else "Unigram"
+    return f"{algorithm} {sanskrit.rsplit('_', 1)[-1]}"
 
 
 # --------------------------------------------------------------------------------------

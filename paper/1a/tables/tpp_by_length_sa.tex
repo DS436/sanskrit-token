@@ -1,0 +1,26 @@
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{3.5pt}
+\scriptsize
+\begin{tabular}{lrrrrr}
+\toprule
+Matched pair & 1--5 Sa.\ words & 6--10 Sa.\ words & 11--15 Sa.\ words & 16--25 Sa.\ words & 26+ Sa.\ words \\
+\midrule
+\multicolumn{6}{l}{\emph{S\=amayik test (prose)}} \\
+$n$ pairs & 566 & 973 & 562 & 287 & 29$^{\dagger}$ \\
+BPE 32k & \textbf{0.924 [0.885, 0.965]} & 1.063 [1.039, 1.087] & 1.099 [1.074, 1.125] & 1.156 [1.128, 1.184] & 1.280 [1.196, 1.374]$^{\dagger}$ \\
+BPE 64k & \textbf{0.894 [0.858, 0.934]} & 1.013 [0.991, 1.037] & 1.050 [1.027, 1.074] & 1.101 [1.073, 1.130] & 1.206 [1.123, 1.304]$^{\dagger}$ \\
+Unigram 32k & 0.986 [0.944, 1.030] & 1.117 [1.091, 1.144] & 1.148 [1.123, 1.176] & 1.228 [1.195, 1.263] & 1.371 [1.278, 1.492]$^{\dagger}$ \\
+Unigram 64k & 0.968 [0.927, 1.013] & 1.075 [1.050, 1.101] & 1.117 [1.093, 1.144] & 1.188 [1.156, 1.222] & 1.319 [1.227, 1.433]$^{\dagger}$ \\
+\midrule
+\multicolumn{6}{l}{\emph{Itih\=asa test (verse)}} \\
+$n$ pairs & 225 & 6,699 & 3,458 & 1,077 & 262 \\
+BPE 32k & \textbf{0.608 [0.579, 0.638]} & \textbf{0.630 [0.626, 0.634]} & \textbf{0.643 [0.637, 0.649]} & \textbf{0.674 [0.665, 0.685]} & \textbf{0.712 [0.689, 0.736]} \\
+BPE 64k & \textbf{0.559 [0.534, 0.587]} & \textbf{0.580 [0.576, 0.584]} & \textbf{0.600 [0.594, 0.605]} & \textbf{0.626 [0.617, 0.635]} & \textbf{0.670 [0.646, 0.695]} \\
+Unigram 32k & \textbf{0.576 [0.549, 0.606]} & \textbf{0.639 [0.635, 0.643]} & \textbf{0.665 [0.659, 0.671]} & \textbf{0.687 [0.678, 0.697]} & \textbf{0.722 [0.700, 0.745]} \\
+Unigram 64k & \textbf{0.540 [0.514, 0.568]} & \textbf{0.602 [0.598, 0.606]} & \textbf{0.633 [0.627, 0.639]} & \textbf{0.653 [0.643, 0.663]} & \textbf{0.685 [0.664, 0.708]} \\
+\bottomrule
+\end{tabular}
+\caption{Tokens per proposition under the matched control, stratified by the \textbf{Sanskrit} side's whitespace word count in the original script (bin edges 1, 6, 11, 16, 26). Each cell is the ratio with its 95\% paired bootstrap interval; bold marks an interval entirely below 1.0. Rows name the matched pairs of Table~\ref{tab:tppcontrolled} in short form: BPE 32k is \texttt{T1\_bpe\_raw\_32k} over \texttt{E1\_bpe\_32k}, Unigram 64k is \texttt{T2\_unigram\_raw\_64k} over \texttt{E1\_unigram\_64k}, and so on; all four pairs score the same sentences, so the $n$ row belongs to the bin. $^{\dagger}$~marks a bin with fewer than 30 pairs. The bias runs the other way here: the binned side is now the numerator, so the gradient across these columns runs upwards for the same reason Table~\ref{tab:tppbylength}'s runs downwards. Every within-corpus gradient changes sign between the two, which is what selection on the binned side looks like; the verse-below-prose ordering does not. The other two corpora are in Appendix~\ref{sec:lengthstrata}.}
+\label{tab:tppbylengthsa}
+\end{table*}

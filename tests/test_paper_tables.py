@@ -33,6 +33,8 @@ EXPECTED_TABLES = (
     "preregistration.tex",
     "arms.tex",
     "tpp_by_length.tex",
+    "tpp_by_length_sa.tex",
+    "tpp_by_length_all.tex",
     "renyi.tex",
     "numbers.tex",
 )
@@ -262,6 +264,245 @@ def test_renyi_prose_claims_hold_in_the_snapshot(
     assert tpp_64 < tpp_32, "controlled TPP no longer prefers 64k"
 
 
+
+#: The macros §5.5 reads, all of them written by `paper_tables.length_macros`. The
+#: coverage test below fails if that function grows one this file does not check, so a
+#: new number in the length prose cannot reach the manuscript unverified.
+LENGTH_MACROS = (
+    "numLengthSparseBelow",
+    "numSamayikMeanEnWords",
+    "numSamayikMeanSaWords",
+    "numItihasaMeanEnWords",
+    "numItihasaMeanSaWords",
+    "numLengthGradientsFlipped",
+    "numLengthGradientsTotal",
+    "numLengthEnFirstBin",
+    "numLengthEnFirstLo",
+    "numLengthEnFirstHi",
+    "numLengthEnLastBin",
+    "numLengthEnLastLo",
+    "numLengthEnLastHi",
+    "numLengthPairsBelowOneEn",
+    "numLengthSaFirstBin",
+    "numLengthSaFirstLo",
+    "numLengthSaFirstHi",
+    "numLengthSaLastBin",
+    "numLengthSaLastLo",
+    "numLengthSaLastHi",
+    "numLengthPairsBelowOneSa",
+    "numVerseBelowProseComparisons",
+    "numVerseBelowProseTotal",
+    "numVerseProseGapMin",
+    "numVerseProseGapMax",
+    "numEnglishBinExample",
+    "numEnglishBinItihasaSaWords",
+    "numEnglishBinSamayikSaWords",
+    "numSanskritBinExample",
+    "numSanskritBinItihasaEnWords",
+    "numSanskritBinSamayikEnWords",
+)
+
+#: The `$n$ pairs` row of a length table: counts, with thousands separators and a possible
+#: sparse dagger.
+N_ROW = re.compile(r"^\$n\$ pairs(?P<rest>.*?)\\\\$", re.MULTILINE)
+
+
+def _dense(entries: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """A corpus x pair's populated, non-sparse bins, in bin order.
+
+    Recomputed here rather than imported, so that the definition the prose rests on is
+    stated twice and a change to either side shows up as a failure.
+    """
+    return [
+        (name, node)
+        for name, node in entries.items()
+        if node.get("value") is not None and not node.get("sparse", False)
+    ]
+
+
+def _length_value_rows(text: str) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """Every `value [lo, hi]` row of a length table, as (row label, cells), in order."""
+    rows: list[tuple[str, list[tuple[str, str, str]]]] = []
+    for line in text.splitlines():
+        stripped = line.rstrip()
+        if "&" not in stripped or not stripped.endswith(r"\\"):
+            continue
+        cells = VALUE_CI.findall(stripped)
+        if cells:
+            rows.append((stripped.split("&")[0].strip(), cells))
+    return rows
+
+
+def _length_count_rows(text: str) -> list[list[str]]:
+    """Every `$n$ pairs` row of a length table, as its printed counts, in order."""
+    return [re.findall(r"[\d,]+", match.group("rest")) for match in N_ROW.finditer(text)]
+
+
+def _expected_length_rows(
+    exp02: dict[str, Any], key: str, corpora: list[str]
+) -> tuple[list[tuple[str, list[tuple[str, str, str]]]], list[list[str]]]:
+    """What one length table should print, from the JSON: its value rows and its `n` rows."""
+    pairs = paper_tables.controlled_pair_keys(exp02)
+    bins = list(exp02[key][corpora[0]][pairs[0]].keys())
+    values: list[tuple[str, list[tuple[str, str, str]]]] = []
+    counts: list[list[str]] = []
+    for corpus in corpora:
+        entries = exp02[key][corpus]
+        counts.append([f"{int(entries[pairs[0]][name]['n_pairs']):,}" for name in bins])
+        for pair in pairs:
+            label = paper_tables.matched_pair_short(pair.split("/")[0])
+            cells = [
+                (
+                    f"{float(entries[pair][name]['value']):.3f}",
+                    f"{float(entries[pair][name]['ci_low']):.3f}",
+                    f"{float(entries[pair][name]['ci_high']):.3f}",
+                )
+                for name in bins
+            ]
+            values.append((label, cells))
+    return values, counts
+
+
+def test_length_macro_coverage(snapshot: tuple[dict[str, Any], dict[str, Any]]) -> None:
+    """Every macro the length section emits is one this file checks against the JSON."""
+    _, exp02 = snapshot
+    assert set(paper_tables.length_macros(exp02)) == set(LENGTH_MACROS)
+    assert set(LENGTH_MACROS) <= set(paper_tables.MACROS)
+
+
+def test_length_macros_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """Every macro §5.5 reads, recomputed from `results.json` at the printed precision."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+    pairs = paper_tables.controlled_pair_keys(exp02)
+    prose = paper_tables.LENGTH_PROSE_CORPUS
+    verse = paper_tables.LENGTH_VERSE_CORPUS
+    floor = int(exp02["config"]["length_sparse_below"])
+
+    assert values["numLengthSparseBelow"] == str(floor)
+
+    # The corpus means pool the English bins, weighted by the pairs in each.
+    for prefix, corpus in (("numSamayik", prose), ("numItihasa", verse)):
+        entries = exp02["tpp_by_length"][corpus][pairs[0]]
+        total_pairs = sum(int(node["n_pairs"]) for node in entries.values())
+        for suffix, field in (("MeanEnWords", "mean_words_en"), ("MeanSaWords", "mean_words_sa")):
+            pooled = sum(
+                int(node["n_pairs"]) * float(node[field]) for node in entries.values()
+            )
+            assert values[f"{prefix}{suffix}"] == f"{pooled / total_pairs:.1f}"
+
+    flipped = 0
+    total = 0
+    for corpus in exp02["tpp_by_length"]:
+        for pair in pairs:
+            gradients = [
+                float(_dense(exp02[key][corpus][pair])[-1][1]["value"])
+                - float(_dense(exp02[key][corpus][pair])[0][1]["value"])
+                for key in ("tpp_by_length", "tpp_by_length_sa")
+            ]
+            total += 1
+            flipped += (gradients[0] > 0) != (gradients[1] > 0)
+    assert values["numLengthGradientsFlipped"] == str(flipped)
+    assert values["numLengthGradientsTotal"] == str(total)
+
+    crossings = {
+        "tpp_by_length": "numLengthPairsBelowOneEn",
+        "tpp_by_length_sa": "numLengthPairsBelowOneSa",
+    }
+    for prefix, key in (("numLengthEn", "tpp_by_length"), ("numLengthSa", "tpp_by_length_sa")):
+        names = [name for name, _node in _dense(exp02[key][prose][pairs[0]])]
+        for position, name in (("First", names[0]), ("Last", names[-1])):
+            cells = [float(exp02[key][prose][pair][name]["value"]) for pair in pairs]
+            assert values[f"{prefix}{position}Bin"] == name.replace("-", "--")
+            assert values[f"{prefix}{position}Lo"] == f"{min(cells):.3f}"
+            assert values[f"{prefix}{position}Hi"] == f"{max(cells):.3f}"
+        # The crossing the prose names: the last dense English bin, the first Sanskrit one.
+        crossing = names[-1] if key == "tpp_by_length" else names[0]
+        under = sum(1 for pair in pairs if float(exp02[key][prose][pair][crossing]["value"]) < 1.0)
+        assert values[crossings[key]] == str(under)
+
+    below = 0
+    comparisons = 0
+    gaps: list[float] = []
+    for key in ("tpp_by_length", "tpp_by_length_sa"):
+        for name in exp02[key][prose][pairs[0]]:
+            if int(exp02[key][prose][pairs[0]][name]["n_pairs"]) < floor:
+                continue
+            if int(exp02[key][verse][pairs[0]][name]["n_pairs"]) < floor:
+                continue
+            for pair in pairs:
+                comparisons += 1
+                gap = float(exp02[key][prose][pair][name]["value"]) - float(
+                    exp02[key][verse][pair][name]["value"]
+                )
+                gaps.append(gap)
+                below += gap > 0
+    assert values["numVerseBelowProseComparisons"] == str(below)
+    assert values["numVerseBelowProseTotal"] == str(comparisons)
+    assert values["numVerseProseGapMin"] == f"{min(gaps):.3f}"
+    assert values["numVerseProseGapMax"] == f"{max(gaps):.3f}"
+
+    # The illustrating bin is the jointly populated one holding the most verse pairs.
+    for prefix, key, field, suffix in (
+        ("numEnglishBin", "tpp_by_length", "mean_words_sa", "SaWords"),
+        ("numSanskritBin", "tpp_by_length_sa", "mean_words_en", "EnWords"),
+    ):
+        joint = [
+            name
+            for name in exp02[key][prose][pairs[0]]
+            if int(exp02[key][prose][pairs[0]][name]["n_pairs"]) >= floor
+            and int(exp02[key][verse][pairs[0]][name]["n_pairs"]) >= floor
+        ]
+        busiest = max(joint, key=lambda name: int(exp02[key][verse][pairs[0]][name]["n_pairs"]))
+        assert values[f"{prefix}Example"] == busiest.replace("-", "--")
+        for label, corpus in ((f"{prefix}Itihasa", verse), (f"{prefix}Samayik", prose)):
+            node = exp02[key][corpus][pairs[0]][busiest]
+            assert values[f"{label}{suffix}"] == f"{float(node[field]):.1f}"
+
+
+def test_length_prose_claims_hold_in_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """The two orderings §5.5 asserts in words, and every cell of the three length tables.
+
+    §5.5 says that *every* within-corpus gradient changes sign between the two
+    stratifications, and that verse sits below prose at *every* jointly populated bin
+    under both. Neither is a number the prose could soften: if a re-run breaks either, the
+    subsection is wrong and this fails rather than the macro quietly changing.
+    """
+    tables, _ = generated
+    _, exp02 = snapshot
+
+    flipped, gradients = paper_tables.length_gradient_flips(exp02)
+    assert gradients > 0
+    assert flipped == gradients, "a gradient keeps its sign under both stratifications"
+
+    below, comparisons, gap_min, gap_max = paper_tables.verse_below_prose(exp02)
+    assert comparisons > 0
+    assert below == comparisons, "verse is not below prose at every jointly populated bin"
+    assert 0 < gap_min <= gap_max
+
+    body = list(paper_tables.LENGTH_BODY_CORPORA)
+    every = list(exp02["tpp_by_length"].keys())
+    for name, blocks in (
+        ("tpp_by_length.tex", (("tpp_by_length", body),)),
+        ("tpp_by_length_sa.tex", (("tpp_by_length_sa", body),)),
+        ("tpp_by_length_all.tex", (("tpp_by_length", every), ("tpp_by_length_sa", every))),
+    ):
+        text = (tables / name).read_text()
+        expected_values: list[tuple[str, list[tuple[str, str, str]]]] = []
+        expected_counts: list[list[str]] = []
+        for key, corpora in blocks:
+            values, counts = _expected_length_rows(exp02, key, corpora)
+            expected_values.extend(values)
+            expected_counts.extend(counts)
+        assert _length_value_rows(text) == expected_values, f"{name}: value cells"
+        assert _length_count_rows(text) == expected_counts, f"{name}: $n$ rows"
+
+
 def test_training_split_sizes_agree_with_the_data_readme() -> None:
     """The two constants taken from `data/README.md` still match that file."""
     readme = (REPO_ROOT / "data" / "README.md").read_text()
@@ -282,8 +523,10 @@ def test_committed_tables_are_current(
 
 def test_absent_analyses_degrade_to_a_comment() -> None:
     """The two optional writers stay usable against a snapshot that lacks their keys."""
-    stripped = {key: {} for key in ("config",)}
+    stripped: dict[str, Any] = {key: {} for key in ("config",)}
     assert paper_tables.tpp_by_length_table(stripped).startswith("%")
+    assert paper_tables.tpp_by_length_sa_table(stripped).startswith("%")
+    assert paper_tables.tpp_by_length_all_tables(stripped).startswith("%")
     assert paper_tables.renyi_table(stripped).startswith("%")
     assert paper_figures.figure_length(stripped) is None
 

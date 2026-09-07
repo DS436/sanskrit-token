@@ -1,17 +1,26 @@
 # Paper 1a — the measurement paper (RQ1 and RQ2)
 
-**Status: draft.** The prose is written except for §5.5 (tokens per proposition by
-sentence length), which carries a `% TODO(1b-of-task)` marker and a visible draft line in
-the PDF: its table is generated and final, and what is missing is the reading of it.
-§5.6 (Rényi efficiency) is written.
+**Status: complete draft, acknowledgements pending.** Every section is written, §5.5
+(tokens per proposition by sentence length) and §5.6 (Rényi efficiency) included. The only
+marker left in `main.tex` is the `% TODO` for the acknowledgements, which are written for
+the camera-ready because the review version is anonymised.
 
-**Format: long paper.** The body runs to eight pages excluding references and appendix
-(References begins partway down page 8), against the eight-page limit for a long paper at
-ACL venues; arXiv imposes no limit. Nothing is cut to fit, but there is now no slack: the
-§5.5 prose still to be written will push the body over the ACL limit, and something will
-have to move to the appendix at that point. A four-page short version would move Tables 2
-and 3 (fertility and compression; deployed-practice TPP) to the appendix, leaving Table 1
-(parity), Table 4 (the matched control) and the two main figures in the body.
+**Format: long paper.** 14 pages in total. The body runs to eight pages excluding
+references and appendix (References begins partway down page 8), against the eight-page
+limit for a long paper at ACL venues; arXiv imposes no limit. Writing §5.5 and adding its
+figure used the slack that was left, so the fertility and compression table moved to the
+appendix (Table 13, beside the full-precision version of itself that already sat there),
+where fertility belongs anyway: it is reported and never led with. The length strata for
+all four corpora moved with it, into Appendix A.1; the body tabulates only the two primary
+corpora. A four-page short version would additionally move Table 2 (deployed-practice TPP)
+and Tables 4 and 5 (the length strata), leaving Table 1 (parity), Table 3 (the matched
+control) and the figures in the body.
+
+**Two-sided length strata.** §5.5 bins each pair twice, once on the English side's word
+count and once on the Sanskrit side's (Tables 4 and 5, Figure 3), because binning selects
+the binned side's wordiness into the bin and so tilts the ratio in a known direction;
+every within-corpus gradient reverses between the two, which is why the section draws no
+length claim from them, while the verse-below-prose separation survives both.
 
 *Fewer Words, Not Fewer Tokens: Measuring the Sanskrit Tokenization Penalty per
 Proposition.* Scope is Experiments 01 and 02 only. The proposed sandhi-aware and
@@ -42,9 +51,12 @@ Nothing in `main.tex` contains a typed-in measurement.
 - Every number in the prose is a macro from `tables/numbers.tex`, also generated. The list
   of macros is the `MACROS` constant in `scripts/paper_tables.py`.
 - `tests/test_paper_tables.py` runs both generators against the snapshot, parses the
-  numbers back out of `parity.tex` and `tpp_controlled.tex` and checks them against the
-  JSON at the printed precision, and asserts that every `\num...` macro `main.tex` uses is
-  one the generator emits. It also fails if the committed tables are stale.
+  numbers back out of `parity.tex`, `tpp_controlled.tex` and the three length tables and
+  checks them against the JSON at the printed precision, and asserts that every `\num...`
+  macro `main.tex` uses is one the generator emits. It recomputes each of §5.5's macros
+  from the JSON, and fails if either ordering that section asserts in words (every
+  gradient reverses; verse sits below prose at every jointly populated bin) stops holding.
+  It also fails if the committed tables are stale.
 
 Both generators read `results/` and never write to it.
 
