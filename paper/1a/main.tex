@@ -36,9 +36,9 @@ single compounds, so it is information-dense per word. Whether that density surv
 subword tokenization is a separate question, and it has to be asked per unit of meaning
 rather than per word. On identical FLORES-200 devtest content, Sanskrit costs
 \numParitySaEnLo--\numParitySaEnHi{} times the English tokens under the deployed
-tokenizers with vocabularies of \numLargeVocabFloor{} ids or more, but only
-\numParitySaHiLo--\numParitySaHiHi{} times the Hindi tokens. Measured against a deployed
-English tokenizer, Sanskrit-trained subword arms then appear \emph{cheaper} per
+general-purpose tokenizers with vocabularies of \numLargeVocabFloor{} ids or more, but only
+\numParitySaHiLargeLo--\numParitySaHiLargeHi{} times the Hindi tokens. Measured against a
+deployed English tokenizer, Sanskrit-trained BPE arms then appear \emph{cheaper} per
 proposition than English on contemporary prose (\numTppBpeSixtyFourDeployed{}
 \numTppBpeSixtyFourDeployedCi). Against a matched English control, the same algorithm at
 the same vocabulary size trained on the English side of the same corpus, that flip
@@ -258,8 +258,8 @@ snapshot by a script. The code and the snapshot are in an anonymised repository.
 \label{sec:rq1}
 
 Table \ref{tab:parity} gives the parity ratios and Figure \ref{fig:parity} draws them.
-Under the three deployed tokenizers with vocabularies of \numLargeVocabFloor{} ids
-or more,
+Under the three deployed general-purpose tokenizers with vocabularies of
+\numLargeVocabFloor{} ids or more,
 Sanskrit costs \numParitySaEnLo--\numParitySaEnHi{} times the English tokens for the same
 FLORES content. Under GPT-2, whose \numVocabMin-id vocabulary predates any serious
 Devanagari coverage, it costs \numParitySaEnGptTwo{} times as many. Against Hindi, the
@@ -371,8 +371,9 @@ pushes that row down rather than up, and the row is above 1.0 regardless.
     configured order (prose first). Circles score against the deployed English tokenizer,
     squares against the matched control; the dashed line is parity, and
     \numCiLevel\%{} bootstrap intervals are drawn but are narrower than the markers on
-    most points. The prose panels move from straddling parity to sitting above it when the
-    denominator is controlled. Only the verse panel stays below.}
+    most points. The in-domain prose panel moves from straddling parity to sitting above it
+    when the denominator is controlled; the out-of-domain prose panel sits above parity
+    under either denominator. Only the verse panel stays below.}
   \label{fig:denominator}
 \end{figure}
 

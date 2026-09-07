@@ -122,6 +122,8 @@ MACROS: tuple[str, ...] = (
     "numParitySaEnGptTwo",
     "numParitySaHiLo",
     "numParitySaHiHi",
+    "numParitySaHiLargeLo",
+    "numParitySaHiLargeHi",
     "numFertSaLo",
     "numFertSaHi",
     "numFertSaGptTwo",
@@ -929,8 +931,9 @@ def tpp_by_length_all_tables(exp02: dict[str, Any]) -> str:
             "Every corpus, at the same bins as the body's "
             f"Table~\\ref{{tab:tppbylength{'sa' if side == 'Sanskrit' else ''}}}, which "
             "carries the two primary ones. Read against its companion on the other side: "
-            "a gradient that keeps its sign under both stratifications is a length effect "
-            "and one that changes sign is selection, and here all "
+            "a gradient that keeps its sign under both stratifications would be "
+            "consistent with a length effect and one that changes sign is selection, "
+            "and here all "
             "\\numLengthGradientsTotal{} change sign."
         )
         caption = _length_caption(exp02, side, edges_key, tail)
@@ -1230,6 +1233,14 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     parity_hi = [float(exp01["parity"][arm]["hin_Deva"]["value"]) for arm in T0_ARMS]
     values["numParitySaHiLo"] = ratio(min(parity_hi))
     values["numParitySaHiHi"] = ratio(max(parity_hi))
+    # The abstract states the Sanskrit/Hindi range over the same arms as the
+    # Sanskrit/English one beside it, which is the large-vocabulary subset only; the
+    # four-arm range above belongs to Section 5.1, where GPT-2 has just been named.
+    parity_hi_large = [
+        float(exp01["parity"][arm]["hin_Deva"]["value"]) for arm in LARGE_VOCAB_T0
+    ]
+    values["numParitySaHiLargeLo"] = ratio(min(parity_hi_large))
+    values["numParitySaHiLargeHi"] = ratio(max(parity_hi_large))
 
     fert_sa = [fertility_value(exp01, arm, "san_Deva", "original") for arm in LARGE_VOCAB_T0]
     values["numFertSaLo"] = two(min(fert_sa))
