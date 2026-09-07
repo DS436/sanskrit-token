@@ -49,12 +49,20 @@ exclusion_path: data/exclusion_hashes.txt
 exclusion_path_en: data/exclusion_hashes_en.txt
 output_dir: outputs/02_tpp_parallel
 
-# Length-stratified TPP (results.json's `tpp_by_length`, figure `tpp_by_length.pdf`).
+# Length-stratified TPP (results.json's `tpp_by_length`, the figure's top row).
 # Bins are FIXED, absolute, inclusive lower bounds on the ENGLISH side's whitespace word
 # count — 1-8, 9-16, 17-24, 25-40, 41+ — so a verse line and a prose sentence of the same
 # length land in the same bin and can be read against each other across panels. Per-corpus
 # quantile bins would make that impossible: Itihāsa's and Sāmayik's bins would share a
-# name and cover different lengths. Binning on the Sanskrit word count is also rejected:
-# that denominator is the quantity under study.
+# name and cover different lengths.
 length_bin_edges: [1, 9, 17, 25, 41]
+
+# The mirror stratification (results.json's `tpp_by_length_sa`, the figure's bottom row),
+# on the SANSKRIT side's whitespace word count in the original script — 1-5, 6-10, 11-15,
+# 16-25, 26+, chosen to hold shares of each corpus comparable to the English bins above.
+# Selecting pairs by one side's word count preferentially selects that side's own length
+# noise, which moves the TPP ratio (English bins push it down, Sanskrit bins push it up)
+# even when density does not change with length; the two one-sided stratifications bracket
+# the truth, so a gradient is only read as real when it keeps its sign under both.
+length_bin_edges_sa: [1, 6, 11, 16, 26]
 length_sparse_below: 30    # bins with fewer pairs are flagged `sparse` and drawn hollow

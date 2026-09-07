@@ -638,7 +638,12 @@ def _length_corpus() -> object:
     )
 
 
-def _length_bins(sparse_below: int = 2) -> dict[str, dict[str, object]]:
+def _length_bins(
+    sparse_below: int = 2,
+    *,
+    bin_on: str = run.BIN_ON_ENGLISH,
+    edges: object = None,
+) -> dict[str, dict[str, object]]:
     results = run.compute_tpp_by_length(
         [_length_corpus()],  # type: ignore[list-item]
         {
@@ -646,11 +651,12 @@ def _length_bins(sparse_below: int = 2) -> dict[str, dict[str, object]]:
             "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
         },  # type: ignore[arg-type]
         [("T1_bpe_raw_32k", run.SLP1, "E1_bpe_32k")],
-        run.LENGTH_BIN_EDGES_DEFAULT,
+        run.LENGTH_BIN_EDGES_DEFAULT if edges is None else edges,  # type: ignore[arg-type]
         n_bootstrap=0,
         seed=0,
         ci=0.95,
         sparse_below=sparse_below,
+        bin_on=bin_on,  # type: ignore[arg-type]
     )
     return results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
 
@@ -724,6 +730,104 @@ def test_compute_tpp_by_length_encodes_each_side_once_not_once_per_bin() -> None
     assert len(calls) == 8  # four Sanskrit sentences + four English, once each
 
 
+# --- the mirror stratification: binning on the Sanskrit side --------------------------
+
+
+def _two_sided_corpus() -> object:
+    """Four pairs the two stratifications group differently.
+
+    English word counts 2, 2, 10, 20 put the pairs in English bins 0, 0, 1, 2; Sanskrit
+    word counts 12, 2, 3, 7 put the *same* pairs in Sanskrit bins 2, 0, 0, 1. The per-bin
+    counts happen to match, so a test that only counted pairs would pass under either
+    stratification; what differs is which pair is in which bin.
+    """
+    return run.CorpusData(
+        name="corpus_a",
+        split="test",
+        n_total=4,
+        n_used=4,
+        sanskrit={
+            run.ORIGINAL: [" ".join(["sa"] * 12), "rAmaH sItA", "a b c", " ".join(["va"] * 7)],
+            run.SLP1: [" ".join(["sa"] * 12), "rAmaH sItA", "a b c", " ".join(["va"] * 7)],
+        },
+        english=["aa bb", "cc dd", " ".join(["w"] * 10), " ".join(["w"] * 20)],
+        hindi=None,
+    )
+
+
+def _two_sided_bins(bin_on: str, edges: object) -> dict[str, dict[str, object]]:
+    results = run.compute_tpp_by_length(
+        [_two_sided_corpus()],  # type: ignore[list-item]
+        {
+            "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+            "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        },  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", run.SLP1, "E1_bpe_32k")],
+        edges,  # type: ignore[arg-type]
+        n_bootstrap=0,
+        seed=0,
+        ci=0.95,
+        sparse_below=2,
+        bin_on=bin_on,  # type: ignore[arg-type]
+    )
+    return results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+
+
+def test_compute_tpp_by_length_bins_on_the_sanskrit_side_when_asked() -> None:
+    """`bin_on="sanskrit"` assigns bins from the Sanskrit side's word count, not the
+    English one: the 12-word Sanskrit sentence is in the top populated bin even though
+    its English side is the shortest of the four."""
+    bins = _two_sided_bins(run.BIN_ON_SANSKRIT, run.LENGTH_BIN_EDGES_SA_DEFAULT)
+    assert list(bins) == ["1-5", "6-10", "11-15", "16-25", "26+"]
+    assert [bins[label]["n_pairs"] for label in bins] == [2, 1, 1, 0, 0]
+    # bin "11-15" holds exactly the 12-word Sanskrit sentence, whose English side is 2 words
+    assert bins["11-15"]["mean_words_sa"] == pytest.approx(12.0)
+    assert bins["11-15"]["mean_words_en"] == pytest.approx(2.0)
+    # the same pair under English binning sits in the *lowest* bin instead
+    english_bins = _two_sided_bins(run.BIN_ON_ENGLISH, run.LENGTH_BIN_EDGES_DEFAULT)
+    assert english_bins["1-8"]["n_pairs"] == 2
+    assert english_bins["1-8"]["mean_words_sa"] == pytest.approx(7.0)  # 12 and 2 words
+
+
+def test_compute_tpp_by_length_records_which_side_it_binned_on() -> None:
+    """Every summary carries `bin_on`, so a `results.json` reader can tell the two
+    stratifications apart without consulting which key they were stored under."""
+    english = _two_sided_bins(run.BIN_ON_ENGLISH, run.LENGTH_BIN_EDGES_DEFAULT)
+    sanskrit = _two_sided_bins(run.BIN_ON_SANSKRIT, run.LENGTH_BIN_EDGES_SA_DEFAULT)
+    assert all(summary["bin_on"] == run.BIN_ON_ENGLISH for summary in english.values())
+    assert all(summary["bin_on"] == run.BIN_ON_SANSKRIT for summary in sanskrit.values())
+
+
+def test_the_two_stratifications_partition_the_same_corpus_into_the_same_totals() -> None:
+    """Stratifying differently must not change what is being stratified: both binnings
+    cover every pair exactly once, and their per-bin token counts sum to the same two
+    corpus totals — so a difference between the two rows is a difference in grouping."""
+    english = _two_sided_bins(run.BIN_ON_ENGLISH, run.LENGTH_BIN_EDGES_DEFAULT)
+    sanskrit = _two_sided_bins(run.BIN_ON_SANSKRIT, run.LENGTH_BIN_EDGES_SA_DEFAULT)
+    for key in ("n_pairs", "source_tokens", "pivot_tokens"):
+        assert sum(int(summary[key]) for summary in english.values()) == sum(  # type: ignore[arg-type]
+            int(summary[key]) for summary in sanskrit.values()  # type: ignore[arg-type]
+        )
+    assert sum(int(summary["n_pairs"]) for summary in english.values()) == 4  # type: ignore[arg-type]
+
+
+def test_compute_tpp_by_length_rejects_an_unknown_bin_on() -> None:
+    """Falling back to the English side would make a run that measured one stratification
+    twice indistinguishable from one that measured both."""
+    with pytest.raises(ValueError, match="bin_on"):
+        _two_sided_bins("hindi", run.LENGTH_BIN_EDGES_SA_DEFAULT)
+
+
+def test_sanskrit_bin_labels_name_the_configured_edges() -> None:
+    assert run.length_bin_labels(run.LENGTH_BIN_EDGES_SA_DEFAULT) == [
+        "1-5",
+        "6-10",
+        "11-15",
+        "16-25",
+        "26+",
+    ]
+
+
 def test_select_length_pairs_takes_controlled_pairs_and_the_primary_pivot() -> None:
     """Set (a) reads the controlled variant; set (b) reads each family's own script —
     `original` for T0, its only variant for T1 — against the first English pivot."""
@@ -788,15 +892,23 @@ def _empty_length_bin_entry() -> dict[str, object]:
 
 
 def _synthetic_results_with_length() -> dict[str, object]:
-    """`corpus_a` has three populated bins (one of them sparse) and two empty ones;
-    `corpus_b`'s bins are all empty, which the figure must survive."""
+    """Two corpora x two stratifications, the four cases the figure has to handle.
+
+    English-binned: `corpus_a` has three populated bins (one of them sparse) and two
+    empty ones; `corpus_b`'s bins are all empty. Sanskrit-binned: `corpus_a` sits on a
+    visibly different range — so the two rows' panels cannot share a y-axis — and its
+    sparse bin is planted far off that range, which must be drawn at the panel edge
+    rather than being allowed to set the scale; `corpus_b` is again all empty.
+    """
     results = _synthetic_results()
     config = results["config"]
     assert isinstance(config, dict)
     config["controlled_pairs"] = [["T1_bpe_raw_32k", "E1_bpe_32k"]]
     config["length_sparse_below"] = 30
     labels = run.length_bin_labels(run.LENGTH_BIN_EDGES_DEFAULT)
+    labels_sa = run.length_bin_labels(run.LENGTH_BIN_EDGES_SA_DEFAULT)
     results["length_bin_edges"] = list(run.LENGTH_BIN_EDGES_DEFAULT)
+    results["length_bin_edges_sa"] = list(run.LENGTH_BIN_EDGES_SA_DEFAULT)
     results["tpp_by_length"] = {
         "corpus_a": {
             "T1_bpe_raw_32k/E1_bpe_32k": {
@@ -815,26 +927,109 @@ def _synthetic_results_with_length() -> dict[str, object]:
             "T1_bpe_raw_32k/E1_bpe_32k": {label: _empty_length_bin_entry() for label in labels}
         },
     }
+    results["tpp_by_length_sa"] = {
+        "corpus_a": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {
+                labels_sa[0]: _length_bin_entry(1.30, 1.25, 1.35, 120),
+                labels_sa[1]: _length_bin_entry(1.35, 1.30, 1.40, 80),
+                # planted extreme, sparse: off the range the two dense bins set
+                labels_sa[2]: _length_bin_entry(9.00, 3.00, 21.00, 4),
+                labels_sa[3]: _empty_length_bin_entry(),
+                labels_sa[4]: _empty_length_bin_entry(),
+            }
+        },
+        "corpus_b": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {label: _empty_length_bin_entry() for label in labels_sa}
+        },
+    }
     return results
 
 
-def test_build_tpp_by_length_figure_ticks_the_bins_and_legends_the_controlled_pair() -> None:
+def test_build_tpp_by_length_figure_has_a_row_per_stratification() -> None:
+    """Two rows (English bins, then Sanskrit bins) x one column per corpus, each row
+    ticked and labelled with its own bin variable."""
     import matplotlib.pyplot as plt
 
     figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
     try:
-        assert len(figure.axes) == 2  # one panel per corpus
-        ticks = [label.get_text() for label in figure.axes[0].get_xticklabels()]
-        assert ticks == ["1-8", "9-16", "17-24", "25-40", "41+"]
-        legend = figure.axes[0].get_legend()
-        assert legend is not None
-        legend_labels = [text.get_text() for text in legend.get_texts()]
+        assert len(figure.axes) == 4  # 2 stratifications x 2 corpora
+        english_panel, sanskrit_panel = figure.axes[0], figure.axes[2]
+        assert [label.get_text() for label in english_panel.get_xticklabels()] == [
+            "1-8",
+            "9-16",
+            "17-24",
+            "25-40",
+            "41+",
+        ]
+        assert [label.get_text() for label in sanskrit_panel.get_xticklabels()] == [
+            "1-5",
+            "6-10",
+            "11-15",
+            "16-25",
+            "26+",
+        ]
+        assert "English" in english_panel.get_xlabel()
+        assert "Sanskrit" in sanskrit_panel.get_xlabel()
+        # both panels of a row name their corpus
+        assert english_panel.get_title(loc="left") == "corpus_a"
+        assert sanskrit_panel.get_title(loc="left") == "corpus_a"
+        # the row headers state the bin variable
+        texts = [text.get_text() for text in figure.texts]
+        assert any("ENGLISH" in text for text in texts)
+        assert any("SANSKRIT" in text for text in texts)
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_by_length_figure_legends_the_controlled_pair_once() -> None:
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
+    try:
+        assert len(figure.legends) == 1
+        legend_labels = [text.get_text() for text in figure.legends[0].get_texts()]
         # only the controlled pair; the deployed-pivot series is results.json-only
         assert legend_labels == [run.controlled_pair_label("T1_bpe_raw_32k", "E1_bpe_32k")]
         assert not any("T0_o200k" in label for label in legend_labels)
         footnote = [text.get_text() for text in figure.texts]
         assert any("English whitespace word count" in text for text in footnote)
         assert any("30" in text for text in footnote)
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_by_length_figure_scales_each_panel_to_its_own_data() -> None:
+    """The panels no longer share one y-axis: `corpus_a`'s two stratifications sit on
+    different ranges, and each is tight around its own non-sparse bins."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
+    try:
+        english_limits = figure.axes[0].get_ylim()
+        sanskrit_limits = figure.axes[2].get_ylim()
+        assert english_limits != sanskrit_limits
+        # English panel: dense bins span 0.85-1.00, so the top stays well under the
+        # sparse 1.20-1.50 bin; the Sanskrit panel's top stays far under its 9.00 one.
+        assert english_limits[1] < 1.2
+        assert sanskrit_limits[1] < 2.0
+        assert sanskrit_limits[0] > 1.0 - 0.5  # tight around 1.25-1.40, 1.0 kept inside
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_by_length_figure_marks_an_off_scale_bin_at_the_edge() -> None:
+    """The planted 9.00 [3.00, 21.00] bin is drawn as a triangle at the panel edge with
+    its value annotated, rather than silently dropped or allowed to flatten the panel."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
+    try:
+        panel = figure.axes[2]
+        annotations = [text.get_text() for text in panel.texts]
+        assert any("9.00" in text for text in annotations)
+        assert any(text.startswith("▲") for text in annotations)
+        # and nothing off-scale is drawn on a panel whose bins all fit
+        assert not figure.axes[1].texts
     finally:
         plt.close(figure)
 
@@ -847,7 +1042,7 @@ def test_build_tpp_by_length_figure_survives_a_corpus_whose_bins_are_all_empty()
     figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
     try:
         bottom, top = figure.axes[1].get_ylim()
-        assert bottom < 1.0 < top  # shared axis, with the sign-flip threshold inside it
+        assert bottom < 1.0 < top  # the sign-flip threshold stays inside the panel
     finally:
         plt.close(figure)
 
@@ -859,7 +1054,7 @@ def test_build_tpp_by_length_figure_without_any_length_results_still_plots() -> 
 
     figure = run._build_tpp_by_length_figure(_synthetic_results())
     try:
-        assert len(figure.axes) == 2
+        assert len(figure.axes) == 4
         assert figure.axes[0].get_ylim() == (0.0, 2.0)
     finally:
         plt.close(figure)
