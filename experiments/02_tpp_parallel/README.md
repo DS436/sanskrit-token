@@ -25,6 +25,22 @@ figures of the run this file reports are tracked at
 [`results/README.md`](../../results/README.md). Re-running writes to `outputs/` and leaves
 the snapshot untouched.
 
+> **Re-run 2026-09-07 at commit `5820ee9`, clean tree.** The length strata are now
+> measured under **two** stratifications, not one: `tpp_by_length` (bins on the English
+> side's word count, unchanged) and the new `tpp_by_length_sa` / `length_bin_edges_sa`
+> (bins on the Sanskrit side's, `[1, 6, 11, 16, 26]`). Every stratum records which side it
+> was binned on (`bin_on`), and `tpp_by_length.pdf` / `.png` becomes two rows of
+> per-corpus panels — one row per bin variable — each panel scaled to its own non-sparse
+> bins. **No pre-existing number moved:** every one of the 11,469 leaves of the previous
+> snapshot's `results.json` reappears at the same path with the same value (numeric to
+> within 1e-9, strings and booleans exactly), with only `git_commit`, `git_dirty` and
+> `timestamp` allowed to differ; the only new top-level keys are `tpp_by_length_sa` and
+> `length_bin_edges_sa`, the only new config key is `length_bin_edges_sa`, and the only
+> key added inside an existing block is `bin_on` on each `tpp_by_length` stratum. What
+> did change is the *reading*: the within-prose length gradient reverses sign under the
+> mirror stratification, so it cannot be read as a density effect — see "TPP by sentence
+> length" below and `docs/decisions.md`, 2026-09-07.
+
 > **Re-run 2026-09-07 at commit `70d9219`, clean tree.** This run adds two blocks to
 > `results.json` and one figure, and changes nothing that was already there: `renyi` /
 > `renyi_english` (Rényi efficiency at α ∈ {2.5, 3}) and `tpp_by_length` /
@@ -47,12 +63,16 @@ the snapshot untouched.
 > they straddled it. `E1_unigram_64k` now trains to **62,896** pieces rather than 64,000,
 > which is recorded below and in the decision log.
 
-**Runtime:** 3m19s wall-clock on this machine with every tokenizer cache, corpus jsonl and
-trained `tokenizer.json` already warm — up from the 2m09s of the 2026-09-05 run, which
-measured the same TPP tables without the two additions. The extra minute is theirs: the
-Rényi pass re-encodes every corpus x arm x script variant whole to pool a unigram
-distribution (192 stored values), and the length-stratified pass re-measures each of the
-sixteen controlled pairs in five bins, each bin carrying its own 1000-sample bootstrap.
+**Runtime:** 3m33s wall-clock on this machine with every tokenizer cache, corpus jsonl and
+trained `tokenizer.json` already warm — 3m19s before the mirror stratification, and 2m09s
+for the 2026-09-05 run, which measured the same TPP tables without any of the additions.
+The extra minute and a half is theirs: the Rényi pass re-encodes every corpus x arm x
+script variant whole to pool a unigram distribution (192 stored values), and each
+length-stratified pass re-measures the sixteen controlled pairs and the twelve
+deployed-practice ones in five bins, each bin carrying its own 1000-sample bootstrap. Within
+each stratification the token counts are computed once per (corpus, pair) and subset per
+bin, never once per bin; the second stratification repeats that one pass rather than
+sharing it, which is the bulk of its cost.
 `english_pivots` stays at the two deployed arms; the controlled comparison adds only the
 sixteen `controlled_pairs` measurements (four pairs x four corpora). A cold run
 additionally pays
@@ -432,18 +452,49 @@ controlled measurement ranks them the other way is exactly the "can be gamed" ca
 operation, not a tie-breaker. Read it as a description of the token distribution, and let
 TPP (and, once Experiment 05 runs, BPC) decide.
 
-## TPP by sentence length (fixed English-word-count bins)
+## TPP by sentence length (two stratifications: English-binned and Sanskrit-binned)
 
 The controlled TPP of a corpus is one number over sentences of very different lengths, and
 Sāmayik's prose sentences and Itihāsa's verse lines are not the same length. `tpp_by_length`
 re-measures each of the four matched pairs inside five **fixed, absolute** bins of the
 English side's whitespace word count — 1-8, 9-16, 17-24, 25-40, 41+ (`length_bin_edges`) —
 so that a verse line and a prose sentence of the same English length land in the same bin
-and can be read against each other across corpora. Cells are `TPP [95% bootstrap CI]
-(pairs)`; `†` marks a bin with fewer than 30 pairs (`length_sparse_below`), drawn hollow in
-`tpp_by_length.pdf`. Corpora in config order, prose before verse (CLAUDE.md §2.7). The
-per-bin `n` sum to each corpus's `n_used`, and the pooled corpus value in `tpp_controlled`
-is a token-weighted combination of these bins.
+and can be read against each other across corpora.
+
+**Which side the bins are cut on biases the answer, so both sides are reported.** Within a
+corpus, a sentence's length on either side is its content plus noise — here, how wordy this
+particular translator happened to be. Selecting pairs by a high *English* word count
+therefore preferentially selects positive noise on the **denominator** of the
+Sanskrit/English token ratio, so that ratio falls as the English bin rises even if nothing
+about density changes with length. Binning on the *Sanskrit* side has the mirror-image
+bias: the noise then sits in the numerator, and the ratio rises with the bin. Neither
+stratification is the truth; together they bracket it. **A gradient that keeps its sign
+under both is a length effect; a gradient that changes sign between them is selection.**
+The cross-corpus comparison at a fixed bin — verse against prose — is less exposed, since
+both corpora undergo the same selection, but it is not immune either, so it too is read
+under both. The bins' own means show the mechanism directly: across Sāmayik test's English
+bins the English side's mean length rises 5.5 → 46.4 words while the Sanskrit side's rises
+only 5.5 → 24.5; across its Sanskrit bins the Sanskrit side rises 4.0 → 28.0 while the
+English side rises only 5.9 → 30.8. Each bin variable stretches its own side about twice as
+far as the other.
+
+`tpp_by_length_sa` therefore repeats the entire measurement — same pairs, same tokenizers,
+same bootstrap — on bins of the Sanskrit side's whitespace word count in the original
+script: 1-5, 6-10, 11-15, 16-25, 26+ (`length_bin_edges_sa`), chosen so each bin holds a
+share of each corpus comparable to its English counterpart (Sāmayik test 23/40/23/12/1 %
+against the English bins' 34/41/16/8/0.5 %; test_ood 14/37/26/18/5 % against 13/39/27/17/4 %;
+Itihāsa 2/57/30/9/2 % against 0.1/4/34/48/14 %; FLORES 0.5/15/31/45/8 % against
+0.8/24/46/28/2 %). Every summary records which side it was binned on (`bin_on`).
+
+Cells are `TPP [95% bootstrap CI] (pairs)`; `†` marks a bin with fewer than 30 pairs
+(`length_sparse_below`), drawn hollow in `tpp_by_length.pdf`, whose two rows of panels are
+these two stratifications (each panel scaled to its own non-sparse bins, with an off-scale
+bin drawn as an annotated triangle at the panel edge). Corpora in config order, prose before
+verse (CLAUDE.md §2.7). Under both stratifications the per-bin `n` sum to each corpus's
+`n_used`, and the pooled corpus value in `tpp_controlled` lies between the smallest and
+largest populated bin.
+
+### Binned on the English side
 
 #### Sāmayik test (prose, primary, n=2417)
 
@@ -481,47 +532,86 @@ is a token-weighted combination of these bins.
 | `T2_unigram_raw_32k`* / `E1_unigram_32k` | 1.228 [1.086, 1.378] (8)† | 1.212 [1.181, 1.244] (244) | 1.211 [1.191, 1.231] (464) | 1.204 [1.183, 1.226] (280) | 1.143 [1.100, 1.182] (16)† |
 | `T2_unigram_raw_64k`* / `E1_unigram_64k` | 1.286 [1.104, 1.462] (8)† | 1.237 [1.209, 1.266] (244) | 1.227 [1.209, 1.248] (464) | 1.209 [1.188, 1.231] (280) | 1.132 [1.082, 1.179] (16)† |
 
-**Does Itihāsa stay below 1.0 in every populated bin? Almost — not in the sparse one.**
-In the four bins from 9-16 words up (419 to 5,658 pairs each) all sixteen cells are below
-1.0, and all but two have CIs excluding it: at 9-16 the 32k arms straddle the line
-(0.984 [0.964, 1.002] and 0.996 [0.975, 1.016]). The 1-8 bin is the exception and is
-`†`-flagged: 9 pairs whose English side averages **2.0 words** against a 9.4-word Sanskrit
-side, giving 7.9–9.8 with CIs spanning 3.1 to 23.8 — degenerate alignments (a fragment of a
-verse against a fragment of a line), not a measurement. It also breaks the figure: the
-panels share a y-axis, so those nine pairs stretch the scale to ~25 and flatten every other
-panel into a line at 1.0. Read these tables, not `tpp_by_length.pdf`, for anything but the
-Itihāsa shape.
+### Binned on the Sanskrit side
 
-**Do the prose corpora stay above 1.0 in every populated bin? No — and the shortest bin is
-the most adverse, not the least.** Sāmayik test's ratio is highest at 1-8 words (1.196 to
-1.304, all four CIs above 1.0) and falls monotonically with length: by 17-24 one pair has
-dropped below (0.979 [0.950, 1.006]), by 25-40 three have (0.992, 0.981 and 0.934 [0.900,
-0.965], only the last with a CI excluding 1.0), and in the sparse 41+ bin (11 pairs, †) all
-four are below.
-Sāmayik test_ood behaves the same way with more data behind it — every bin above 1.0
-except 41+ (155 pairs, not sparse), where the two T1 arms fall to 0.951 [0.904, 0.995] and
-0.927 [0.882, 0.970]. FLORES is the flat one: 1.09–1.29 in every bin, never below 1.0. So
-prose does not carry a uniform penalty; the penalty is a length gradient that reaches
-parity, and then crosses it, on the longest prose sentences.
+#### Sāmayik test (prose, primary, n=2417)
 
-**Side by side where both corpora are populated.** Three bins have ≥ 30 pairs in both
-Itihāsa test and Sāmayik test. Taking the two BPE pairs first, Itihāsa against Sāmayik:
-at **9-16** words 0.984 vs 1.101 (32k) and 0.927 vs 1.056 (64k); at **17-24** 0.760 vs
-1.035 and 0.705 vs 0.979; at **25-40** 0.609 vs 0.992 and 0.562 vs 0.934. The Unigram pairs
-give the same picture (25-40: 0.622 vs 1.026 and 0.589 vs 0.981). Across all four pairs the
-gap widens with length — 0.12–0.19 at 9-16, 0.27–0.32 at 17-24, 0.37–0.40 at 25-40 — and
-never closes or reverses.
+| Matched pair | 1-5 Sanskrit words | 6-10 Sanskrit words | 11-15 Sanskrit words | 16-25 Sanskrit words | 26+ Sanskrit words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 0.924 [0.885, 0.965] (566) | 1.063 [1.039, 1.087] (973) | 1.099 [1.074, 1.125] (562) | 1.156 [1.128, 1.184] (287) | 1.280 [1.196, 1.374] (29)† |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 0.894 [0.858, 0.934] (566) | 1.013 [0.991, 1.037] (973) | 1.050 [1.027, 1.074] (562) | 1.101 [1.073, 1.130] (287) | 1.206 [1.123, 1.304] (29)† |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 0.986 [0.944, 1.030] (566) | 1.117 [1.091, 1.144] (973) | 1.148 [1.123, 1.176] (562) | 1.228 [1.195, 1.263] (287) | 1.371 [1.278, 1.492] (29)† |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 0.968 [0.927, 1.013] (566) | 1.075 [1.050, 1.101] (973) | 1.117 [1.093, 1.144] (562) | 1.188 [1.156, 1.222] (287) | 1.319 [1.227, 1.433] (29)† |
 
-**Length alone cannot explain the verse result.** At every English length where the two
-corpora can be compared, the verse corpus costs 0.12–0.40 fewer tokens per proposition than
-the prose corpus measured against the same matched controls, so the Itihāsa flip survives
-holding sentence length constant and is not an artefact of Itihāsa's longer English side.
-What the bins cannot equalise is what a pair *contains*: at 25-40 English words Itihāsa's
-Sanskrit side averages 10.4 whitespace words against Sāmayik's 17.9, so a bin matches the
-English halves and leaves the Sanskrit halves as different as ever. That is consistent with
-the confounds this experiment already flags for Itihāsa — meter on the Sanskrit side, a
-19th-century verse translation on the English side — but these bins test length, and
-nothing here measures meter or licenses a causal claim about it.
+#### Sāmayik test_ood (prose, primary, out-of-domain, n=4047)
+
+| Matched pair | 1-5 Sanskrit words | 6-10 Sanskrit words | 11-15 Sanskrit words | 16-25 Sanskrit words | 26+ Sanskrit words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 0.769 [0.727, 0.816] (571) | 0.998 [0.979, 1.018] (1500) | 1.101 [1.081, 1.122] (1046) | 1.178 [1.151, 1.206] (738) | 1.268 [1.212, 1.326] (192) |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 0.759 [0.717, 0.806] (571) | 0.978 [0.959, 0.997] (1500) | 1.076 [1.056, 1.097] (1046) | 1.147 [1.122, 1.174] (738) | 1.238 [1.183, 1.295] (192) |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 0.820 [0.775, 0.870] (571) | 1.067 [1.044, 1.087] (1500) | 1.183 [1.160, 1.208] (1046) | 1.260 [1.231, 1.291] (738) | 1.361 [1.301, 1.427] (192) |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 0.815 [0.770, 0.866] (571) | 1.065 [1.045, 1.085] (1500) | 1.174 [1.153, 1.198] (1046) | 1.249 [1.222, 1.279] (738) | 1.349 [1.290, 1.413] (192) |
+
+#### Itihāsa test (verse, secondary — meter is a confound, n=11721)
+
+| Matched pair | 1-5 Sanskrit words | 6-10 Sanskrit words | 11-15 Sanskrit words | 16-25 Sanskrit words | 26+ Sanskrit words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 0.608 [0.579, 0.638] (225) | 0.630 [0.626, 0.634] (6699) | 0.643 [0.637, 0.649] (3458) | 0.674 [0.665, 0.685] (1077) | 0.712 [0.689, 0.736] (262) |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 0.559 [0.534, 0.587] (225) | 0.580 [0.576, 0.584] (6699) | 0.600 [0.594, 0.605] (3458) | 0.626 [0.617, 0.635] (1077) | 0.670 [0.646, 0.695] (262) |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 0.576 [0.549, 0.606] (225) | 0.639 [0.635, 0.643] (6699) | 0.665 [0.659, 0.671] (3458) | 0.687 [0.678, 0.697] (1077) | 0.722 [0.700, 0.745] (262) |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 0.540 [0.514, 0.568] (225) | 0.602 [0.598, 0.606] (6699) | 0.633 [0.627, 0.639] (3458) | 0.653 [0.643, 0.663] (1077) | 0.685 [0.664, 0.708] (262) |
+
+#### FLORES devtest (Wikipedia, tertiary, n=1012)
+
+| Matched pair | 1-5 Sanskrit words | 6-10 Sanskrit words | 11-15 Sanskrit words | 16-25 Sanskrit words | 26+ Sanskrit words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 1.000 [0.868, 1.228] (5)† | 1.073 [1.043, 1.105] (153) | 1.101 [1.082, 1.122] (311) | 1.157 [1.143, 1.172] (457) | 1.223 [1.182, 1.269] (86) |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 0.967 [0.864, 1.119] (5)† | 1.075 [1.044, 1.109] (153) | 1.098 [1.078, 1.119] (311) | 1.160 [1.144, 1.175] (457) | 1.225 [1.185, 1.267] (86) |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 1.138 [0.875, 1.398] (5)† | 1.132 [1.098, 1.167] (153) | 1.164 [1.142, 1.188] (311) | 1.221 [1.203, 1.238] (457) | 1.287 [1.242, 1.334] (86) |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 1.095 [0.903, 1.275] (5)† | 1.148 [1.112, 1.187] (153) | 1.172 [1.150, 1.196] (311) | 1.237 [1.218, 1.253] (457) | 1.295 [1.248, 1.346] (86) |
+
+**(1) Does the within-prose length gradient keep its sign under Sanskrit binning? No — it
+reverses, in every corpus and every pair.** Under English bins Sāmayik test's ratio falls
+monotonically with length (`T1_bpe_raw_32k`*: 1.225 → 1.101 → 1.035 → 0.992 → 0.920†) and
+three of the four pairs drop below 1.0 by the 25-40 bin. Under Sanskrit bins the same pairs
+rise just as monotonically (`T1_bpe_raw_32k`*: 0.924 → 1.063 → 1.099 → 1.156 → 1.280†), and
+the only bin below 1.0 is now the *shortest* one — 0.894 to 0.986 at 1-5 Sanskrit words,
+where the English gradient's shortest bin was its most adverse. Sāmayik test_ood does the
+same (English 1.245 → 0.951; Sanskrit 0.769 → 1.268), so does FLORES (English 1.165 →
+1.091; Sanskrit 1.000† → 1.223), and so does Itihāsa (English 0.984 → 0.588; Sanskrit
+0.608 → 0.712). Sixteen within-corpus gradients, sixteen sign reversals: the length
+gradient tracks the bin variable, which is what selection on the binned side looks like and
+what a genuine density-by-length effect does not. Nothing in these tables supports "Sanskrit
+gets relatively cheaper as sentences get longer", and the previous version of this section,
+which read the English-binned fall as a finding about long prose, was reading the
+stratification rather than the corpus.
+
+**(2) At bins where both corpora are populated, is verse still below prose under both
+stratifications? Yes, in all 28 comparisons.** Three English bins hold ≥ 30 pairs in both
+Itihāsa test and Sāmayik test (9-16, 17-24, 25-40) and four Sanskrit bins do (1-5, 6-10,
+11-15, 16-25); that is 7 bins × 4 matched pairs. In every one the verse corpus sits below
+the prose corpus measured against the same matched control. The **smallest** gap is 0.117
+(English 9-16, `T1_bpe_raw_32k`*: 0.984 verse against 1.101 prose) and the **largest** is
+0.541 (Sanskrit 16-25, `T2_unigram_raw_32k`*: 0.687 against 1.228); within the English rows
+the range is 0.117-0.404, within the Sanskrit rows 0.316-0.541. Sāmayik test_ood gives the
+same picture over its own jointly populated bins (English 0.158-0.510, Sanskrit
+0.161-0.663). The two stratifications differ on one secondary point: under Sanskrit binning
+Itihāsa is below 1.0 in all four jointly populated bins with every CI excluding it, while
+under English binning the 9-16 bin's two 32k arms straddle the line (0.984 [0.964, 1.002]
+and 0.996 [0.975, 1.016]).
+
+**(3) What this does and does not settle.** The verse-prose separation is the part that
+survives both stratifications — it holds at every jointly populated bin of either, with a
+gap of at least 0.117 TPP, so it is not an artefact of Itihāsa's sentences being longer or
+shorter than Sāmayik's on either side; the within-corpus length gradient is the part that
+does not survive, and no claim about TPP changing with sentence length should be made from
+these tables. Even the surviving separation is bracketed rather than isolated: a bin equates
+the two corpora on one side and leaves the other free (at 25-40 English words Itihāsa's
+Sanskrit side averages 10.4 whitespace words against Sāmayik's 17.9; at 6-10 Sanskrit words
+Itihāsa's English side averages 26.2 against Sāmayik's 10.7), which is consistent with the
+confounds this experiment already flags for Itihāsa — meter on the Sanskrit side, a
+19th-century verse translation on the English side — but nothing here measures meter, and
+these bins test length only.
 
 ## Caveats
 
