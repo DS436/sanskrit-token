@@ -25,6 +25,18 @@ figures of the run this file reports are tracked at
 [`results/README.md`](../../results/README.md). Re-running writes to `outputs/` and leaves
 the snapshot untouched.
 
+> **Re-run 2026-09-07 at commit `70d9219`, clean tree.** This run adds two blocks to
+> `results.json` and one figure, and changes nothing that was already there: `renyi` /
+> `renyi_english` (Rényi efficiency at α ∈ {2.5, 3}) and `tpp_by_length` /
+> `length_bin_edges` (TPP stratified by English sentence length), drawn as
+> `tpp_by_length.pdf` / `.png`. **No pre-existing number moved.** Every one of the 3,452
+> leaves of the previous snapshot's `results.json` reappears at the same path with the
+> same value — numeric leaves equal to within 1e-9, strings and booleans exactly — with
+> only `git_commit`, `git_dirty` and `timestamp` allowed to differ, and the only new
+> top-level keys are the four named above (`config` likewise gains only `renyi_alphas`,
+> `length_bin_edges` and `length_sparse_below`). The two sections at the end of this page
+> report the new numbers; every table above them is unchanged.
+
 > **Re-run 2026-09-05 at commit `b7302a8`, clean tree.** Every trained arm was retrained
 > after the trainers stopped letting line breaks reach the pre-tokenizer, so every number
 > on this page moved slightly and four of them are new
@@ -35,11 +47,15 @@ the snapshot untouched.
 > they straddled it. `E1_unigram_64k` now trains to **62,896** pieces rather than 64,000,
 > which is recorded below and in the decision log.
 
-**Runtime:** 2m09s wall-clock (113.0s user, 88% CPU) on this machine with every tokenizer
-cache, corpus jsonl and trained `tokenizer.json` already warm — no network access,
-essentially unchanged from the 2m07s of the pre-E1 run. `english_pivots` stays at the two
-deployed arms; the controlled comparison adds only the sixteen `controlled_pairs`
-measurements (four pairs x four corpora). A cold run additionally pays
+**Runtime:** 3m19s wall-clock on this machine with every tokenizer cache, corpus jsonl and
+trained `tokenizer.json` already warm — up from the 2m09s of the 2026-09-05 run, which
+measured the same TPP tables without the two additions. The extra minute is theirs: the
+Rényi pass re-encodes every corpus x arm x script variant whole to pool a unigram
+distribution (192 stored values), and the length-stratified pass re-measures each of the
+sixteen controlled pairs in five bins, each bin carrying its own 1000-sample bootstrap.
+`english_pivots` stays at the two deployed arms; the controlled comparison adds only the
+sixteen `controlled_pairs` measurements (four pairs x four corpora). A cold run
+additionally pays
 for four Sāmayik/Itihāsa split downloads (already cached under `data/raw/`), the tiktoken
 download for `T0_o200k` and Hugging Face downloads for six more Sanskrit arms (all cached;
 the four T1/T2 arms and the four E1 pivots are local files, and `T3_indicsuper` resolves
@@ -335,6 +351,177 @@ and annotated with its true value (e.g. "▲ 6.56"), rather than distorting the 
 caption also names any arm omitted from a panel for being unavailable this run
 (built from `results.json`'s `unavailable_arms`, e.g. "`T3_indicsuper` omitted (no
 candidate tokenizer could be loaded)").
+
+## Rényi efficiency (secondary intrinsic; can be gamed)
+
+Rényi efficiency (Zouhar, Meister, Gastaldi, Du, Vieira, Sachan & Cotterell, "Tokenization
+and the Noiseless Channel", ACL 2023) scores a tokenizer by how evenly its token-unigram
+distribution over a text uses the support it actually touches, at α > 1 so the head of the
+distribution weighs more than Shannon entropy would. `results.json`'s `renyi` records it
+per corpus x arm x script variant at α ∈ {2.5, 3} (`renyi_alphas` in `config.yaml`).
+
+**Normalisation: the observed support.** The value divides the Rényi entropy by
+`log2(K)`, where `K` is the number of *distinct types that actually occur* in that text —
+the convention of the authors' own `tokenization-scorer`, whose `get_prob_distribution`
+sets `vocab_size = len(words_freqs)`. Normalising by the nominal vocabulary instead would
+charge an arm for types it never emits, which is precisely the quantity Cognetta, Zouhar,
+Moon & Okazaki ("Two Counterexamples to Tokenization and the Noiseless Channel",
+LREC-COLING 2024) show can be manipulated; that variant is still stored alongside, as
+`efficiency_nominal`, because this project's trained arms are compared at matched
+vocabulary sizes.
+
+**This is not a headline and it cannot rank arms on its own.** Cognetta et al. construct
+tokenizers whose Rényi efficiency rises arbitrarily while the tokenization of the text —
+and downstream performance — is unchanged or worse. The verdicts on this page rest on TPP,
+and the project's headline metrics remain TPP and BPC (CLAUDE.md §2.1, §7).
+
+Rows are the `sanskrit_arms` of `config.yaml` in order; `*` marks the provisional T1/T2
+arms. Each row is read from the `original` script variant where the arm has one (T0/T3)
+and from `slp1` otherwise (T1/T2 have no other), so the **variant column is part of the
+row**: a T1 number and a T0 number are not measured on the same string, and the two
+families are not comparable down a column. `T3_indicsuper` is unavailable this run and is
+omitted here as everywhere else.
+
+| Arm | Variant | Sāmayik test α=2.5 | Sāmayik test α=3.0 | Sāmayik test_ood α=2.5 | Sāmayik test_ood α=3.0 | Itihāsa test α=2.5 | Itihāsa test α=3.0 | FLORES devtest α=2.5 | FLORES devtest α=3.0 |
+|---|---|---|---|---|---|---|---|---|---|
+| `T0_o200k` | original | 0.581 | 0.556 | 0.589 | 0.568 | 0.627 | 0.605 | 0.604 | 0.578 |
+| `T0_llama4` | original | 0.575 | 0.549 | 0.589 | 0.569 | 0.630 | 0.609 | 0.615 | 0.591 |
+| `T0_gemma3` | original | 0.568 | 0.536 | 0.531 | 0.500 | 0.561 | 0.530 | 0.527 | 0.492 |
+| `T0_gpt2` | original | 0.270 | 0.252 | 0.282 | 0.261 | 0.433 | 0.403 | 0.318 | 0.295 |
+| `T3_sarvam` | original | 0.570 | 0.541 | 0.538 | 0.510 | 0.535 | 0.506 | 0.532 | 0.499 |
+| `T3_sutra` | original | 0.580 | 0.549 | 0.559 | 0.530 | 0.592 | 0.564 | 0.544 | 0.510 |
+| `T3_brahmic131k` | original | 0.580 | 0.555 | 0.589 | 0.568 | 0.626 | 0.605 | 0.604 | 0.578 |
+| `T1_bpe_raw_32k`* | slp1 | 0.615 | 0.564 | 0.609 | 0.562 | 0.689 | 0.646 | 0.725 | 0.692 |
+| `T1_bpe_raw_64k`* | slp1 | 0.589 | 0.539 | 0.604 | 0.557 | 0.655 | 0.609 | 0.715 | 0.679 |
+| `T2_unigram_raw_32k`* | slp1 | 0.493 | 0.456 | 0.505 | 0.474 | 0.491 | 0.457 | 0.528 | 0.492 |
+| `T2_unigram_raw_64k`* | slp1 | 0.485 | 0.449 | 0.493 | 0.463 | 0.463 | 0.430 | 0.525 | 0.491 |
+
+The English side, `renyi_english`: the two deployed pivots and the four matched `E1_*`
+control arms, on the English half of the same four corpora (English text has no script
+variant, so there is one number per arm x corpus x α).
+
+| Arm | Sāmayik test α=2.5 | Sāmayik test α=3.0 | Sāmayik test_ood α=2.5 | Sāmayik test_ood α=3.0 | Itihāsa test α=2.5 | Itihāsa test α=3.0 | FLORES devtest α=2.5 | FLORES devtest α=3.0 |
+|---|---|---|---|---|---|---|---|---|
+| `T0_o200k` | 0.490 | 0.461 | 0.466 | 0.441 | 0.424 | 0.397 | 0.483 | 0.455 |
+| `T0_llama4` | 0.492 | 0.463 | 0.468 | 0.443 | 0.429 | 0.402 | 0.484 | 0.456 |
+| `E1_bpe_32k` | 0.507 | 0.468 | 0.509 | 0.478 | 0.424 | 0.394 | 0.556 | 0.517 |
+| `E1_bpe_64k` | 0.492 | 0.455 | 0.490 | 0.460 | 0.410 | 0.382 | 0.537 | 0.499 |
+| `E1_unigram_32k` | 0.508 | 0.475 | 0.488 | 0.458 | 0.428 | 0.401 | 0.544 | 0.514 |
+| `E1_unigram_64k` | 0.500 | 0.466 | 0.468 | 0.438 | 0.418 | 0.393 | 0.532 | 0.500 |
+
+**Reading it.** Two ends of the table are stable across all four corpora and both α.
+`T0_gpt2` is the lowest arm in every single column (0.252–0.433) — the same arm whose
+Devanagari-blind vocabulary falls back to near-byte-level segmentation in Experiment 01,
+where a handful of byte types carry most of the mass. The Unigram family is the lowest of
+the trained arms everywhere (`T2_*` 0.430–0.528), below every T0/T3 arm but `T0_gpt2` —
+the lone exception being `T2_unigram_raw_32k`* edging `T0_gemma3` on FLORES (0.528 vs
+0.527 at α=2.5, 0.492 vs 0.492 at α=3). The
+top is `T1_bpe_raw_32k`* (0.562–0.725) in seven of the eight columns. What sits between
+them is not stable: the T1 arms, `T0_o200k`, `T0_llama4` and `T3_brahmic131k` fall within
+about 0.03 of each other on the two Sāmayik corpora, and raising α from 2.5 to 3 — which
+lowers every value by 0.019 to 0.051 — is enough to reshuffle them, handing the top of
+Sāmayik test_ood to `T0_llama4` (0.569) over `T1_bpe_raw_32k`* (0.562). Only on the two
+corpora where the T1 arms lead by a margin (Itihāsa, FLORES) does the order survive α.
+
+**And why it settles nothing.** Within the BPE family the number moves *against* TPP: on
+Sāmayik test `T1_bpe_raw_32k`* scores 0.615 to `T1_bpe_raw_64k`*'s 0.589, while the 64k arm
+is the cheaper of the two per proposition against its own matched control (1.035 [1.021,
+1.049] versus 1.084 [1.070, 1.098]). Between families the two happen to agree — the T1
+arms beat the T2 arms on both — but an intrinsic that ranks 32k above 64k where the
+controlled measurement ranks them the other way is exactly the "can be gamed" caveat in
+operation, not a tie-breaker. Read it as a description of the token distribution, and let
+TPP (and, once Experiment 05 runs, BPC) decide.
+
+## TPP by sentence length (fixed English-word-count bins)
+
+The controlled TPP of a corpus is one number over sentences of very different lengths, and
+Sāmayik's prose sentences and Itihāsa's verse lines are not the same length. `tpp_by_length`
+re-measures each of the four matched pairs inside five **fixed, absolute** bins of the
+English side's whitespace word count — 1-8, 9-16, 17-24, 25-40, 41+ (`length_bin_edges`) —
+so that a verse line and a prose sentence of the same English length land in the same bin
+and can be read against each other across corpora. Cells are `TPP [95% bootstrap CI]
+(pairs)`; `†` marks a bin with fewer than 30 pairs (`length_sparse_below`), drawn hollow in
+`tpp_by_length.pdf`. Corpora in config order, prose before verse (CLAUDE.md §2.7). The
+per-bin `n` sum to each corpus's `n_used`, and the pooled corpus value in `tpp_controlled`
+is a token-weighted combination of these bins.
+
+#### Sāmayik test (prose, primary, n=2417)
+
+| Matched pair | 1-8 words | 9-16 words | 17-24 words | 25-40 words | 41+ words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 1.225 [1.191, 1.260] (835) | 1.101 [1.080, 1.122] (995) | 1.035 [1.006, 1.064] (389) | 0.992 [0.957, 1.025] (187) | 0.920 [0.835, 1.006] (11)† |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 1.196 [1.165, 1.227] (835) | 1.056 [1.036, 1.077] (995) | 0.979 [0.950, 1.006] (389) | 0.934 [0.900, 0.965] (187) | 0.851 [0.762, 0.940] (11)† |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 1.304 [1.269, 1.339] (835) | 1.170 [1.146, 1.195] (995) | 1.083 [1.052, 1.116] (389) | 1.026 [0.986, 1.061] (187) | 0.955 [0.853, 1.057] (11)† |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 1.280 [1.248, 1.314] (835) | 1.136 [1.113, 1.159] (995) | 1.049 [1.016, 1.079] (389) | 0.981 [0.941, 1.016] (187) | 0.910 [0.818, 1.006] (11)† |
+
+#### Sāmayik test_ood (prose, primary, out-of-domain, n=4047)
+
+| Matched pair | 1-8 words | 9-16 words | 17-24 words | 25-40 words | 41+ words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 1.245 [1.181, 1.313] (515) | 1.142 [1.121, 1.164] (1565) | 1.103 [1.080, 1.125] (1108) | 1.036 [1.009, 1.059] (704) | 0.951 [0.904, 0.995] (155) |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 1.234 [1.172, 1.298] (515) | 1.118 [1.097, 1.139] (1565) | 1.078 [1.054, 1.100] (1108) | 1.010 [0.984, 1.033] (704) | 0.927 [0.882, 0.970] (155) |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 1.338 [1.272, 1.413] (515) | 1.223 [1.199, 1.247] (1565) | 1.180 [1.155, 1.205] (1108) | 1.111 [1.083, 1.137] (704) | 1.013 [0.960, 1.063] (155) |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 1.348 [1.283, 1.420] (515) | 1.222 [1.199, 1.246] (1565) | 1.174 [1.149, 1.198] (1108) | 1.098 [1.069, 1.124] (704) | 1.001 [0.950, 1.049] (155) |
+
+#### Itihāsa test (verse, secondary — meter is a confound, n=11721)
+
+| Matched pair | 1-8 words | 9-16 words | 17-24 words | 25-40 words | 41+ words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 8.944 [3.647, 21.501] (9)† | 0.984 [0.964, 1.002] (419) | 0.760 [0.755, 0.764] (3945) | 0.609 [0.605, 0.612] (5658) | 0.588 [0.579, 0.598] (1690) |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 7.944 [3.061, 19.601] (9)† | 0.927 [0.908, 0.946] (419) | 0.705 [0.701, 0.710] (3945) | 0.562 [0.559, 0.566] (5658) | 0.546 [0.536, 0.555] (1690) |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 9.833 [4.104, 23.800] (9)† | 0.996 [0.975, 1.016] (419) | 0.774 [0.769, 0.779] (3945) | 0.622 [0.619, 0.626] (5658) | 0.596 [0.587, 0.605] (1690) |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 8.889 [3.350, 22.228] (9)† | 0.951 [0.933, 0.971] (419) | 0.734 [0.729, 0.739] (3945) | 0.589 [0.585, 0.592] (5658) | 0.564 [0.555, 0.573] (1690) |
+
+#### FLORES devtest (Wikipedia, tertiary, n=1012)
+
+| Matched pair | 1-8 words | 9-16 words | 17-24 words | 25-40 words | 41+ words |
+|---|---|---|---|---|---|
+| `T1_bpe_raw_32k`* / `E1_bpe_32k` | 1.165 [1.000, 1.336] (8)† | 1.155 [1.127, 1.181] (244) | 1.148 [1.132, 1.165] (464) | 1.136 [1.117, 1.155] (280) | 1.091 [1.045, 1.139] (16)† |
+| `T1_bpe_raw_64k`* / `E1_bpe_64k` | 1.206 [1.047, 1.375] (8)† | 1.164 [1.136, 1.191] (244) | 1.151 [1.133, 1.170] (464) | 1.130 [1.111, 1.150] (280) | 1.102 [1.057, 1.144] (16)† |
+| `T2_unigram_raw_32k`* / `E1_unigram_32k` | 1.228 [1.086, 1.378] (8)† | 1.212 [1.181, 1.244] (244) | 1.211 [1.191, 1.231] (464) | 1.204 [1.183, 1.226] (280) | 1.143 [1.100, 1.182] (16)† |
+| `T2_unigram_raw_64k`* / `E1_unigram_64k` | 1.286 [1.104, 1.462] (8)† | 1.237 [1.209, 1.266] (244) | 1.227 [1.209, 1.248] (464) | 1.209 [1.188, 1.231] (280) | 1.132 [1.082, 1.179] (16)† |
+
+**Does Itihāsa stay below 1.0 in every populated bin? Almost — not in the sparse one.**
+In the four bins from 9-16 words up (419 to 5,658 pairs each) all sixteen cells are below
+1.0, and all but two have CIs excluding it: at 9-16 the 32k arms straddle the line
+(0.984 [0.964, 1.002] and 0.996 [0.975, 1.016]). The 1-8 bin is the exception and is
+`†`-flagged: 9 pairs whose English side averages **2.0 words** against a 9.4-word Sanskrit
+side, giving 7.9–9.8 with CIs spanning 3.1 to 23.8 — degenerate alignments (a fragment of a
+verse against a fragment of a line), not a measurement. It also breaks the figure: the
+panels share a y-axis, so those nine pairs stretch the scale to ~25 and flatten every other
+panel into a line at 1.0. Read these tables, not `tpp_by_length.pdf`, for anything but the
+Itihāsa shape.
+
+**Do the prose corpora stay above 1.0 in every populated bin? No — and the shortest bin is
+the most adverse, not the least.** Sāmayik test's ratio is highest at 1-8 words (1.196 to
+1.304, all four CIs above 1.0) and falls monotonically with length: by 17-24 one pair has
+dropped below (0.979 [0.950, 1.006]), by 25-40 three have (0.992, 0.981 and 0.934 [0.900,
+0.965], only the last with a CI excluding 1.0), and in the sparse 41+ bin (11 pairs, †) all
+four are below.
+Sāmayik test_ood behaves the same way with more data behind it — every bin above 1.0
+except 41+ (155 pairs, not sparse), where the two T1 arms fall to 0.951 [0.904, 0.995] and
+0.927 [0.882, 0.970]. FLORES is the flat one: 1.09–1.29 in every bin, never below 1.0. So
+prose does not carry a uniform penalty; the penalty is a length gradient that reaches
+parity, and then crosses it, on the longest prose sentences.
+
+**Side by side where both corpora are populated.** Three bins have ≥ 30 pairs in both
+Itihāsa test and Sāmayik test. Taking the two BPE pairs first, Itihāsa against Sāmayik:
+at **9-16** words 0.984 vs 1.101 (32k) and 0.927 vs 1.056 (64k); at **17-24** 0.760 vs
+1.035 and 0.705 vs 0.979; at **25-40** 0.609 vs 0.992 and 0.562 vs 0.934. The Unigram pairs
+give the same picture (25-40: 0.622 vs 1.026 and 0.589 vs 0.981). Across all four pairs the
+gap widens with length — 0.12–0.19 at 9-16, 0.27–0.32 at 17-24, 0.37–0.40 at 25-40 — and
+never closes or reverses.
+
+**Length alone cannot explain the verse result.** At every English length where the two
+corpora can be compared, the verse corpus costs 0.12–0.40 fewer tokens per proposition than
+the prose corpus measured against the same matched controls, so the Itihāsa flip survives
+holding sentence length constant and is not an artefact of Itihāsa's longer English side.
+What the bins cannot equalise is what a pair *contains*: at 25-40 English words Itihāsa's
+Sanskrit side averages 10.4 whitespace words against Sāmayik's 17.9, so a bin matches the
+English halves and leaves the Sanskrit halves as different as ever. That is consistent with
+the confounds this experiment already flags for Itihāsa — meter on the Sanskrit side, a
+19th-century verse translation on the English side — but these bins test length, and
+nothing here measures meter or licenses a causal claim about it.
 
 ## Caveats
 

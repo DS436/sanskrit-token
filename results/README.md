@@ -15,7 +15,7 @@ snapshot untouched, and you can diff the two.
 | Folder | Source run's `git_commit` | `git_dirty` | Run timestamp (UTC) |
 |---|---|---|---|
 | `01_baseline_penalty/` | `25bf1fb754fcf88c73a3a7631b8cefec378f06fe` | false | 2026-09-06T18:42:17 |
-| `02_tpp_parallel/` | `b7302a8588b820772ff8db4e80c431afca5742da` | false | 2026-09-05T10:21:27 |
+| `02_tpp_parallel/` | `70d921944b1d19fc303ac41232de07027a84270a` | false | 2026-09-07T10:41:37 |
 | `03_sandhi_split/` | `b7302a8588b820772ff8db4e80c431afca5742da` | false | 2026-09-05T10:22:27 |
 | `04_morph_constrained/` | `eb53842b1c885e19b1ddd54110de382eb4e3b4e0` | false | 2026-09-05T15:54:56 |
 | `05_lm_training/smoke/` | `b13f6e0d69e7a4559140b5112381482387cc306b` | false | 2026-09-06T05:36:40 |
@@ -37,7 +37,7 @@ snapshot was assembled later.
   repository — see `data/README.md` for where each source comes from and under what licence.
 - Run logs. They stay in `outputs/`.
 
-The whole folder is ~2 MB.
+The whole folder is ~2.5 MB.
 
 ## Experiment 05
 
