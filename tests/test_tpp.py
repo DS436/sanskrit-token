@@ -9,8 +9,8 @@ import math
 
 import pytest
 
-from sanskrit_tok.metrics._ratio import RatioParts
-from sanskrit_tok.metrics.tpp import tpp, tpp_paired_delta
+from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
+from sanskrit_tok.metrics.tpp import tpp, tpp_from_parts, tpp_paired_delta
 
 
 class CharTokenizer:
@@ -117,6 +117,52 @@ def test_tpp_rejects_a_confidence_level_outside_the_unit_interval() -> None:
     for bad in (0.0, 1.0, 95.0, -0.5, math.nan):
         with pytest.raises(ValueError, match="confidence level"):
             tpp(CharTokenizer(), ["abc"], ["ab"], n_bootstrap=10, ci=bad)
+
+
+# --- RatioParts.subset and tpp_from_parts: TPP over part of a corpus ------------------
+
+
+def test_subset_keeps_the_two_sides_aligned_and_in_the_given_order() -> None:
+    """A stratum takes both halves of a pair or neither, and follows the caller's order."""
+    parts = RatioParts(source_counts=(1, 2, 3, 4), pivot_counts=(10, 20, 30, 40))
+    picked = parts.subset([2, 0])
+    assert picked.source_counts == (3, 1)
+    assert picked.pivot_counts == (30, 10)
+
+
+def test_subset_of_an_out_of_range_index_raises() -> None:
+    with pytest.raises(IndexError):
+        RatioParts(source_counts=(1,), pivot_counts=(2,)).subset([1])
+
+
+def test_tpp_from_parts_equals_tpp_key_for_key_at_the_same_seed() -> None:
+    """`tpp` is `token_ratio` then this, so the two must be the same dict — including the
+    bootstrap bounds, which take the same RNG path and are compared exactly."""
+    tokenizer = CharTokenizer()
+    texts, pivot_texts = ["abc", "a", "abcd"], ["ab", "abcd", "a"]
+    direct = tpp(tokenizer, texts, pivot_texts, n_bootstrap=100, seed=7, ci=0.9)
+    delegated = tpp_from_parts(
+        token_ratio(tokenizer, texts, pivot_texts), n_bootstrap=100, seed=7, ci=0.9
+    )
+    assert delegated == direct
+
+
+def test_tpp_from_parts_on_a_subset_measures_only_those_pairs() -> None:
+    parts = token_ratio(CharTokenizer(), ["abc", "a", "abcd"], ["ab", "abcd", "a"])
+    result = tpp_from_parts(parts.subset([0, 2]), n_bootstrap=0)
+    assert result["source_tokens"] == 7 and result["pivot_tokens"] == 3
+    assert result["value"] == pytest.approx(7 / 3)
+    assert result["n"] == 2
+
+
+def test_tpp_from_parts_on_an_empty_subset_is_an_empty_undefined_measurement() -> None:
+    """An empty length bin still gets an entry, and it must not read as a measured zero."""
+    parts = token_ratio(CharTokenizer(), ["abc", "a"], ["ab", "abcd"])
+    result = tpp_from_parts(parts.subset([]), n_bootstrap=100, seed=0)
+    assert result["n"] == 0
+    assert math.isnan(result["value"])
+    assert math.isnan(result["ci_low"]) and math.isnan(result["ci_high"])
+    assert result["per_pair"] == []
 
 
 # --- tpp_paired_delta: the split-arm minus raw-arm difference (Experiment 03) --------

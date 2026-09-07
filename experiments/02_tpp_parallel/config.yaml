@@ -48,3 +48,13 @@ exclusion_path: data/exclusion_hashes.txt
 # `exclusion_check_en` re-verifies it every run).
 exclusion_path_en: data/exclusion_hashes_en.txt
 output_dir: outputs/02_tpp_parallel
+
+# Length-stratified TPP (results.json's `tpp_by_length`, figure `tpp_by_length.pdf`).
+# Bins are FIXED, absolute, inclusive lower bounds on the ENGLISH side's whitespace word
+# count — 1-8, 9-16, 17-24, 25-40, 41+ — so a verse line and a prose sentence of the same
+# length land in the same bin and can be read against each other across panels. Per-corpus
+# quantile bins would make that impossible: Itihāsa's and Sāmayik's bins would share a
+# name and cover different lengths. Binning on the Sanskrit word count is also rejected:
+# that denominator is the quantity under study.
+length_bin_edges: [1, 9, 17, 25, 41]
+length_sparse_below: 30    # bins with fewer pairs are flagged `sparse` and drawn hollow

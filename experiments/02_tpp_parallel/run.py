@@ -34,6 +34,7 @@ without touching the network, a real corpus, or the Hugging Face cache.
 """
 
 import argparse
+import bisect
 import logging
 import math
 import random
@@ -65,11 +66,12 @@ from sanskrit_tok.experiment import (
     unavailable_caption,
     write_results,
 )
+from sanskrit_tok.metrics._ratio import token_ratio
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.renyi import renyi_efficiency
 from sanskrit_tok.metrics.summary import summarise_metric
-from sanskrit_tok.metrics.tpp import tpp
+from sanskrit_tok.metrics.tpp import tpp, tpp_from_parts
 from sanskrit_tok.tokenizers.registry import LoadedTokenizer
 
 logger = logging.getLogger("exp02")
@@ -439,6 +441,195 @@ def compute_fertility_compression(
                     compression(tokenizer, texts)
                 )
     return fert, comp
+
+
+# ------------------------------------------------------------- length-stratified TPP
+
+#: Inclusive lower bounds of the sentence-length bins, counted in *English* whitespace
+#: words: `1-8`, `9-16`, `17-24`, `25-40`, `41+` (docs/decisions.md, 2026-09-07). Fixed
+#: and absolute rather than per-corpus quantiles, so a verse line and a prose sentence of
+#: the same length fall in the same bin and can be read against each other; quantile bins
+#: would put Itihāsa's short lines and Sāmayik's long periods in bins that share a name
+#: and nothing else. `config["length_bin_edges"]` overrides them.
+LENGTH_BIN_EDGES_DEFAULT: tuple[int, ...] = (1, 9, 17, 25, 41)
+
+#: A bin holding fewer pairs than this is flagged `sparse` in `results.json` and drawn
+#: with a hollow marker; `config["length_sparse_below"]` overrides it.
+LENGTH_SPARSE_BELOW_DEFAULT = 30
+
+
+def length_bin_labels(edges: Sequence[int]) -> list[str]:
+    """`results.json` keys and x-tick labels for `edges`: `["1-8", ..., "41+"]`.
+
+    Every bin but the last is closed and named by its inclusive range; the last is
+    open-ended, because sentence length has no upper bound and a stated one would stop
+    being true the first time a corpus exceeded it. Raises `ValueError` on empty `edges`,
+    which would otherwise produce a single unnamed bin holding the whole corpus.
+    """
+    bounds = list(edges)
+    if not bounds:
+        raise ValueError("length bin edges are empty; at least one edge is required")
+    labels = [f"{low}-{high - 1}" for low, high in zip(bounds, bounds[1:], strict=False)]
+    labels.append(f"{bounds[-1]}+")
+    return labels
+
+
+def assign_length_bin(n_words: int, edges: Sequence[int]) -> int:
+    """Index of the bin `n_words` falls in; `edges` are sorted, inclusive lower bounds.
+
+    A count below the first edge — with the default edges, that is a 0-word sentence —
+    goes in bin 0 as well, rather than being dropped or given a bin of its own. The
+    corpora reaching this function are already filtered to lines that are non-blank in
+    every language (`prepare_corpus`), so the case does not arise in a real run; it is
+    defined rather than raising so that one stray whitespace-only line cannot abort a
+    long experiment over a sentence it would have contributed nothing to.
+    """
+    return max(bisect.bisect_right(list(edges), n_words) - 1, 0)
+
+
+def select_length_pairs(
+    arms: Mapping[str, LoadedTokenizer],
+    sanskrit_arm_names: Sequence[str],
+    english_pivots: Sequence[str],
+    controlled: Sequence[tuple[str, str]],
+    script_variants: Mapping[str, Sequence[str]],
+) -> list[tuple[str, str, str]]:
+    """The `(sanskrit_arm, variant, english_arm)` triples the length strata are measured on.
+
+    Two sets, and only the first is a controlled comparison. (a) Every matched pair from
+    `select_controlled_pairs`, read in `CONTROLLED_VARIANT` — these are what the figure
+    draws, because both sides share an algorithm, a vocabulary size and a training corpus,
+    so a difference between two length bins is a difference in the language, not in the
+    two tokenizers. (b) Every available Sanskrit arm against the primary English pivot,
+    read in its own natural script (`original` where the family has one, otherwise its
+    single variant): deployed practice, recorded in `results.json` and never plotted
+    (CLAUDE.md §2.5).
+
+    Both sets are keyed `"<sanskrit_arm>/<english_arm>"` and cannot collide, since an E1
+    control arm and a T0 pivot never share a name.
+    """
+    pairs = [
+        (sanskrit_arm, CONTROLLED_VARIANT, english_arm)
+        for sanskrit_arm, english_arm in controlled
+    ]
+    if not english_pivots:
+        return pairs
+    pivot_name = english_pivots[0]
+    if pivot_name not in arms:
+        logger.warning(
+            "primary English pivot %s is unavailable this run; the deployed-practice "
+            "length strata are omitted from results.json",
+            pivot_name,
+        )
+        return pairs
+    for arm_name in sanskrit_arm_names:
+        tokenizer = arms.get(arm_name)
+        if tokenizer is None:
+            continue
+        variants = variants_for_family(tokenizer.family, script_variants)
+        if not variants:
+            continue
+        variant = ORIGINAL if ORIGINAL in variants else variants[0]
+        pairs.append((arm_name, variant, pivot_name))
+    return pairs
+
+
+def compute_tpp_by_length(
+    corpora: Sequence[CorpusData],
+    arms: Mapping[str, LoadedTokenizer],
+    pairs: Sequence[tuple[str, str, str]],
+    edges: Sequence[int],
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+    *,
+    sparse_below: int = LENGTH_SPARSE_BELOW_DEFAULT,
+) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+    """`corpus -> "<sa_arm>/<en_arm>" -> bin label -> summary`: TPP within a length band.
+
+    A corpus-level TPP compares a whole corpus with a whole corpus, and the two primary
+    corpora differ in more than genre: Itihāsa is verse *and* short (a śloka quarter is
+    eight syllables), Sāmayik is prose *and* long. Since Itihāsa is the one corpus where
+    the matched control leaves Sanskrit below 1.0, "verse is denser" and "short sentences
+    are denser" are two readings of the same number. Binning every corpus on the same
+    fixed edges of the *English* side's whitespace word count separates them: a 9-16-word
+    verse line and a 9-16-word prose sentence are then directly comparable.
+
+    The bin variable is the English side deliberately. Sanskrit word count is the
+    quantity under study — sandhi and compounding are what make it small — so binning on
+    it would sort sentences by the very effect being measured.
+
+    Token counts are computed **once** per (corpus, pair) with `token_ratio` and then
+    subset per bin (`RatioParts.subset`), so the strata cost one tokenization pass rather
+    than one per bin, and every stratum is by construction a subset of the same
+    measurement the corpus-level number comes from.
+
+    Each summary is `summarise_tpp` of that bin's TPP, plus `n_pairs` (how many aligned
+    pairs the bin holds), `sparse` (`n_pairs < sparse_below`: too few to read as anything
+    but a hint, drawn hollow in the figure), `mean_words_en` / `mean_words_sa` (the mean
+    whitespace word count of the two sides over the bin's pairs — the English one says
+    where inside the band the bin actually sits, the Sanskrit one is the word-count
+    compression that motivates the whole project), and `variant` (which script variant of
+    the Sanskrit side was read). An empty bin still gets an entry, with `n_pairs` 0, a
+    `nan` value and `sparse` true: a missing key and a measured-nothing bin would
+    otherwise be indistinguishable in `results.json`.
+    """
+    labels = length_bin_labels(edges)
+    results: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+    for corpus in corpora:
+        english_words = [len(text.split()) for text in corpus.english]
+        sanskrit_words = [len(text.split()) for text in corpus.sanskrit[ORIGINAL]]
+        indices_by_bin: list[list[int]] = [[] for _ in labels]
+        for index, n_words in enumerate(english_words):
+            indices_by_bin[assign_length_bin(n_words, edges)].append(index)
+
+        pair_results: dict[str, dict[str, dict[str, Any]]] = {}
+        for sanskrit_arm, variant, english_arm in pairs:
+            parts = token_ratio(
+                arms[sanskrit_arm],
+                corpus.sanskrit[variant],
+                corpus.english,
+                arms[english_arm],
+            )
+            bin_results: dict[str, dict[str, Any]] = {}
+            for label, indices in zip(labels, indices_by_bin, strict=True):
+                raw = tpp_from_parts(
+                    parts.subset(indices), n_bootstrap=n_bootstrap, seed=seed, ci=ci
+                )
+                summary = summarise_tpp(raw, ci=ci)
+                summary["n_pairs"] = len(indices)
+                summary["sparse"] = len(indices) < sparse_below
+                summary["mean_words_en"] = _mean_over(english_words, indices)
+                summary["mean_words_sa"] = _mean_over(sanskrit_words, indices)
+                summary["variant"] = variant
+                bin_results[label] = summary
+            key = controlled_pair_key(sanskrit_arm, english_arm)
+            pair_results[key] = bin_results
+            logger.info(
+                "%s / %s (%s) by length: %s",
+                corpus.name,
+                key,
+                variant,
+                ", ".join(
+                    f"{label} n={bin_results[label]['n_pairs']} "
+                    f"TPP {bin_results[label]['value']:.3f}"
+                    for label in labels
+                ),
+            )
+        results[corpus.name] = pair_results
+    return results
+
+
+def _mean_over(values: Sequence[int], indices: Sequence[int]) -> float:
+    """Mean of `values` at `indices`, `nan` for an empty selection.
+
+    `nan` rather than `0.0` because an empty bin has no mean sentence length, and `0.0`
+    is a length a reader would take for a measurement (`_ratio.py` makes the same choice
+    for an undefined ratio).
+    """
+    if not indices:
+        return math.nan
+    return sum(values[index] for index in indices) / len(indices)
 
 
 # ------------------------------------------------------------------------------- Rényi
@@ -894,16 +1085,211 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
     return figure
 
 
+#: Stem of the length-stratified figure's two files.
+LENGTH_FIGURE_STEM = "tpp_by_length"
+LENGTH_FIGURE_SUPTITLE = (
+    "Tokens per proposition by sentence length, matched control, 95% bootstrap CI"
+)
+#: Names the bin variable and the hollow marker; `{n}` is filled from `sparse_below`. The
+#: bin variable belongs on the figure because "17-24" alone does not say 17-24 of what,
+#: and the answer (English words, not Sanskrit ones) is the choice that makes the panels
+#: comparable to each other.
+LENGTH_FIGURE_FOOTNOTE = "bins by English whitespace word count; hollow = fewer than {n} pairs"
+#: One colour per controlled pair, cycled; the figure carries at most four of them.
+LENGTH_SERIES_COLORS = ("#2b6cb0", "#2f855a", "#c05621", "#6b46c1", "#b83280", "#2c7a7b")
+
+
+def _length_series(
+    entries: Mapping[str, Any],
+    labels: Sequence[str],
+) -> tuple[list[int], list[float], list[float], list[float], list[bool]]:
+    """One pair's plottable points: x, y, lower/upper error, and the sparse flag per point.
+
+    Bins with no entry, no value, or a non-finite one (an empty bin's `nan`, or the `null`
+    the JSON sanitiser writes for it) are dropped rather than plotted at zero, so the line
+    simply skips a length band the corpus has no sentences in.
+    """
+    xs: list[int] = []
+    values: list[float] = []
+    lower_err: list[float] = []
+    upper_err: list[float] = []
+    sparse: list[bool] = []
+    for position, label in enumerate(labels):
+        entry = entries.get(label)
+        if entry is None:
+            continue
+        raw = entry.get("value")
+        if raw is None or not math.isfinite(float(raw)):
+            continue
+        value = float(raw)
+        ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
+        low = float(ci_low) if ci_low is not None and math.isfinite(float(ci_low)) else value
+        high = float(ci_high) if ci_high is not None and math.isfinite(float(ci_high)) else value
+        xs.append(position)
+        values.append(value)
+        lower_err.append(max(value - low, 0.0))
+        upper_err.append(max(high - value, 0.0))
+        sparse.append(bool(entry.get("sparse")))
+    return xs, values, lower_err, upper_err, sparse
+
+
+def _build_tpp_by_length_figure(results: Mapping[str, Any]) -> Any:
+    """Build (but do not save or close) the length-stratified TPP figure; returns the `Figure`.
+
+    One panel per corpus in config order (prose before verse, CLAUDE.md §2.7), sharing a
+    y axis so the panels can be read against each other — which is the entire point:
+    Itihāsa's verse lines and Sāmayik's prose sentences are plotted at the same x
+    position when they hold the same number of English words, and the question the figure
+    answers is whether the two panels' curves differ at equal length or only in where
+    their sentences sit along the x axis.
+
+    One line-and-marker series per **controlled** pair (`config["controlled_pairs"]`,
+    labelled by `controlled_pair_label`), with its bootstrap CI as error bars. The
+    deployed-practice series that `results["tpp_by_length"]` also carries are deliberately
+    not drawn: an off-the-shelf 200k English vocabulary against a 32k Sanskrit one is a
+    description of current practice, never a controlled comparison (CLAUDE.md §2.5), and
+    on a figure about a *difference between length bands* it would read as one.
+
+    A bin with fewer than `config["length_sparse_below"]` pairs is drawn with a hollow
+    marker: at the corpora's sizes the longest band can hold a handful of sentences, whose
+    ratio is real but whose interval is wide enough that a reader should not follow the
+    line into it. The dashed line at 1.0 is the same sign-flip threshold the main figure
+    uses. Raises `ValueError` if the config names no corpora; every other emptiness —
+    no `tpp_by_length` block at all, no controlled pairs, no non-empty bin — draws the
+    axes with the reference line and nothing on them rather than failing, so a
+    `results.json` from before this task still plots.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")  # headless: this runs on CI and over ssh
+    import matplotlib.pyplot as plt
+
+    config = results["config"]
+    corpus_entries = list(config["corpora"])
+    if not corpus_entries:
+        raise ValueError("results['config']['corpora'] is empty; nothing to plot")
+
+    edges = list(
+        results.get("length_bin_edges")
+        or config.get("length_bin_edges")
+        or LENGTH_BIN_EDGES_DEFAULT
+    )
+    labels = length_bin_labels(edges)
+    positions = list(range(len(labels)))
+    sparse_below = int(config.get("length_sparse_below", LENGTH_SPARSE_BELOW_DEFAULT))
+    by_length = results.get("tpp_by_length", {})
+    controlled_pairs = list(config.get("controlled_pairs", []))
+
+    n_panels = len(corpus_entries)
+    figure, axes_grid = plt.subplots(
+        n_panels,
+        1,
+        figsize=(8.0, 2.9 * n_panels),
+        squeeze=False,
+        sharey=True,
+    )
+    axes_list = [row[0] for row in axes_grid]
+
+    handles: dict[str, Any] = {}
+    finite_bounds: list[float] = []
+    for axes, entry in zip(axes_list, corpus_entries, strict=True):
+        corpus_name = str(entry["name"])
+        corpus_by_length = by_length.get(corpus_name, {})
+        for index, pair in enumerate(controlled_pairs):
+            sanskrit_arm, english_arm = pair[0], pair[1]
+            entries = corpus_by_length.get(controlled_pair_key(sanskrit_arm, english_arm))
+            if not entries:
+                continue
+            xs, values, lower_err, upper_err, sparse = _length_series(entries, labels)
+            if not xs:
+                continue
+            color = LENGTH_SERIES_COLORS[index % len(LENGTH_SERIES_COLORS)]
+            label = controlled_pair_label(sanskrit_arm, english_arm)
+            line = axes.plot(xs, values, color=color, linewidth=1.2, zorder=2)[0]
+            handles.setdefault(label, line)
+            # Two error bars rather than one: matplotlib takes a single face colour for a
+            # whole series, and the hollow marker is what tells a reader which points rest
+            # on too few sentences to lean on.
+            for is_sparse in (False, True):
+                selected = [position for position, flag in enumerate(sparse) if flag is is_sparse]
+                if not selected:
+                    continue
+                axes.errorbar(
+                    [xs[position] for position in selected],
+                    [values[position] for position in selected],
+                    yerr=[
+                        [lower_err[position] for position in selected],
+                        [upper_err[position] for position in selected],
+                    ],
+                    fmt="o",
+                    linestyle="none",
+                    capsize=3,
+                    color=color,
+                    markerfacecolor="none" if is_sparse else color,
+                    zorder=3,
+                )
+            finite_bounds.extend(
+                bound
+                for value, low, high in zip(values, lower_err, upper_err, strict=True)
+                for bound in (value - low, value + high)
+            )
+
+        axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
+        axes.set_xticks(positions)
+        axes.set_xticklabels(labels, fontsize=8)
+        axes.set_xlim(-0.4, len(positions) - 0.6 if len(positions) > 1 else 0.6)
+        axes.set_ylabel("TPP ratio", fontsize=9)
+        axes.set_xlabel("English words per sentence", fontsize=8)
+        axes.set_title(corpus_name, fontsize=9, loc="left")
+        axes.spines[["top", "right"]].set_visible(False)
+
+    # Shared y range over every panel's points, with 1.0 always inside it: the panels are
+    # only comparable if they are on the same scale, and the threshold is what each is
+    # read against. Falls back to a plain range when no panel drew anything.
+    if finite_bounds:
+        span_low, span_high = min([*finite_bounds, 1.0]), max([*finite_bounds, 1.0])
+        span = span_high - span_low
+        pad = span * FIGURE_Y_PAD_FRACTION if span > 0 else max(span_high * 0.2, 0.1)
+        axes_list[0].set_ylim(span_low - pad, span_high + pad)
+    else:
+        axes_list[0].set_ylim(0.0, 2.0)
+
+    if handles:
+        axes_list[0].legend(
+            handles=list(handles.values()),
+            labels=list(handles),
+            fontsize=7,
+            loc="best",
+        )
+
+    figure.suptitle(LENGTH_FIGURE_SUPTITLE, fontsize=11)
+    figure.text(0.01, 0.005, LENGTH_FIGURE_FOOTNOTE.format(n=sparse_below), fontsize=7)
+    figure.tight_layout(rect=(0.0, 0.02, 1.0, 0.96))
+    return figure
+
+
 def make_figure(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
-    """Build the central TPP figure (`_build_tpp_figure`) and save it as PDF and PNG."""
+    """Build both Experiment 02 figures and save each as PDF and PNG (CLAUDE.md §8).
+
+    `tpp_by_arm` is the central per-arm figure (`_build_tpp_figure`); `tpp_by_length` is
+    the length-stratified one (`_build_tpp_by_length_figure`). Both are built before
+    either is written, so a failure in the second does not leave a half-refreshed output
+    directory whose two figures came from different code.
+    """
     import matplotlib.pyplot as plt
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    figure = _build_tpp_figure(results)
-    paths = [out_dir / f"{FIGURE_STEM}.pdf", out_dir / f"{FIGURE_STEM}.png"]
-    for path in paths:
-        figure.savefig(path, dpi=200)
-    plt.close(figure)
+    figures = (
+        (FIGURE_STEM, _build_tpp_figure(results)),
+        (LENGTH_FIGURE_STEM, _build_tpp_by_length_figure(results)),
+    )
+    paths: list[Path] = []
+    for stem, figure in figures:
+        stem_paths = [out_dir / f"{stem}.pdf", out_dir / f"{stem}.png"]
+        for path in stem_paths:
+            figure.savefig(path, dpi=200)
+        plt.close(figure)
+        paths.extend(stem_paths)
     logger.info("wrote %s", " and ".join(str(path) for path in paths))
     return paths
 
@@ -996,10 +1382,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     tpp_results = compute_tpp(
         corpora, arms, sanskrit_arm_names, english_pivots, script_variants, n_bootstrap, seed, ci
     )
+    controlled_selected = select_controlled_pairs(controlled_pairs, arms)
     tpp_controlled = compute_tpp_controlled(
         corpora,
         arms,
-        select_controlled_pairs(controlled_pairs, arms),
+        controlled_selected,
         n_bootstrap,
         seed,
         ci,
@@ -1013,6 +1400,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     tpp_hindi = compute_tpp_hindi(
         hindi_corpus, arms, sanskrit_arm_names, script_variants, n_bootstrap, seed, ci
+    )
+    length_bin_edges = [
+        int(edge) for edge in config.get("length_bin_edges", LENGTH_BIN_EDGES_DEFAULT)
+    ]
+    tpp_by_length = compute_tpp_by_length(
+        corpora,
+        arms,
+        select_length_pairs(
+            arms, sanskrit_arm_names, english_pivots, controlled_selected, script_variants
+        ),
+        length_bin_edges,
+        n_bootstrap,
+        seed,
+        ci,
+        sparse_below=int(config.get("length_sparse_below", LENGTH_SPARSE_BELOW_DEFAULT)),
     )
     fertility_results, compression_results = compute_fertility_compression(
         corpora, arms, sanskrit_arm_names, script_variants
@@ -1041,6 +1443,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tpp_controlled": tpp_controlled,
         "tpp": tpp_results,
         "tpp_hindi": tpp_hindi,
+        "tpp_by_length": tpp_by_length,
+        "length_bin_edges": length_bin_edges,
         "fertility": fertility_results,
         "compression": compression_results,
         "renyi": renyi_results,

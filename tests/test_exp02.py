@@ -163,7 +163,12 @@ def _synthetic_results() -> dict[str, object]:
 
 def test_make_figure_writes_a_pdf_and_a_png(tmp_path: Path) -> None:
     paths = run.make_figure(_synthetic_results(), tmp_path)
-    assert [path.name for path in paths] == ["tpp_by_arm.pdf", "tpp_by_arm.png"]
+    assert [path.name for path in paths] == [
+        "tpp_by_arm.pdf",
+        "tpp_by_arm.png",
+        "tpp_by_length.pdf",
+        "tpp_by_length.png",
+    ]
     for path in paths:
         assert path.exists()
         assert path.stat().st_size > 0
@@ -577,3 +582,292 @@ def test_compute_renyi_measures_the_real_distribution_of_a_two_type_arm() -> Non
     assert summary["entropy_bits"] == pytest.approx(expected)
     assert summary["value"] == pytest.approx(expected)
     assert summary["efficiency_nominal"] == pytest.approx(expected / 2)  # log2(4) = 2
+
+
+# --- length-stratified TPP -------------------------------------------------------------
+
+
+def test_length_bin_labels_names_closed_ranges_and_an_open_last_bin() -> None:
+    assert run.length_bin_labels(run.LENGTH_BIN_EDGES_DEFAULT) == [
+        "1-8",
+        "9-16",
+        "17-24",
+        "25-40",
+        "41+",
+    ]
+
+
+def test_length_bin_labels_rejects_empty_edges() -> None:
+    with pytest.raises(ValueError, match="edge"):
+        run.length_bin_labels([])
+
+
+@pytest.mark.parametrize(
+    ("n_words", "expected"),
+    [
+        (0, 0),  # below the first edge: bin 0, not a bin of its own
+        (1, 0),
+        (8, 0),
+        (9, 1),
+        (16, 1),
+        (17, 2),
+        (24, 2),
+        (25, 3),
+        (40, 3),
+        (41, 4),
+        (200, 4),
+    ],
+)
+def test_assign_length_bin_at_every_edge(n_words: int, expected: int) -> None:
+    assert run.assign_length_bin(n_words, run.LENGTH_BIN_EDGES_DEFAULT) == expected
+
+
+def _length_corpus() -> object:
+    """Four pairs whose English sides fall in bins 0, 0, 1 and 2, leaving 3 and 4 empty."""
+    return run.CorpusData(
+        name="corpus_a",
+        split="test",
+        n_total=4,
+        n_used=4,
+        sanskrit={
+            run.ORIGINAL: ["rAmaH", "sItA", "gacCati", "vadati"],
+            run.SLP1: ["rAmaH", "sItA", "gacCati", "vadati"],
+        },
+        english=["aa bb", "cc dd", " ".join(["w"] * 10), " ".join(["w"] * 20)],
+        hindi=None,
+    )
+
+
+def _length_bins(sparse_below: int = 2) -> dict[str, dict[str, object]]:
+    results = run.compute_tpp_by_length(
+        [_length_corpus()],  # type: ignore[list-item]
+        {
+            "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+            "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        },  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", run.SLP1, "E1_bpe_32k")],
+        run.LENGTH_BIN_EDGES_DEFAULT,
+        n_bootstrap=0,
+        seed=0,
+        ci=0.95,
+        sparse_below=sparse_below,
+    )
+    return results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+
+
+def test_compute_tpp_by_length_is_keyed_by_corpus_pair_and_bin_label() -> None:
+    bins = _length_bins()
+    assert list(bins) == ["1-8", "9-16", "17-24", "25-40", "41+"]
+    assert [bins[label]["n_pairs"] for label in bins] == [2, 1, 1, 0, 0]
+    # every pair of the corpus lands in exactly one bin
+    assert sum(int(bins[label]["n_pairs"]) for label in bins) == 4
+
+
+def test_compute_tpp_by_length_value_is_the_bins_hand_computed_ratio_of_sums() -> None:
+    """Bin `1-8` holds the first two pairs; these fakes emit one id per character, so the
+    ratio is (len("rAmaH") + len("sItA")) / (len("aa bb") + len("cc dd")) = 9 / 10."""
+    bins = _length_bins()
+    assert bins["1-8"]["source_tokens"] == 9
+    assert bins["1-8"]["pivot_tokens"] == 10
+    assert bins["1-8"]["value"] == pytest.approx(0.9)
+    assert bins["1-8"]["mean_words_en"] == pytest.approx(2.0)
+    assert bins["1-8"]["mean_words_sa"] == pytest.approx(1.0)
+    assert bins["1-8"]["variant"] == run.SLP1
+
+
+def test_compute_tpp_by_length_flags_bins_below_the_sparse_threshold() -> None:
+    bins = _length_bins(sparse_below=2)
+    assert bins["1-8"]["sparse"] is False  # two pairs, threshold two
+    assert bins["9-16"]["sparse"] is True  # one pair
+    assert all(bins[label]["sparse"] is True for label in ("9-16", "17-24", "25-40", "41+"))
+
+
+def test_compute_tpp_by_length_gives_an_empty_bin_a_nan_entry_not_a_missing_key() -> None:
+    import math
+
+    empty = _length_bins()["41+"]
+    assert empty["n_pairs"] == 0
+    assert empty["sparse"] is True
+    assert math.isnan(float(empty["value"]))  # type: ignore[arg-type]
+    assert math.isnan(float(empty["ci_low"]))  # type: ignore[arg-type]
+    assert math.isnan(float(empty["ci_high"]))  # type: ignore[arg-type]
+    assert math.isnan(float(empty["mean_words_en"]))  # type: ignore[arg-type]
+    assert math.isnan(float(empty["mean_words_sa"]))  # type: ignore[arg-type]
+
+
+def test_compute_tpp_by_length_encodes_each_side_once_not_once_per_bin() -> None:
+    """The counts come from one `token_ratio` pass and are subset per bin; re-encoding
+    per bin would multiply the run's cost by the number of bins."""
+    calls: list[str] = []
+
+    def counting(text: str) -> list[int]:
+        calls.append(text)
+        return [0] * len(text)
+
+    arm = run.LoadedTokenizer(
+        name="both_sides",
+        source_id="both.json",
+        vocab_size=32000,
+        _encode=counting,
+        family="T1",
+        attempted=("both.json",),
+    )
+    run.compute_tpp_by_length(
+        [_length_corpus()],  # type: ignore[list-item]
+        {"both_sides": arm},
+        [("both_sides", run.SLP1, "both_sides")],
+        run.LENGTH_BIN_EDGES_DEFAULT,
+        n_bootstrap=0,
+        seed=0,
+        ci=0.95,
+    )
+    assert len(calls) == 8  # four Sanskrit sentences + four English, once each
+
+
+def test_select_length_pairs_takes_controlled_pairs_and_the_primary_pivot() -> None:
+    """Set (a) reads the controlled variant; set (b) reads each family's own script —
+    `original` for T0, its only variant for T1 — against the first English pivot."""
+    arms = {
+        "T0_o200k": _fake_arm("T0_o200k", "o200k_base", "T0"),
+        "T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", "sa.json", "T1"),
+        "E1_bpe_32k": _fake_arm("E1_bpe_32k", "en.json", "E1"),
+    }
+    pairs = run.select_length_pairs(
+        arms,  # type: ignore[arg-type]
+        ["T0_o200k", "T1_bpe_raw_32k"],
+        ["T0_o200k", "T0_llama4"],
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        SCRIPT_VARIANTS,
+    )
+    assert pairs == [
+        ("T1_bpe_raw_32k", run.CONTROLLED_VARIANT, "E1_bpe_32k"),
+        ("T0_o200k", run.ORIGINAL, "T0_o200k"),
+        ("T1_bpe_raw_32k", run.SLP1, "T0_o200k"),
+    ]
+
+
+def test_select_length_pairs_drops_the_deployed_set_when_the_pivot_is_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level("WARNING", logger="exp02"):
+        pairs = run.select_length_pairs(
+            {"T1_bpe_raw_32k": _fake_arm("T1_bpe_raw_32k", "sa.json", "T1")},  # type: ignore[arg-type]
+            ["T1_bpe_raw_32k"],
+            ["T0_o200k"],
+            [],
+            SCRIPT_VARIANTS,
+        )
+    assert pairs == []
+    assert any("T0_o200k" in record.getMessage() for record in caplog.records)
+
+
+# --- the length-stratified figure ------------------------------------------------------
+
+
+def _length_bin_entry(value: float, lo: float, hi: float, n_pairs: int) -> dict[str, object]:
+    return {
+        "value": value,
+        "ci_low": lo,
+        "ci_high": hi,
+        "n": n_pairs,
+        "unit": "x",
+        "n_pairs": n_pairs,
+        "sparse": n_pairs < 30,
+        "mean_words_en": 5.0,
+        "mean_words_sa": 3.0,
+        "variant": "slp1",
+    }
+
+
+def _empty_length_bin_entry() -> dict[str, object]:
+    nan = float("nan")
+    entry = _length_bin_entry(nan, nan, nan, 0)
+    entry["mean_words_en"] = nan
+    entry["mean_words_sa"] = nan
+    return entry
+
+
+def _synthetic_results_with_length() -> dict[str, object]:
+    """`corpus_a` has three populated bins (one of them sparse) and two empty ones;
+    `corpus_b`'s bins are all empty, which the figure must survive."""
+    results = _synthetic_results()
+    config = results["config"]
+    assert isinstance(config, dict)
+    config["controlled_pairs"] = [["T1_bpe_raw_32k", "E1_bpe_32k"]]
+    config["length_sparse_below"] = 30
+    labels = run.length_bin_labels(run.LENGTH_BIN_EDGES_DEFAULT)
+    results["length_bin_edges"] = list(run.LENGTH_BIN_EDGES_DEFAULT)
+    results["tpp_by_length"] = {
+        "corpus_a": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {
+                labels[0]: _length_bin_entry(0.90, 0.85, 0.95, 120),
+                labels[1]: _length_bin_entry(0.95, 0.90, 1.00, 80),
+                labels[2]: _length_bin_entry(1.20, 0.90, 1.50, 4),  # sparse: hollow
+                labels[3]: _empty_length_bin_entry(),
+                labels[4]: _empty_length_bin_entry(),
+            },
+            # deployed practice: recorded in results.json, never drawn (CLAUDE.md §2.5)
+            "T1_bpe_raw_32k/T0_o200k": {
+                label: _length_bin_entry(2.0, 1.9, 2.1, 120) for label in labels
+            },
+        },
+        "corpus_b": {
+            "T1_bpe_raw_32k/E1_bpe_32k": {label: _empty_length_bin_entry() for label in labels}
+        },
+    }
+    return results
+
+
+def test_build_tpp_by_length_figure_ticks_the_bins_and_legends_the_controlled_pair() -> None:
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
+    try:
+        assert len(figure.axes) == 2  # one panel per corpus
+        ticks = [label.get_text() for label in figure.axes[0].get_xticklabels()]
+        assert ticks == ["1-8", "9-16", "17-24", "25-40", "41+"]
+        legend = figure.axes[0].get_legend()
+        assert legend is not None
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        # only the controlled pair; the deployed-pivot series is results.json-only
+        assert legend_labels == [run.controlled_pair_label("T1_bpe_raw_32k", "E1_bpe_32k")]
+        assert not any("T0_o200k" in label for label in legend_labels)
+        footnote = [text.get_text() for text in figure.texts]
+        assert any("English whitespace word count" in text for text in footnote)
+        assert any("30" in text for text in footnote)
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_by_length_figure_survives_a_corpus_whose_bins_are_all_empty() -> None:
+    """`corpus_b` has an entry for every bin and a value for none; the panel must draw
+    its reference line and no points rather than raising or producing an empty y range."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results_with_length())
+    try:
+        bottom, top = figure.axes[1].get_ylim()
+        assert bottom < 1.0 < top  # shared axis, with the sign-flip threshold inside it
+    finally:
+        plt.close(figure)
+
+
+def test_build_tpp_by_length_figure_without_any_length_results_still_plots() -> None:
+    """A results.json from before this task carries no `tpp_by_length`; the figure is
+    then empty axes rather than a crash."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_by_length_figure(_synthetic_results())
+    try:
+        assert len(figure.axes) == 2
+        assert figure.axes[0].get_ylim() == (0.0, 2.0)
+    finally:
+        plt.close(figure)
+
+
+def test_make_figure_writes_the_length_figure_too(tmp_path: Path) -> None:
+    paths = run.make_figure(_synthetic_results_with_length(), tmp_path)
+    length_paths = [path for path in paths if path.stem == run.LENGTH_FIGURE_STEM]
+    assert [path.name for path in length_paths] == ["tpp_by_length.pdf", "tpp_by_length.png"]
+    for path in length_paths:
+        assert path.exists() and path.stat().st_size > 0

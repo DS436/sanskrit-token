@@ -71,6 +71,27 @@ class RatioParts:
         """How many pairs have an undefined ratio, i.e. how many `per_pair` are `nan`."""
         return sum(1 for pivot in self.pivot_counts if not pivot)
 
+    def subset(self, indices: Sequence[int]) -> "RatioParts":
+        """The counts at `indices`, in the order given, as a new `RatioParts`.
+
+        The same reason the counts are stored rather than the ratios: an analysis that
+        looks at part of a corpus — a length stratum, a bootstrap draw — must reuse the
+        counts already computed, never re-encode the text. Re-encoding a stratum is both
+        slower by the number of strata and a chance for the subset to disagree with the
+        whole (a different script variant, a different pivot tokenizer), which is exactly
+        the kind of drift this module exists to prevent.
+
+        Both sides are subset by the *same* indices, so a stratum takes both halves of a
+        pair or neither and the two tuples stay aligned. Order is the caller's: the
+        returned counts follow `indices`, and repeated indices are repeated counts (which
+        is what a bootstrap draw needs). An index outside the range raises `IndexError`
+        from the tuple lookup itself, naming nothing this module could name better.
+        """
+        return RatioParts(
+            source_counts=tuple(self.source_counts[index] for index in indices),
+            pivot_counts=tuple(self.pivot_counts[index] for index in indices),
+        )
+
 
 def token_ratio(
     tokenizer: Tokenizer,

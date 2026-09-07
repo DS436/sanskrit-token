@@ -36,7 +36,7 @@ import numpy as np
 from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
 from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
 
-__all__ = ["tpp", "tpp_paired_delta"]
+__all__ = ["tpp", "tpp_from_parts", "tpp_paired_delta"]
 
 #: Unit label carried into `results.json` and every figure axis.
 UNIT = "tokens/proposition ratio"
@@ -146,6 +146,32 @@ def tpp(
     """
     _require_ci(ci)
     parts = token_ratio(tokenizer, texts, pivot_texts, pivot_tokenizer)
+    return tpp_from_parts(parts, n_bootstrap=n_bootstrap, seed=seed, ci=ci)
+
+
+def tpp_from_parts(
+    parts: RatioParts,
+    *,
+    n_bootstrap: int = 1000,
+    seed: int = 0,
+    ci: float = 0.95,
+) -> DetailedMetricResult:
+    """`tpp` on token counts that have already been computed; the same dict, key for key.
+
+    `tpp` is this function preceded by a `token_ratio` call, so everything its docstring
+    says about pooling, undefined pairs, the bootstrap and `ci` holds here unchanged.
+    The split exists for analyses that measure *parts* of a corpus: a length stratum
+    (Experiment 02's `tpp_by_length`) is `tpp_from_parts(parts.subset(indices), ...)`,
+    which reuses the counts from one `token_ratio` pass over the whole corpus instead of
+    re-encoding it once per stratum — cheaper, and it guarantees the strata and the whole
+    are the same measurement.
+
+    Note that `seed` is used as given for every call, so two strata of the same corpus
+    share a bootstrap seed. That is intended: the draws are independent resamples of
+    different index sets, and reproducing a stratum's interval should need only the seed
+    `results.json` records beside it.
+    """
+    _require_ci(ci)
     ci_low, ci_high = _bootstrap_ci(parts, n_bootstrap, seed, ci)
     return {
         "value": parts.value,
