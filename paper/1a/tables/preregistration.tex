@@ -8,10 +8,10 @@ Pre-registered prediction & Measured & Outcome \\
 T0 fertility on Sanskrit 5--12 & 3.11--3.88 at $\geq$200k vocab; 12.49 for GPT-2 & Refuted, except GPT-2 on Devanagari \\
 Hindi 2--4 under the same tokenizer & 1.79--2.34 at $\geq$200k vocab & Approximately held; lower bound crossed by 1 arm of 3 \\
 Sa/Hi parity $>1.5$ & 1.060--1.353 & Refuted \\
-T3 closes most of the gap vs Hindi & Sa/Hi 1.327--1.413 for T3 against 1.060--1.353 for T0 & Not observed; T3 arms sit at or above the T0 range \\
-TPP crosses below 1.0 against \texttt{o200k} & 0.887 [0.875, 0.899] on prose; 1.035 [1.021, 1.049] under the matched control & Observed against the pivot, not under control \\
+T3 closes most of the gap vs Hindi & Sa/Hi 1.327--1.413 for T3 against 1.060--1.353 for T0 & Not observed; T3 arms sit within or above the T0 range \\
+TPP crosses below 1.0 against \texttt{o200k} & 0.887 [0.875, 0.899] on prose; 1.035 [1.021, 1.049] under the matched control; predicted for the proposed \texttt{T6} arm, measured here on the raw-subword baselines, the only Sanskrit-native arms this paper builds & Observed against the pivot, not under control \\
 \bottomrule
 \end{tabular}
-\caption{The pre-registered predictions of the project's design document against what was measured. The predictions were written before any arm was run and are dated in the repository's history. The last row is the paper's central negative result: the crossing is real against the deployed English pivot and disappears against the matched English control, so it is a statement about the pivot's vocabulary and domain rather than about Sanskrit.}
+\caption{The pre-registered predictions of the project's design document against what was measured. The predictions were written before any arm was run and are dated in the repository's history. The last row is the paper's central negative result for the baselines it builds: the crossing is real against the deployed English pivot and disappears against the matched English control, so it is a statement about the pivot's vocabulary and domain rather than about Sanskrit. The prediction itself was written for a sandhi-split, morpheme-constrained arm that this paper does not build, so that arm remains untested here.}
 \label{tab:prereg}
 \end{table*}

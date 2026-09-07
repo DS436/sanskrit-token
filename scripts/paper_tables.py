@@ -667,10 +667,12 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         )
 
     # The T3 prediction assumed a Sanskrit-over-Hindi gap that T3 would narrow. The T3
-    # arms sit at or above the T0 range, so the outcome states that rather than denying
-    # the gap: T0's own range is well clear of 1.0.
+    # arms sit inside or above the T0 range rather than below it, so the outcome states
+    # that rather than denying the gap: T0's own range is well clear of 1.0. "Within or
+    # above" is the accurate reading, since the lowest T3 arm sits inside the T0 range
+    # rather than at its floor.
     t3_outcome = (
-        "Not observed; T3 arms sit at or above the T0 range"
+        "Not observed; T3 arms sit within or above the T0 range"
         if min(t3_hi) >= min(t0_hi)
         else "Not observed"  # pragma: no cover - not this snapshot
     )
@@ -703,7 +705,9 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         [
             "TPP crosses below 1.0 against \\texttt{o200k}",
             f"{ratio(float(best['value']))} {ci(best)} on prose; "
-            f"{ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched control",
+            f"{ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched control"
+            "; predicted for the proposed \\texttt{T6} arm, measured here on the "
+            "raw-subword baselines, the only Sanskrit-native arms this paper builds",
             "Observed against the pivot, not under control",
         ],
     ]
@@ -715,10 +719,12 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     caption = (
         "The pre-registered predictions of the project's design document against what was "
         "measured. The predictions were written before any arm was run and are dated in "
-        "the repository's history. The last row is the paper's central negative result: "
-        "the crossing is real against the deployed English pivot and disappears against "
-        "the matched English control, so it is a statement about the pivot's vocabulary "
-        "and domain rather than about Sanskrit."
+        "the repository's history. The last row is the paper's central negative result "
+        "for the baselines it builds: the crossing is real against the deployed English "
+        "pivot and disappears against the matched English control, so it is a statement "
+        "about the pivot's vocabulary and domain rather than about Sanskrit. The "
+        "prediction itself was written for a sandhi-split, morpheme-constrained arm that "
+        "this paper does not build, so that arm remains untested here."
     )
     return table_float(body, caption, "tab:prereg", wide=True)
 

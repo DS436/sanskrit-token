@@ -239,8 +239,8 @@ copies depend on.
 \paragraph{Leakage control.} Every evaluation sentence, on \emph{both} sides, is hashed
 into an exclusion list, and every training corpus is filtered against it before a
 tokenizer sees a line. Each run re-verifies the check: of the \numCheckedSentences{}
-evaluation sentences used here, \numLeakedSentences{} were missing from the list on either
-side.
+evaluation pairs used here, \numLeakedSentences{} were missing from the list on either
+side, the check covering both sides of every pair.
 
 \paragraph{Reproducibility.} Every experiment is one command and writes a
 \texttt{results.json} and its \texttt{config.yaml}, each recording the git commit and
@@ -315,11 +315,12 @@ encodings. Sanskrit in Devanagari reads
 
 Table \ref{tab:tppdeployed} gives tokens per proposition on the primary prose corpus
 against the deployed English pivot. Every deployed arm, English-centric and Indic alike,
-puts Sanskrit above parity: across prose and FLORES the range is
+puts Sanskrit above parity: across prose and FLORES, with the Sanskrit side scored in
+SLP1 against the deployed \texttt{o200k} pivot, the range is
 \numDeployedLo--\numDeployedHi{}, with intervals excluding 1.0 throughout. This is the
-robust finding of the paper. Under the tokenizers currently shipped, Sanskrit content
-costs roughly two to three times the English tokens for the same propositions, and the
-Indic-specialised arms do not fix it.
+robust finding of the paper. Under the tokenizers currently shipped, and read in that
+column, Sanskrit content costs between \numDeployedLo{} and \numDeployedHi{} times the
+English tokens for the same propositions, and the Indic-specialised arms do not fix it.
 
 The trained Sanskrit arms read very differently in the same table. The best of them,
 BPE at \numVocabLarge{} pieces, comes in at \numTppBpeSixtyFourDeployed{}
@@ -476,11 +477,14 @@ prose corpus. The deployed arms cluster in a narrow band on Sanskrit,
 \numRenyiDeployedLo--\numRenyiDeployedHi, with GPT-2 far below it at \numRenyiGptTwo. The
 trained BPE arms sit above that band (\numRenyiBpeThirtyTwo{} at \numVocabSmall{} pieces
 and \numRenyiBpeSixtyFour{} at \numVocabLarge) and the trained Unigram arms below it
-(\numRenyiUnigramLo--\numRenyiUnigramHi). The English side is lower than the Sanskrit side
+(\numRenyiUnigramLo--\numRenyiUnigramHi). That comparison crosses columns: the trained
+arms are scored in SLP1, which is their only variant, whereas the band just quoted is the
+original-script column. The ordering also holds against the deployed arms' own SLP1
+column, which runs \numRenyiDeployedSlpOneLo--\numRenyiDeployedSlpOneHi. The English side is lower than the Sanskrit side
 for both deployed pivots scored on both halves of the same pairs, and across the pivots
 and the matched controls it occupies a band of
-\numRenyiEnglishLo--\numRenyiEnglishHi, which the two Unigram Sanskrit arms sit at the
-foot of rather than above. The reason this section carries no claim is visible in the same
+\numRenyiEnglishLo--\numRenyiEnglishHi; the two Unigram Sanskrit arms sit at or just
+below the foot of that band rather than above it. The reason this section carries no claim is visible in the same
 table: R\'enyi ranks the two trained BPE arms in the opposite order from the controlled
 tokens per proposition, putting the \numVocabSmall-piece arm above the
 \numVocabLarge-piece one (\numRenyiBpeThirtyTwo{} against \numRenyiBpeSixtyFour) where the

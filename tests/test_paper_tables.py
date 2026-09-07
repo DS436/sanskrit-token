@@ -234,17 +234,23 @@ def test_renyi_prose_claims_hold_in_the_snapshot(
     """The three orderings §5.6 asserts in words, checked against the numbers.
 
     The prose says the trained BPE arms sit above the deployed band, the trained Unigram
-    arms below it, and that R\u00e9nyi ranks the two BPE arms in the opposite order from the
-    controlled TPP. If a re-run reverses any of those, the prose is wrong and this fails.
+    arms below it, that the same ordering survives when the deployed arms are read in
+    their SLP1 column rather than their original-script one, that the two Unigram arms sit
+    at or just below the foot of the English band, and that R\u00e9nyi ranks the two BPE
+    arms in the opposite order from the controlled TPP. If a re-run reverses any of those,
+    the prose is wrong and this fails.
     """
     _, exp02 = snapshot
     alpha = paper_tables.RENYI_PROSE_ALPHA
     renyi = exp02["renyi"][paper_tables.RENYI_PROSE_CORPUS]
-    band = [
-        float(renyi[arm]["original"][alpha]["value"])
+    english_arms = exp02["renyi_english"][paper_tables.RENYI_PROSE_CORPUS]
+    deployed = [
+        arm
         for arm in (*paper_tables.T0_ARMS, *paper_tables.T3_ARMS)
         if arm in renyi and arm != "T0_gpt2"
     ]
+    band = [float(renyi[arm]["original"][alpha]["value"]) for arm in deployed]
+    band_slp1 = [float(renyi[arm]["slp1"][alpha]["value"]) for arm in deployed]
     bpe = {
         arm: float(renyi[arm]["slp1"][alpha]["value"])
         for arm in ("T1_bpe_raw_32k", "T1_bpe_raw_64k")
@@ -256,6 +262,18 @@ def test_renyi_prose_claims_hold_in_the_snapshot(
     assert min(bpe.values()) > max(band), "BPE arms no longer sit above the deployed band"
     assert max(unigram) < min(band), "Unigram arms no longer sit below the deployed band"
     assert float(renyi["T0_gpt2"]["original"][alpha]["value"]) < min(band)
+
+    # The trained arms have an SLP1 column only, so the sentence above compares across
+    # columns. It states that the ordering survives the deployed arms' own SLP1 column.
+    assert min(bpe.values()) > max(band_slp1), "BPE arms no longer clear the SLP1 band"
+    assert max(unigram) < min(band_slp1), "Unigram arms no longer sit below the SLP1 band"
+
+    # "At or just below the foot of" the English band: one Unigram arm inside it, one
+    # under it, and neither above its top.
+    english_band = [float(node[alpha]["value"]) for node in english_arms.values()]
+    assert max(unigram) < max(english_band), "a Unigram arm now sits above the English band"
+    assert min(unigram) < min(english_band), "no Unigram arm now sits below the English band"
+    assert min(english_band) <= max(unigram), "both Unigram arms now sit below the band"
 
     controlled = exp02["tpp_controlled"]["samayik_test"]
     tpp_32 = float(controlled["T1_bpe_raw_32k/E1_bpe_32k"]["value"])
