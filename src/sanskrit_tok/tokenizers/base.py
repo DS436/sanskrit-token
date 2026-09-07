@@ -114,12 +114,19 @@ class DetailedMetricResult(MetricResult, total=False):
     Every extra key is optional: a caller that only needs the headline number can consume
     this as a plain `MetricResult`. Each metric documents which keys it populates.
 
-    Four groups. The `per_*` lists are the distributions, one entry per word, text or
+    Five groups. The `per_*` lists are the distributions, one entry per word, text or
     aligned pair. `n_undefined` counts how many of those entries are `nan` because the
     ratio does not exist (a zero denominator); it is reported rather than papered over,
     because an undefined item is a property of the corpus, not a measurement of zero.
     `ci_low`/`ci_high`/`n_bootstrap`/`seed` and `source_tokens`/`pivot_tokens` are the
     bootstrap interval and the two token totals behind a ratio metric such as `tpp`.
+
+    `entropy_bits`, `n_types`, `alpha`, `vocab_size` and `efficiency_nominal` belong to
+    `renyi`, whose `value` is a ratio of two numbers a reader needs separately: the Rényi
+    entropy of the token distribution and the support it was normalised by (`n_types`, the
+    types actually observed). `alpha` records the order it was computed at, and
+    `vocab_size`/`efficiency_nominal` the alternative normalisation by the arm's full id
+    space — reported alongside, never as the headline (see that module's docstring).
 
     The last group belongs to `morphscore`, whose headline `value` is an F1 and therefore
     needs both of its components (`precision`, `recall`), the three pooled counts they are
@@ -152,6 +159,11 @@ class DetailedMetricResult(MetricResult, total=False):
     n_excluded_single_morpheme: int
     n_skipped_unaligned: int
     tolerance: int
+    entropy_bits: float
+    n_types: int
+    alpha: float
+    vocab_size: int | None
+    efficiency_nominal: float
 
 
 def require_texts(texts: object) -> None:

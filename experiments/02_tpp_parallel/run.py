@@ -67,6 +67,7 @@ from sanskrit_tok.experiment import (
 )
 from sanskrit_tok.metrics.compression import compression
 from sanskrit_tok.metrics.fertility import fertility
+from sanskrit_tok.metrics.renyi import renyi_efficiency
 from sanskrit_tok.metrics.summary import summarise_metric
 from sanskrit_tok.metrics.tpp import tpp
 from sanskrit_tok.tokenizers.registry import LoadedTokenizer
@@ -438,6 +439,139 @@ def compute_fertility_compression(
                     compression(tokenizer, texts)
                 )
     return fert, comp
+
+
+# ------------------------------------------------------------------------------- Rényi
+
+
+def english_renyi_arm_names(
+    english_pivots: Sequence[str],
+    controlled_pairs: Sequence[Sequence[str]],
+) -> list[str]:
+    """The English arms the Rényi block measures: the pivots, then the controlled-pair
+    English sides, deduplicated in that order.
+
+    Both families are needed and neither subsumes the other. The pivots (`T0_o200k`,
+    `T0_llama4`) are the English side of the deployed-practice TPP column, so their token
+    distribution is what the Sanskrit arms' is being divided by there; the `E1_*` arms are
+    the English side of the *controlled* column and never appear in `english_pivots` (see
+    that key's comment in config.yaml). Config order is preserved so `results.json` lists
+    them the way the config does.
+    """
+    names: list[str] = []
+    for name in [*english_pivots, *(pair[1] for pair in controlled_pairs if len(pair) == 2)]:
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _renyi_summary(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """`summarise_metric` plus the five keys Rényi efficiency needs kept alongside it.
+
+    `summarise_metric` carries the `value`/`n`/`unit` contract and nothing else; the
+    entropy, the support it was normalised by, the token total, the order, and the
+    alternative nominal-vocabulary normalisation are all part of reading the number
+    (`sanskrit_tok.metrics.renyi`), so they are recorded rather than recomputed.
+    """
+    summary: dict[str, Any] = dict(summarise_metric(raw))
+    summary["entropy_bits"] = float(raw["entropy_bits"])
+    summary["n_types"] = int(raw["n_types"])
+    summary["n_tokens"] = int(raw["n"])
+    summary["efficiency_nominal"] = float(raw["efficiency_nominal"])
+    summary["vocab_size"] = raw["vocab_size"]
+    summary["alpha"] = float(raw["alpha"])
+    return summary
+
+
+def compute_renyi(
+    corpora: Sequence[CorpusData],
+    arms: Mapping[str, LoadedTokenizer],
+    sanskrit_arm_names: Sequence[str],
+    script_variants: Mapping[str, Sequence[str]],
+    alphas: Sequence[float],
+) -> dict[str, dict[str, dict[str, dict[str, dict[str, Any]]]]]:
+    """Rényi efficiency of the Sanskrit side, `corpus -> arm -> variant -> alpha -> summary`.
+
+    A secondary intrinsic, reported and never headlined: it can be raised without changing
+    what the tokenizer does to the text (Cognetta et al. 2024), so it describes the token
+    distribution rather than testing any claim of this project. Each arm is normalised by
+    its own observed support, and `efficiency_nominal` additionally by its `vocab_size`.
+    The alpha keys are `str(alpha)` because JSON object keys are strings.
+    """
+    results: dict[str, dict[str, dict[str, dict[str, dict[str, Any]]]]] = {}
+    for corpus in corpora:
+        corpus_result: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+        for arm_name in sanskrit_arm_names:
+            tokenizer = arms.get(arm_name)
+            if tokenizer is None:
+                continue
+            variant_result: dict[str, dict[str, dict[str, Any]]] = {}
+            for variant in variants_for_family(tokenizer.family, script_variants):
+                texts = corpus.sanskrit[variant]
+                alpha_result: dict[str, dict[str, Any]] = {}
+                for alpha in alphas:
+                    raw = renyi_efficiency(
+                        tokenizer, texts, alpha=alpha, vocab_size=tokenizer.vocab_size
+                    )
+                    alpha_result[str(alpha)] = _renyi_summary(raw)
+                    logger.info(
+                        "%s / %s / %s / alpha=%s: Renyi efficiency %.4f "
+                        "(H %.3f bits over %d types, %d tokens)",
+                        corpus.name,
+                        arm_name,
+                        variant,
+                        alpha,
+                        raw["value"],
+                        raw["entropy_bits"],
+                        raw["n_types"],
+                        raw["n"],
+                    )
+                variant_result[variant] = alpha_result
+            corpus_result[arm_name] = variant_result
+        results[corpus.name] = corpus_result
+    return results
+
+
+def compute_renyi_english(
+    corpora: Sequence[CorpusData],
+    arms: Mapping[str, LoadedTokenizer],
+    english_arm_names: Sequence[str],
+    alphas: Sequence[float],
+) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
+    """The same, for the English side: `corpus -> arm -> alpha -> summary`.
+
+    One level shallower than `compute_renyi` because English has no script variant — it is
+    read as written. This exists so the Sanskrit numbers have something to be read against:
+    an efficiency of 0.9 means nothing on its own, but the same arm family's efficiency on
+    the English side of the *same* sentences is a reference point.
+    """
+    results: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
+    for corpus in corpora:
+        corpus_result: dict[str, dict[str, dict[str, Any]]] = {}
+        for arm_name in english_arm_names:
+            tokenizer = arms.get(arm_name)
+            if tokenizer is None:
+                continue
+            alpha_result: dict[str, dict[str, Any]] = {}
+            for alpha in alphas:
+                raw = renyi_efficiency(
+                    tokenizer, corpus.english, alpha=alpha, vocab_size=tokenizer.vocab_size
+                )
+                alpha_result[str(alpha)] = _renyi_summary(raw)
+                logger.info(
+                    "%s / %s / English / alpha=%s: Renyi efficiency %.4f "
+                    "(H %.3f bits over %d types, %d tokens)",
+                    corpus.name,
+                    arm_name,
+                    alpha,
+                    raw["value"],
+                    raw["entropy_bits"],
+                    raw["n_types"],
+                    raw["n"],
+                )
+            corpus_result[arm_name] = alpha_result
+        results[corpus.name] = corpus_result
+    return results
 
 
 # ------------------------------------------------------------------------------ figure
@@ -883,6 +1017,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     fertility_results, compression_results = compute_fertility_compression(
         corpora, arms, sanskrit_arm_names, script_variants
     )
+    renyi_alphas = [float(alpha) for alpha in config["renyi_alphas"]]
+    renyi_results = compute_renyi(corpora, arms, sanskrit_arm_names, script_variants, renyi_alphas)
+    renyi_english_results = compute_renyi_english(
+        corpora,
+        arms,
+        english_renyi_arm_names(english_pivots, controlled_pairs),
+        renyi_alphas,
+    )
 
     results: dict[str, Any] = {
         "experiment": str(config.get("experiment", out_dir.name)),
@@ -901,6 +1043,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "tpp_hindi": tpp_hindi,
         "fertility": fertility_results,
         "compression": compression_results,
+        "renyi": renyi_results,
+        "renyi_english": renyi_english_results,
     }
 
     write_results(results, out_dir, args.config)

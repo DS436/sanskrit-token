@@ -461,3 +461,119 @@ def test_build_tpp_figure_stays_single_column_without_controlled_results() -> No
         assert not any(run.FIGURE_CONTROLLED_TITLE in text for text in texts)
     finally:
         plt.close(figure)
+
+
+# --- Rényi efficiency (secondary intrinsic) -------------------------------------------
+
+
+def test_english_renyi_arm_names_is_pivots_then_controlled_english_sides() -> None:
+    assert run.english_renyi_arm_names(
+        ["T0_o200k", "T0_llama4"],
+        [["T1_bpe_raw_32k", "E1_bpe_32k"], ["T2_unigram_raw_32k", "E1_unigram_32k"]],
+    ) == ["T0_o200k", "T0_llama4", "E1_bpe_32k", "E1_unigram_32k"]
+
+
+def test_english_renyi_arm_names_deduplicates_a_repeated_control_arm() -> None:
+    """Two Sanskrit arms may be matched to the same English control; it is measured once."""
+    assert run.english_renyi_arm_names(
+        ["T0_o200k"],
+        [["T1_bpe_raw_32k", "E1_bpe_32k"], ["T1_bpe_raw_64k", "E1_bpe_32k"]],
+    ) == ["T0_o200k", "E1_bpe_32k"]
+
+
+def test_english_renyi_arm_names_deduplicates_a_pivot_used_as_a_control() -> None:
+    assert run.english_renyi_arm_names(
+        ["T0_o200k"], [["T1_bpe_raw_32k", "T0_o200k"]]
+    ) == ["T0_o200k"]
+
+
+def test_english_renyi_arm_names_without_controlled_pairs_is_just_the_pivots() -> None:
+    assert run.english_renyi_arm_names(["T0_o200k", "T0_llama4"], []) == [
+        "T0_o200k",
+        "T0_llama4",
+    ]
+
+
+def test_compute_renyi_is_keyed_by_corpus_arm_variant_then_alpha() -> None:
+    results = run.compute_renyi(
+        [_one_corpus()],
+        {"T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1")},  # type: ignore[arg-type]
+        ["T1_bpe_raw_32k"],
+        {"T1": ["slp1"]},
+        [2.5, 3.0],
+    )
+    assert set(results) == {"corpus_a"}
+    assert set(results["corpus_a"]) == {"T1_bpe_raw_32k"}
+    assert set(results["corpus_a"]["T1_bpe_raw_32k"]) == {"slp1"}
+    entry = results["corpus_a"]["T1_bpe_raw_32k"]["slp1"]
+    assert set(entry) == {"2.5", "3.0"}  # JSON object keys are strings
+    for alpha, summary in entry.items():
+        for key in (
+            "value",
+            "n",
+            "unit",
+            "entropy_bits",
+            "n_types",
+            "n_tokens",
+            "efficiency_nominal",
+            "vocab_size",
+            "alpha",
+        ):
+            assert key in summary
+        assert summary["alpha"] == float(alpha)
+        assert summary["unit"] == "renyi efficiency"
+        # `_char_arm` emits one id per character, all of them 0: one type, so the
+        # efficiency is undefined by construction and the entropy is zero.
+        assert summary["n_tokens"] == sum(len(text) for text in _one_corpus().sanskrit["slp1"])  # type: ignore[attr-defined]
+        assert summary["vocab_size"] == 32000
+
+
+def test_compute_renyi_skips_an_unavailable_arm_without_a_placeholder() -> None:
+    results = run.compute_renyi(
+        [_one_corpus()],
+        {"T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1")},  # type: ignore[arg-type]
+        ["T1_bpe_raw_32k", "T2_unigram_raw_32k"],
+        {"T1": ["slp1"], "T2": ["slp1"]},
+        [2.5],
+    )
+    assert set(results["corpus_a"]) == {"T1_bpe_raw_32k"}
+
+
+def test_compute_renyi_english_is_keyed_by_corpus_arm_then_alpha() -> None:
+    corpus = _one_corpus()
+    results = run.compute_renyi_english(
+        [corpus],
+        {"T0_o200k": _char_arm("T0_o200k", "T0")},  # type: ignore[arg-type]
+        ["T0_o200k", "T0_llama4"],  # the second arm did not load this run
+        [2.5, 3.0],
+    )
+    assert set(results["corpus_a"]) == {"T0_o200k"}
+    entry = results["corpus_a"]["T0_o200k"]
+    assert set(entry) == {"2.5", "3.0"}
+    assert entry["2.5"]["n_tokens"] == sum(len(text) for text in corpus.english)  # type: ignore[attr-defined]
+
+
+def test_compute_renyi_measures_the_real_distribution_of_a_two_type_arm() -> None:
+    """One id per character, split by whether it is a space: the SLP1 side of `_one_corpus`
+    is 24 characters with 2 spaces, so the counts are [22, 2] and the efficiency at α=2 is
+    hand-computable as log2((22/24)^2 + (2/24)^2) / (1 - 2) over log2(2) = 1."""
+    import math
+
+    arm = run.LoadedTokenizer(
+        name="fake",
+        source_id="fake.json",
+        vocab_size=4,
+        _encode=lambda text: [1 if c == " " else 0 for c in text],
+        family="T1",
+        attempted=("fake.json",),
+    )
+    results = run.compute_renyi(
+        [_one_corpus()], {"fake": arm}, ["fake"], {"T1": ["slp1"]}, [2.0]
+    )
+    summary = results["corpus_a"]["fake"]["slp1"]["2.0"]
+    expected = math.log2((22 / 24) ** 2 + (2 / 24) ** 2) / (1 - 2.0)
+    assert summary["n_tokens"] == 24
+    assert summary["n_types"] == 2
+    assert summary["entropy_bits"] == pytest.approx(expected)
+    assert summary["value"] == pytest.approx(expected)
+    assert summary["efficiency_nominal"] == pytest.approx(expected / 2)  # log2(4) = 2
