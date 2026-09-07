@@ -1,9 +1,17 @@
 # Paper 1a — the measurement paper (RQ1 and RQ2)
 
 **Status: draft.** The prose is written except for §5.5 (tokens per proposition by
-sentence length) and §5.6 (Rényi efficiency), which carry `% TODO(1b-of-task)` markers and
-a visible draft line in the PDF. Both of those subsections already have their generated
-tables; what is missing is the reading of them.
+sentence length), which carries a `% TODO(1b-of-task)` marker and a visible draft line in
+the PDF: its table is generated and final, and what is missing is the reading of it.
+§5.6 (Rényi efficiency) is written.
+
+**Format: long paper.** The body runs to eight pages excluding references and appendix
+(References begins partway down page 8), against the eight-page limit for a long paper at
+ACL venues; arXiv imposes no limit. Nothing is cut to fit, but there is now no slack: the
+§5.5 prose still to be written will push the body over the ACL limit, and something will
+have to move to the appendix at that point. A four-page short version would move Tables 2
+and 3 (fertility and compression; deployed-practice TPP) to the appendix, leaving Table 1
+(parity), Table 4 (the matched control) and the two main figures in the body.
 
 *Fewer Words, Not Fewer Tokens: Measuring the Sanskrit Tokenization Penalty per
 Proposition.* Scope is Experiments 01 and 02 only. The proposed sandhi-aware and
@@ -63,4 +71,8 @@ itself at that point was `24272820f6c457a34a6ac61d74b7488466175e41` (2025-08-19)
 `refs.bib` carries `note = {verify}` on every entry whose bibliographic details could not
 be confirmed from the project's own design document, `data/README.md`, or the arXiv record
 of the work. No DOI, page range or volume number is stated unless it was read off one of
-those sources.
+those sources. On 2026-09-07 the five remaining `verify` entries were checked against a
+primary record (ACL Anthology, AAAI's AI Magazine, CiNii Research, the Sarvam-1 model
+card) and the note removed; the header comment of `refs.bib` names the source used for
+each. The AI Magazine record publishes a first page and no range, so only the first page
+is recorded.

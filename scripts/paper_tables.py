@@ -14,8 +14,10 @@ Framing rules obeyed here, from CLAUDE.md §2:
 * Ratios print to three decimals, fertility and compression to two.
 
 Two writers (`tpp_by_length.tex`, `renyi.tex`) emit a one-line LaTeX comment when the
-snapshot has no `tpp_by_length` / `renyi` key, so this script already runs against the
-future snapshot that will carry them.
+snapshot has no `tpp_by_length` / `renyi` key, so this script already runs against a
+snapshot that lacks them. Every reader here addresses the keys it needs by name and
+ignores the rest, so a snapshot that gains keys (Experiment 02 is still adding analyses)
+changes nothing that is not read.
 
 Usage::
 
@@ -69,6 +71,21 @@ PREREG_HINDI_FERTILITY_LO = 2
 PREREG_HINDI_FERTILITY_HI = 4
 PREREG_PARITY_THRESHOLD = "1.5"
 
+#: Sizes of the tokenizer-training splits, in aligned pairs, quoted from the provenance
+#: table of `data/README.md` (Sāmayik commit `f87d549`, Itihāsa commit `37df077`). They are
+#: taken from that file rather than measured here because the training manifests live under
+#: the gitignored `data/processed/` and are not part of the tracked results snapshot, so
+#: this script cannot read them. The trained Sanskrit arms saw the Sanskrit side of these
+#: splits and the E1 control arms the English side, in both cases after exclusion filtering
+#: against `data/exclusion_hashes.txt` and exact deduplication.
+SAMAYIK_TRAIN_PAIRS = 43_493
+ITIHASA_TRAIN_PAIRS = 75_161
+
+#: The α at which the prose of §5.6 reads the Rényi table. Both α values are tabulated.
+RENYI_PROSE_ALPHA = "2.5"
+#: The Rényi corpus the prose reads: the primary prose corpus, as everywhere else.
+RENYI_PROSE_CORPUS = "samayik_test"
+
 #: Every macro `numbers.tex` defines. `tests/test_paper_tables.py` asserts that main.tex
 #: uses no `\num...` macro outside this list and that every entry here is emitted.
 MACROS: tuple[str, ...] = (
@@ -114,6 +131,7 @@ MACROS: tuple[str, ...] = (
     "numTppBpeSixtyFourDeployedCi",
     "numTppControlledBest",
     "numTppControlledBestCi",
+    "numTppControlledBpeThirtyTwo",
     "numTppControlledSamayikLo",
     "numTppControlledSamayikHi",
     "numTppControlledOodLo",
@@ -139,6 +157,22 @@ MACROS: tuple[str, ...] = (
     "numCheckedSentences",
     "numLeakedSentences",
     "numBytesPerDevanagariChar",
+    "numSamayikTrain",
+    "numItihasaTrain",
+    "numTrainPairsTotal",
+    "numRenyiAlpha",
+    "numRenyiDeployedLo",
+    "numRenyiDeployedHi",
+    "numRenyiGptTwo",
+    "numRenyiGptTwoSlpOne",
+    "numRenyiDeployedSlpOneLo",
+    "numRenyiDeployedSlpOneHi",
+    "numRenyiBpeThirtyTwo",
+    "numRenyiBpeSixtyFour",
+    "numRenyiUnigramLo",
+    "numRenyiUnigramHi",
+    "numRenyiEnglishLo",
+    "numRenyiEnglishHi",
 )
 
 
@@ -566,6 +600,30 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     best = exp02["tpp"]["samayik_test"]["T1_bpe_raw_64k"]["slp1"]["T0_o200k"]
     best_ctrl = exp02["tpp_controlled"]["samayik_test"]["T1_bpe_raw_64k/E1_bpe_64k"]
 
+    # The Hindi band was pre-registered as [2, 4]. Count the arms that fall outside it
+    # rather than asserting "held": one arm below the floor is not the same as holding.
+    below_floor = [value for value in fert_hi if value < PREREG_HINDI_FERTILITY_LO]
+    above_ceiling = [value for value in fert_hi if value > PREREG_HINDI_FERTILITY_HI]
+    if not below_floor and not above_ceiling:  # pragma: no cover - not this snapshot
+        hindi_outcome = "Held"
+    else:
+        crossed = "lower bound" if below_floor else "upper bound"
+        n_crossing = len(below_floor) or len(above_ceiling)
+        arms = "arm" if n_crossing == 1 else "arms"
+        hindi_outcome = (
+            f"Approximately held; {crossed} crossed by {n_crossing} {arms} of "
+            f"{len(fert_hi)}"
+        )
+
+    # The T3 prediction assumed a Sanskrit-over-Hindi gap that T3 would narrow. The T3
+    # arms sit at or above the T0 range, so the outcome states that rather than denying
+    # the gap: T0's own range is well clear of 1.0.
+    t3_outcome = (
+        "Not observed; T3 arms sit at or above the T0 range"
+        if min(t3_hi) >= min(t0_hi)
+        else "Not observed"  # pragma: no cover - not this snapshot
+    )
+
     rows = [
         [
             "T0 fertility on Sanskrit "
@@ -578,7 +636,7 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
             f"Hindi {PREREG_HINDI_FERTILITY_LO}--{PREREG_HINDI_FERTILITY_HI} "
             "under the same tokenizer",
             f"{two(min(fert_hi))}--{two(max(fert_hi))} at $\\geq$200k vocab",
-            "Held",
+            hindi_outcome,
         ],
         [
             f"Sa/Hi parity $>{PREREG_PARITY_THRESHOLD}$",
@@ -589,7 +647,7 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
             "T3 closes most of the gap vs Hindi",
             f"Sa/Hi {ratio(min(t3_hi))}--{ratio(max(t3_hi))} for T3 against "
             f"{ratio(min(t0_hi))}--{ratio(max(t0_hi))} for T0",
-            "Not observed; no gap to close",
+            t3_outcome,
         ],
         [
             "TPP crosses below 1.0 against \\texttt{o200k}",
@@ -758,6 +816,47 @@ def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
 # --------------------------------------------------------------------------------------
 
 
+def renyi_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §5.6 reads, at one α on the primary prose corpus.
+
+    Returns an empty mapping when the snapshot carries no `renyi` block, in which case the
+    caller's completeness check reports the missing names. GPT-2 is separated from the
+    other deployed arms exactly as it is in §5.1: its vocabulary predates any serious
+    Devanagari coverage, so it is a period piece rather than part of the deployed band.
+    """
+    if "renyi" not in exp02:
+        return {}
+    alpha = RENYI_PROSE_ALPHA
+    renyi = exp02["renyi"][RENYI_PROSE_CORPUS]
+    english = exp02.get("renyi_english", {}).get(RENYI_PROSE_CORPUS, {})
+
+    def sanskrit(arm: str, variant: str) -> float:
+        return float(renyi[arm][variant][alpha]["value"])
+
+    band = [arm for arm in (*T0_ARMS, *T3_ARMS) if arm in renyi and arm != "T0_gpt2"]
+    original = [sanskrit(arm, "original") for arm in band]
+    slp1 = [sanskrit(arm, "slp1") for arm in band]
+    english_values = [float(node[alpha]["value"]) for node in english.values()]
+    unigram = [
+        sanskrit(arm, "slp1") for arm in ("T2_unigram_raw_32k", "T2_unigram_raw_64k")
+    ]
+    return {
+        "numRenyiAlpha": alpha,
+        "numRenyiDeployedLo": ratio(min(original)),
+        "numRenyiDeployedHi": ratio(max(original)),
+        "numRenyiDeployedSlpOneLo": ratio(min(slp1)),
+        "numRenyiDeployedSlpOneHi": ratio(max(slp1)),
+        "numRenyiGptTwo": ratio(sanskrit("T0_gpt2", "original")),
+        "numRenyiGptTwoSlpOne": ratio(sanskrit("T0_gpt2", "slp1")),
+        "numRenyiBpeThirtyTwo": ratio(sanskrit("T1_bpe_raw_32k", "slp1")),
+        "numRenyiBpeSixtyFour": ratio(sanskrit("T1_bpe_raw_64k", "slp1")),
+        "numRenyiUnigramLo": ratio(min(unigram)),
+        "numRenyiUnigramHi": ratio(max(unigram)),
+        "numRenyiEnglishLo": ratio(min(english_values)),
+        "numRenyiEnglishHi": ratio(max(english_values)),
+    }
+
+
 def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     """Every number the manuscript's prose contains, as a `\\newcommand`."""
     values: dict[str, str] = {}
@@ -864,6 +963,9 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         pairs = [float(entry["value"]) for entry in controlled[corpus].values()]
         values[f"{key}Lo"] = ratio(min(pairs))
         values[f"{key}Hi"] = ratio(max(pairs))
+    values["numTppControlledBpeThirtyTwo"] = ratio(
+        float(controlled["samayik_test"]["T1_bpe_raw_32k/E1_bpe_32k"]["value"])
+    )
     values["numControlledPairs"] = str(len(controlled["samayik_test"]))
     requested = 64000
     actual = vocab_size(exp02, "E1_unigram_64k")
@@ -889,6 +991,14 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         sum(int(entry["n_missing"]) for entry in exp02["exclusion_check"].values())
         + sum(int(entry["n_missing"]) for entry in exp02["exclusion_check_en"].values())
     )
+
+    # Training-split sizes, from `data/README.md` rather than from the snapshot: see the
+    # comment on SAMAYIK_TRAIN_PAIRS.
+    values["numSamayikTrain"] = count(SAMAYIK_TRAIN_PAIRS)
+    values["numItihasaTrain"] = count(ITIHASA_TRAIN_PAIRS)
+    values["numTrainPairsTotal"] = count(SAMAYIK_TRAIN_PAIRS + ITIHASA_TRAIN_PAIRS)
+
+    values.update(renyi_macros(exp02))
 
     missing = [name for name in MACROS if name not in values]
     if missing:

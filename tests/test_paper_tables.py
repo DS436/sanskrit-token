@@ -178,6 +178,97 @@ def test_numbers_tex_defines_every_macro_the_manuscript_uses(
     assert undefined == [], f"main.tex uses macros numbers.tex does not define: {undefined}"
 
 
+def _macro_values(text: str) -> dict[str, str]:
+    """Every `\\newcommand{\\name}{body}` in numbers.tex, as name -> body."""
+    pattern = re.compile(r"\\newcommand\{\\([a-zA-Z]+)\}\{([^}]*)\}")
+    return {name: body for name, body in pattern.findall(text)}
+
+
+def test_renyi_macros_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """The macros §5.6 reads are the snapshot's numbers at the printed precision."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+
+    alpha = values["numRenyiAlpha"]
+    assert alpha in {str(float(a)) for a in exp02["config"]["renyi_alphas"]}
+    renyi = exp02["renyi"][paper_tables.RENYI_PROSE_CORPUS]
+    english = exp02["renyi_english"][paper_tables.RENYI_PROSE_CORPUS]
+
+    def sa(arm: str, variant: str) -> str:
+        return f"{float(renyi[arm][variant][alpha]['value']):.3f}"
+
+    band = [
+        arm
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.T3_ARMS)
+        if arm in renyi and arm != "T0_gpt2"
+    ]
+    assert len(band) >= 3, "the deployed band should not collapse to a couple of arms"
+    for variant, lo_key, hi_key in (
+        ("original", "numRenyiDeployedLo", "numRenyiDeployedHi"),
+        ("slp1", "numRenyiDeployedSlpOneLo", "numRenyiDeployedSlpOneHi"),
+    ):
+        printed = sorted(sa(arm, variant) for arm in band)
+        assert values[lo_key] == printed[0], lo_key
+        assert values[hi_key] == printed[-1], hi_key
+
+    assert values["numRenyiGptTwo"] == sa("T0_gpt2", "original")
+    assert values["numRenyiGptTwoSlpOne"] == sa("T0_gpt2", "slp1")
+    assert values["numRenyiBpeThirtyTwo"] == sa("T1_bpe_raw_32k", "slp1")
+    assert values["numRenyiBpeSixtyFour"] == sa("T1_bpe_raw_64k", "slp1")
+    unigram = sorted(sa(arm, "slp1") for arm in ("T2_unigram_raw_32k", "T2_unigram_raw_64k"))
+    assert [values["numRenyiUnigramLo"], values["numRenyiUnigramHi"]] == unigram
+
+    en = sorted(f"{float(node[alpha]['value']):.3f}" for node in english.values())
+    assert values["numRenyiEnglishLo"] == en[0]
+    assert values["numRenyiEnglishHi"] == en[-1]
+
+
+def test_renyi_prose_claims_hold_in_the_snapshot(
+    snapshot: tuple[dict[str, Any], dict[str, Any]],
+) -> None:
+    """The three orderings §5.6 asserts in words, checked against the numbers.
+
+    The prose says the trained BPE arms sit above the deployed band, the trained Unigram
+    arms below it, and that R\u00e9nyi ranks the two BPE arms in the opposite order from the
+    controlled TPP. If a re-run reverses any of those, the prose is wrong and this fails.
+    """
+    _, exp02 = snapshot
+    alpha = paper_tables.RENYI_PROSE_ALPHA
+    renyi = exp02["renyi"][paper_tables.RENYI_PROSE_CORPUS]
+    band = [
+        float(renyi[arm]["original"][alpha]["value"])
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.T3_ARMS)
+        if arm in renyi and arm != "T0_gpt2"
+    ]
+    bpe = {
+        arm: float(renyi[arm]["slp1"][alpha]["value"])
+        for arm in ("T1_bpe_raw_32k", "T1_bpe_raw_64k")
+    }
+    unigram = [
+        float(renyi[arm]["slp1"][alpha]["value"])
+        for arm in ("T2_unigram_raw_32k", "T2_unigram_raw_64k")
+    ]
+    assert min(bpe.values()) > max(band), "BPE arms no longer sit above the deployed band"
+    assert max(unigram) < min(band), "Unigram arms no longer sit below the deployed band"
+    assert float(renyi["T0_gpt2"]["original"][alpha]["value"]) < min(band)
+
+    controlled = exp02["tpp_controlled"]["samayik_test"]
+    tpp_32 = float(controlled["T1_bpe_raw_32k/E1_bpe_32k"]["value"])
+    tpp_64 = float(controlled["T1_bpe_raw_64k/E1_bpe_64k"]["value"])
+    assert bpe["T1_bpe_raw_32k"] > bpe["T1_bpe_raw_64k"], "Renyi no longer prefers 32k"
+    assert tpp_64 < tpp_32, "controlled TPP no longer prefers 64k"
+
+
+def test_training_split_sizes_agree_with_the_data_readme() -> None:
+    """The two constants taken from `data/README.md` still match that file."""
+    readme = (REPO_ROOT / "data" / "README.md").read_text()
+    assert f"train {paper_tables.SAMAYIK_TRAIN_PAIRS:,} / dev 2,416" in readme
+    assert f"train {paper_tables.ITIHASA_TRAIN_PAIRS:,} / dev 6,148" in readme
+
+
 def test_committed_tables_are_current(
     snapshot: tuple[dict[str, Any], dict[str, Any]],
 ) -> None:

@@ -5,6 +5,16 @@
 % `note = {verify}`. No DOI, page range or volume number is stated unless it was read off
 % one of those sources. Where an arXiv identifier was checked against the arXiv API it is
 % given and the entry carries no `note`.
+%
+% 2026-09-07: five entries that carried `note = {verify}` were checked against a primary
+% record and the note removed. Sources, one per entry: the ACL Anthology pages
+% <https://aclanthology.org/D18-1295/> and <https://aclanthology.org/W17-2214/>; the AAAI
+% AI Magazine article record <https://ojs.aaai.org/aimagazine/index.php/aimagazine/
+% article/view/466>, whose Highwire metadata gives a first page and no range, so only the
+% first page is recorded; the CiNii Research bibliographic record
+% <https://cir.nii.ac.jp/crid/1572543026071541632> for the Gage article, the ACM Digital
+% Library record for it (DOI 10.5555/177910.177914) being unreadable without a session;
+% and the Sarvam-1 model card <https://huggingface.co/sarvamai/sarvam-1>.
 
 @inproceedings{petrov-etal-2023-tokenizers,
   title     = {Language Model Tokenizers Introduce Unfairness Between Languages},
@@ -85,8 +95,8 @@
   title  = {Sarvam-1},
   author = {{Sarvam AI}},
   year   = {2024},
-  howpublished = {Model release, \url{https://huggingface.co/sarvamai/sarvam-1}},
-  note   = {verify}
+  howpublished = {Model card, \url{https://huggingface.co/sarvamai/sarvam-1}},
+  urldate = {2026-09-07}
 }
 
 @misc{bendale-etal-2024-sutra,
@@ -114,8 +124,13 @@
                Convolutional Neural Networks},
   author    = {Hellwig, Oliver and Nehrdich, Sebastian},
   booktitle = {Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing},
+  month     = {oct--nov},
   year      = {2018},
-  note      = {verify}
+  address   = {Brussels, Belgium},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/D18-1295/},
+  doi       = {10.18653/v1/D18-1295},
+  pages     = {2754--2763}
 }
 
 @inproceedings{nehrdich-etal-2024-byt5,
@@ -131,11 +146,16 @@
 
 @inproceedings{krishna-etal-2017-dataset,
   title     = {A Dataset for {S}anskrit Word Segmentation},
-  author    = {Krishna, Amrith and Satuluri, Pavankumar and Goyal, Pawan},
+  author    = {Krishna, Amrith and Satuluri, Pavan Kumar and Goyal, Pawan},
   booktitle = {Proceedings of the Joint SIGHUM Workshop on Computational Linguistics for
                Cultural Heritage, Social Sciences, Humanities and Literature},
+  month     = {aug},
   year      = {2017},
-  note      = {verify}
+  address   = {Vancouver, Canada},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/W17-2214/},
+  doi       = {10.18653/v1/W17-2214},
+  pages     = {105--114}
 }
 
 @inproceedings{sandhan-etal-2022-translist,
@@ -156,7 +176,8 @@
   volume  = {6},
   number  = {1},
   year    = {1985},
-  note    = {verify}
+  pages   = {32},
+  doi     = {10.1609/aimag.v6i1.466}
 }
 
 @misc{nllb-2022-flores,
@@ -240,5 +261,6 @@
   volume  = {12},
   number  = {2},
   year    = {1994},
-  note    = {verify}
+  pages   = {23--38},
+  publisher = {R \& D Publications}
 }
