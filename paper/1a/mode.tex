@@ -1,0 +1,9 @@
+% Build mode for paper/1a. `make pdf` and `make arxiv` build with this file as tracked;
+% `make review` overwrites it, builds main_review.pdf, and restores it. The tracked
+% default is final, so a plain `tectonic main.tex` produces the de-anonymised paper.
+%
+% \finalmodetrue  -> author block shown, acknowledgements printed, repository URL given.
+% \finalmodefalse -> anonymised author block, line numbers, no acknowledgements, no URL.
+\newif\iffinalmode
+\finalmodetrue
+\usepackage[final]{acl}

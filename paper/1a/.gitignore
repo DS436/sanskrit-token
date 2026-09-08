@@ -1,11 +1,17 @@
 # LaTeX build artefacts. The generated tables/ and figures/ are tracked deliberately, so
-# the paper can be read without running anything; the PDF is not.
+# the paper can be read without running anything; the PDFs and the arXiv bundle are not.
+# mode.tex IS tracked, in final mode; `make review` rewrites it and restores it.
 main.pdf
-main.aux
-main.log
+main_review.pdf
+arxiv/
+paper1a_arxiv.tar.gz
+*.aux
+*.bbl
+*.blg
+*.log
+*.xdv
 main.out
-main.bbl
-main.blg
 main.fls
 main.fdb_latexmk
 main.synctex.gz
+review_build/

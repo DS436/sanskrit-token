@@ -15,6 +15,25 @@
 % <https://cir.nii.ac.jp/crid/1572543026071541632> for the Gage article, the ACM Digital
 % Library record for it (DOI 10.5555/177910.177914) being unreadable without a session;
 % and the Sarvam-1 model card <https://huggingface.co/sarvamai/sarvam-1>.
+%
+% 2026-09-08: three further entries checked before the arXiv posting.
+%   maheshwari-etal-2024-samayik -- read from the arXiv PDF of the LREC-COLING version
+%     <https://arxiv.org/pdf/2305.14004v2> (arXiv API record for 2305.14004, whose comment
+%     field reads "LREC-COLING, 2024") and from the ACL Anthology BibTeX
+%     <https://aclanthology.org/2024.lrec-main.1245.bib>. The Anthology spells the sixth
+%     author "Gourishetty, Anil Kumar", not "Anil Kumar, G." as this entry previously did,
+%     and supplies the month, address, publisher, page range and Anthology URL now
+%     recorded. Note that `data/README.md` attributes this dataset to "Aralikatte et al.",
+%     which is the Itihasa author list; the primary record says Maheshwari et al.
+%   arnett-etal-2025-inequities -- arXiv API record for 2510.21909 (comment: "Accepted to
+%     NeurIPS 2025"), confirmed against the NeurIPS 2025 poster listing
+%     <https://neurips.cc/virtual/2025/poster/120308> and OpenReview
+%     <https://openreview.net/forum?id=0Y7AxxNCYh>. It is a NeurIPS 2025 main-conference
+%     paper, not only a preprint, so the NeurIPS booktitle stands; the OpenReview URL is
+%     added.
+%   shravan-2026-brahmic -- arXiv API record for 2605.29379 resolves, with the title and
+%     the single author Rohan Shravan as given here, so the eprint is kept alongside the
+%     model card.
 
 @inproceedings{petrov-etal-2023-tokenizers,
   title     = {Language Model Tokenizers Introduce Unfairness Between Languages},
@@ -64,6 +83,7 @@
   author    = {Arnett, Catherine and Chang, Tyler A. and Biderman, Stella and Bergen, Benjamin K.},
   booktitle = {Advances in Neural Information Processing Systems},
   year      = {2025},
+  url       = {https://openreview.net/forum?id=0Y7AxxNCYh},
   eprint    = {2510.21909},
   archivePrefix = {arXiv},
   primaryClass  = {cs.CL}
@@ -204,10 +224,15 @@
 @inproceedings{maheshwari-etal-2024-samayik,
   title     = {S\={a}mayik: A Benchmark and Dataset for {E}nglish-{S}anskrit Translation},
   author    = {Maheshwari, Ayush and Gupta, Ashim and Krishna, Amrith and Singh, Atul Kumar and
-               Ramakrishnan, Ganesh and Anil Kumar, G. and Singla, Jitin},
+               Ramakrishnan, Ganesh and Gourishetty, Anil Kumar and Singla, Jitin},
   booktitle = {Proceedings of the 2024 Joint International Conference on Computational
-               Linguistics, Language Resources and Evaluation},
+               Linguistics, Language Resources and Evaluation (LREC-COLING 2024)},
   year      = {2024},
+  month     = may,
+  address   = {Torino, Italia},
+  publisher = {ELRA and ICCL},
+  pages     = {14298--14304},
+  url       = {https://aclanthology.org/2024.lrec-main.1245/},
   eprint    = {2305.14004},
   archivePrefix = {arXiv},
   primaryClass  = {cs.CL}
