@@ -816,6 +816,16 @@ def test_vocabulary_macros_match_the_snapshot(
     assert values["numUnigramHugePieces"] == (
         f"{paper_tables.vocab_size(exp02, 'E1_unigram_128k'):,}"
     )
+    # §6.3 and the Limitations both say the Unigram control settles at
+    # `numUnigramSixtyFourPieces` at *both* 64k and 128k, and print that one macro for the
+    # two sizes; the same holds of `numUnigramBmPieces` for the two byte-matched rows. The
+    # prose is only true while each pair of trainers stops in the same place.
+    assert paper_tables.vocab_size(exp02, "E1_unigram_128k") == paper_tables.vocab_size(
+        exp02, "E1_unigram_64k"
+    )
+    assert paper_tables.vocab_size(
+        exp02, "E1_unigram_128k_bm"
+    ) == paper_tables.vocab_size(exp02, "E1_unigram_64k_bm")
     small = paper_tables.reported_pairs(exp02, paper_tables.SMALL_VOCAB_TOKENS)
     huge = paper_tables.reported_pairs(exp02, (paper_tables.HUGE_VOCAB_TOKEN,))
     assert values["numControlledPairsSmall"] == str(len(small)) == "8"

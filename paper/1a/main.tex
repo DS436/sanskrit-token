@@ -53,8 +53,9 @@ Proposition}
 
 \begin{abstract}
 Sanskrit fuses case, number, person and tense into word endings and chains clauses into
-compounds, so it is information-dense per word. Whether it survives subword tokenization
-is a separate question, to be asked per unit of meaning rather than per word. On identical FLORES-200 devtest content, Sanskrit costs
+compounds, so it is information-dense per word. Whether that density survives subword
+tokenization is a separate question, to be asked per unit of meaning rather than per word.
+On identical FLORES-200 devtest content, Sanskrit costs
 \numParitySaEnLo--\numParitySaEnHi{} times the English tokens under deployed
 tokenizers with vocabularies of \numLargeVocabFloor{} ids or more, but only
 \numParitySaHiLargeLo--\numParitySaHiLargeHi{} times the Hindi tokens. Against a deployed
@@ -62,14 +63,16 @@ English tokenizer, Sanskrit-trained BPE arms then look \emph{cheaper} per propos
 English on contemporary prose (\numTppBpeSixtyFourDeployed). Against a matched English
 control, the same algorithm and vocabulary trained on the English side of the same corpus,
 that flip disappears: at \numVocabSmall{} and \numVocabLarge{} pieces all
-\numControlledPairsSmall{} matched pairs sit above 1.0 on prose, \numCiLevel\%{}
-intervals excluding it, under a pair-matched and a byte-matched control. The gap closes as
+\numControlledPairsSmall{} matched pairs, each size-matched arm against both a pair-matched
+and a byte-matched control, sit above 1.0 on prose with \numCiLevel\%{} intervals
+excluding it. The gap closes as
 the vocabulary grows: at \numVocabHuge{} pieces the BPE pair reads
 \numTppBpeHugeSamayik{} in domain while staying above parity out of domain
 (\numTppBpeHugeOod) and on FLORES (\numTppBpeHugeFlores). The ratio factorises into a
-character-length ratio and a tokens-per-character ratio, the second near 1 throughout: what survives matched tokenization is character-level length, which Sanskrit
+character-length ratio and a tokens-per-character ratio, the second near 1 throughout: what
+survives matched tokenization is character-level length, which Sanskrit
 prose lacks over English in SLP1 (\numCharRatioSamayik) and Sanskrit verse has
-(\numCharRatioItihasa). What survives is a statement about deployed practice: on
+(\numCharRatioItihasa). The robust statement is about deployed practice: on
 contemporary prose and on FLORES, with the Sanskrit side in SLP1 against the deployed
 \texttt{o200k} English pivot, Sanskrit costs \numDeployedLo--\numDeployedHi{} English
 tokens per proposition under the tokenizers people actually ship. Code, the results
@@ -110,10 +113,10 @@ Our contributions are three. \textbf{The measurement:} parity and tokens per pro
 for Sanskrit against English and Hindi on identical content, across
 \numArmsDeployedGeneral{} deployed general-purpose tokenizers, \numArmsDeployedIndic{}
 deployed Indic tokenizers and \numTrainedArms{} tokenizers trained here, with paired
-bootstrap intervals throughout, and with fertility reported alongside and never as the
-headline. \textbf{The matched control:} a same-algorithm, same-vocabulary,
-same-corpus English control family in two forms, one matched to the Sanskrit training text
-sentence for sentence and one subsampled to its byte count, at
+bootstrap intervals on every tokens-per-proposition ratio, and with fertility reported
+alongside and never as the headline. \textbf{The matched control:} a same-algorithm,
+same-vocabulary, same-corpus English control family in two forms, one matched to the
+Sanskrit training text sentence for sentence and one subsampled to its byte count, at
 \numVocabSmall{}, \numVocabLarge{} and \numVocabHuge{} pieces. It removes the apparent
 Sanskrit advantage on prose at the two smaller sizes under either form, and leaves it
 standing at the largest on in-domain prose alone. The
@@ -249,7 +252,8 @@ family, \texttt{E1}, in which $Y$ shares the Sanskrit arm's algorithm, vocabular
 training corpus and differs only in which side of the parallel text it saw. Both readings
 are reported; only the second supports a claim about Sanskrit.
 
-\paragraph{Intervals.} Every ratio carries a paired bootstrap interval: resample the
+\paragraph{Intervals.} Every tokens-per-proposition ratio carries a paired bootstrap
+interval: resample the
 aligned pairs with replacement, recompute the ratio of sums on each draw, and take the
 \numCiLevel{}\% percentile interval over \numBootstrap{} draws, seeded at
 \numBootstrapSeed{}. Pairing is what makes the interval meaningful, since the two sides of
@@ -385,7 +389,7 @@ Two predictions from our design document fail here. Fertility above \numPreregFe
 Sanskrit is refuted for every arm with a vocabulary of \numLargeVocabFloor{} ids or more
 (\numFertSaLo--\numFertSaHi, Table \ref{tab:fertcomp}, in Appendix \ref{sec:fulltables}
 because fertility is reported here and never led with); it holds only for GPT-2 on raw
-Devanagari (\numFertSaGptTwo), whose SLP1 variant falls back into the band
+Devanagari (\numFertSaGptTwo), whose SLP1 variant falls back below \numPreregFertLo{}
 (\numFertSaGptTwoSlpOne), so it is an old vocabulary meeting three-byte characters rather
 than evidence about Sanskrit. A Sanskrit-over-Hindi parity above
 \numPreregParityThreshold{} is refuted outright.
@@ -424,9 +428,9 @@ Devanagari reads \numCompSaOrigLo--\numCompSaOrigHi{} bytes per token against En
 \subsection{RQ2 under deployed practice}
 \label{sec:rq2-deployed}
 
-Every deployed arm, English-centric and Indic alike, puts Sanskrit above parity: across
-prose and FLORES, with the Sanskrit side scored in SLP1 against the deployed
-\texttt{o200k} pivot, the range is \numDeployedLo--\numDeployedHi{} with intervals
+Every deployed arm, English-centric and Indic alike, puts Sanskrit above parity on prose
+and on FLORES: across those corpora, with the Sanskrit side scored in SLP1 against the
+deployed \texttt{o200k} pivot, the range is \numDeployedLo--\numDeployedHi{} with intervals
 excluding 1.0 throughout, and on the primary prose corpus \texttt{o200k} against itself
 reads \numDeployedSamayikOTwoHundredK{} \numDeployedSamayikOTwoHundredKCi{}
 (Table \ref{tab:tppdeployed-samayik-test}, in Appendix \ref{sec:fulltables} with the other
@@ -434,10 +438,11 @@ corpora and the second pivot). This is the robust finding of the paper: under th
 tokenizers currently shipped Sanskrit content costs that many times the English tokens for
 the same propositions, and the Indic-specialised arms do not fix it.
 
-The trained Sanskrit arms read very differently in the same table. The best of them,
-BPE at \numVocabLarge{} pieces, comes in at \numTppBpeSixtyFourDeployed{}
-\numTppBpeSixtyFourDeployedCi{}: below parity, with the interval clear of it. Taken at
-face value, that is the crossing our design document predicted.
+The trained Sanskrit arms read very differently in the same table. BPE at
+\numVocabLarge{} pieces comes in at \numTppBpeSixtyFourDeployed{}
+\numTppBpeSixtyFourDeployedCi{}: below parity, with the interval clear of it, and the
+\numVocabHuge-piece arm lower still. Taken at face value, that is the crossing our design
+document predicted.
 
 \input{tables/tpp_controlled}
 
@@ -447,7 +452,8 @@ face value, that is the crossing our design document predicted.
 It does not survive the control. Table \ref{tab:tppcontrolled} scores every trained
 Sanskrit arm against its \texttt{E1} twins, and Figure \ref{fig:denominator} puts the
 readings side by side. At \numVocabSmall{} and \numVocabLarge{} pieces, on S\=amayik test,
-all \numControlledPairsSmall{} matched pairs sit above 1.0 with intervals excluding it,
+all \numControlledPairsSmall{} matched pairs, each size-matched arm against both controls,
+sit above 1.0 with intervals excluding it,
 \numTppControlledSamayikLo--\numTppControlledSamayikHi; the out-of-domain prose split gives
 \numTppControlledOodLo--\numTppControlledOodHi{} and FLORES
 \numTppControlledFloresLo--\numTppControlledFloresHi, in the same direction and with every
@@ -533,7 +539,7 @@ those rows down rather than up, and they sit above 1.0 on prose regardless.
     \texttt{T7\_byt5}, and \numCiLevel\%{} bootstrap intervals are narrower than the
     markers on most points. The in-domain prose panel moves from straddling parity to
     sitting above it when the denominator is controlled. Only the verse panel stays below,
-    and there the pairs sit on the byte reference rather than above it. The
+    and there the pairs sit close to the byte reference rather than well above it. The
     \numVocabHuge-piece arms are in Figure \ref{fig:vocab}.}
   \label{fig:denominator}
 \end{figure}
@@ -580,7 +586,8 @@ arm was run, and the verse number is a lead, not a finding.
 A corpus-level ratio compares whole corpora, and the two primary ones differ in length as
 well as register: a S\=amayik test pair averages \numSamayikMeanEnWords{} English words to
 \numSamayikMeanSaWords{} Sanskrit ones, while over Itih\=asa test the Sanskrit side is
-barely longer at \numItihasaMeanSaWords{} against \numItihasaMeanEnWords. That is the
+barely longer, \numItihasaMeanSaWords{} words, against an English side of
+\numItihasaMeanEnWords. That is the
 character ratio of Table \ref{tab:decomposition} seen in words, and stratifying by length
 probes bin by bin what that column states in one number per corpus. Binning is itself a
 selection, so the strata are cut on each side in turn and read in pairs (Table
@@ -753,7 +760,8 @@ verdict survives, the highest block upper bound being \numBlockItihasaMaxUpper. 
 changes, and Section \ref{sec:rq2-controlled} states it where it is made: the BPE pair at
 \numVocabHuge{} pieces on the out-of-domain prose split is \numTppBpeHugeOod{}
 \numTppBpeHugeOodCi{} under pairs and \numTppBpeHugeOodBlockCi{} under blocks, so it touches
-parity there.
+parity there. Its byte-matched twin and the byte-level reference do the same on that split,
+and no other interval changes the side of 1.0 it sits on.
 
 \input{tables/block_ci}
 

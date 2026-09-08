@@ -1,13 +1,18 @@
 # Paper 1a — the measurement paper (RQ1 and RQ2)
 
-**Status: review wave 1 complete, results included.** The structural and textual changes an
-ARR-style review asked for are in (Related Work as §2, an unnumbered Limitations section
-after the Conclusion, the Rényi subsection and the pre-registration table in appendices, a
-table of translation direction and the sign of its bias per corpus), and the five
+**Status: review wave 1 complete, results included; final claims trace done.** The
+structural and textual changes an ARR-style review asked for are in (Related Work as §2, an
+unnumbered Limitations section after the Conclusion, the Rényi subsection and the
+pre-registration table in appendices, a table of translation direction and the sign of its
+bias per corpus), and the five
 `% TODO(wave1-results)` markers are gone: the byte-matched control and the 128k vocabulary
 sweep are in §6.3, the byte-level reference arm `T7_byt5` in §5, the verse side
 decomposition in §6.4, and the block-resampled intervals in §3 and Appendix A.2. The
-acknowledgements print in final mode only.
+acknowledgements print in final mode only. A final adversarial claims trace then checked
+every measured sentence against the snapshot and tightened the quantifiers it found
+over-broad (which arms carry bootstrap intervals, which corpora the deployed-practice
+statement covers, which trained arm is cheapest against the deployed pivot, and which rows
+change a verdict under the block bootstrap).
 
 **The central finding, as the paper now states it.** Against a matched English control the
 prose flip disappears at 32k and 64k pieces, under a pair-matched control and a
@@ -21,9 +26,10 @@ the second is near 1 for every matched pair, so the verse crossing lives in the 
 ratio, which these corpora cannot attribute to meter rather than to a verbose 19th-century
 English translation.
 
-**Format: long paper.** 19 pages in final mode; the body runs to eight pages, with the
-Conclusion and the Limitations section, which ARR excludes from that limit, both on page 8
-and References starting on page 9. arXiv imposes no limit. `placeins` puts a
+**Format: long paper.** 19 pages in final mode and 20 in review mode; the body runs to
+eight pages, with the Conclusion ending on page 8 and the Limitations section, which ARR
+excludes from that limit, starting on page 9 alongside the References. arXiv imposes no
+limit. `placeins` puts a
 `\FloatBarrier` before the bibliography, so no body float is deferred into the references,
 and the float parameters are relaxed in the preamble because the defaults pushed a figure
 several pages past its first reference. To hold the body to eight pages against the new
