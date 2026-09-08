@@ -14,6 +14,9 @@ import pytest
 
 from sanskrit_tok.tokenizers.base import Tokenizer, TokenizerWithSpans, spans_cover_text
 from sanskrit_tok.tokenizers.registry import (
+    E1_ARMS as REGISTRY_E1_ARMS,
+)
+from sanskrit_tok.tokenizers.registry import (
     REGISTRY,
     T0_GEMMA3_CANDIDATES,
     T0_GPT2_CANDIDATES,
@@ -26,6 +29,7 @@ from sanskrit_tok.tokenizers.registry import (
     LoadedTokenizer,
     TiktokenAdapter,
     TokenizerUnavailable,
+    _variant,
     list_tokenizers,
     load_tokenizer,
     trained_tokenizer_path,
@@ -64,18 +68,17 @@ DCS_VARIANTS = {
 
 #: Every arm the registry must carry after this task (CLAUDE.md §6, exp02 plan Tasks 2/6).
 ALL_ARMS = (
-    "E1_bpe_32k",
-    "E1_bpe_64k",
-    "E1_unigram_32k",
-    "E1_unigram_64k",
+    *REGISTRY_E1_ARMS,
     "T0_gemma3",
     "T0_gpt2",
     "T0_llama4",
     "T0_o200k",
     "T1_bpe_raw_32k",
     "T1_bpe_raw_64k",
+    "T1_bpe_raw_128k",
     "T2_unigram_raw_32k",
     "T2_unigram_raw_64k",
+    "T2_unigram_raw_128k",
     "T3_brahmic131k",
     "T3_indicsuper",
     "T3_sarvam",
@@ -102,15 +105,21 @@ T4_ARMS = (
 )
 
 #: The matched English control family (CLAUDE.md §6, docs/decisions.md "Add a matched
-#: English control family E1 for TPP"): same algorithms and vocabulary sizes as T1/T2,
-#: trained on the English side of the same corpus.
-E1_ARMS = ("E1_bpe_32k", "E1_bpe_64k", "E1_unigram_32k", "E1_unigram_64k")
+#: English control family E1 for TPP" and, for the `_bm` half, 2026-09-08 "Byte-matched
+#: English control arms"): same algorithms and vocabulary sizes as T1/T2, trained on the
+#: English side of the same corpus — the whole of it for the pair-matched arms, a
+#: byte-count-matched subsample of it for the `_bm` arms. Imported from the registry rather
+#: than retyped, so this file cannot disagree with it about which arms the family has; the
+#: membership itself is pinned by `test_the_english_control_family_has_both_halves`.
+E1_ARMS = REGISTRY_E1_ARMS
 
 TRAINED_ARMS = (
     "T1_bpe_raw_32k",
     "T1_bpe_raw_64k",
+    "T1_bpe_raw_128k",
     "T2_unigram_raw_32k",
     "T2_unigram_raw_64k",
+    "T2_unigram_raw_128k",
     *E1_ARMS,
     *T4_ARMS,
 )
@@ -198,11 +207,35 @@ def test_list_tokenizers_filters_by_family() -> None:
 
 
 def test_registry_carries_thirty_five_arms() -> None:
-    assert len(list_tokenizers()) == 35
+    assert len(list_tokenizers()) == 45
 
 
 def test_list_tokenizers_filters_the_english_control_family() -> None:
     assert list_tokenizers(family="E1") == sorted(E1_ARMS)
+
+
+def test_the_english_control_family_has_both_halves_at_three_sizes() -> None:
+    """Six pair-matched arms and six byte-matched twins (CLAUDE.md §6): a `_bm` arm exists
+    for every pair-matched one, and neither half carries a size the other lacks."""
+    pair_matched = [name for name in E1_ARMS if not name.endswith("_bm")]
+    byte_matched = [name for name in E1_ARMS if name.endswith("_bm")]
+    assert sorted(pair_matched) == sorted(
+        [
+            "E1_bpe_32k",
+            "E1_bpe_64k",
+            "E1_bpe_128k",
+            "E1_unigram_32k",
+            "E1_unigram_64k",
+            "E1_unigram_128k",
+        ]
+    )
+    assert sorted(byte_matched) == sorted(f"{name}_bm" for name in pair_matched)
+
+
+def test_a_byte_matched_control_arm_carries_no_corpus_variant_suffix() -> None:
+    """`_bm` names how much English an arm saw, not which corpus it came from, so it must
+    not be read as a training-corpus variant the way `_dcs` is."""
+    assert all(_variant(name) == "" for name in E1_ARMS)
 
 
 def test_list_tokenizers_filters_the_sandhi_split_family() -> None:

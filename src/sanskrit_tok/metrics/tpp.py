@@ -36,7 +36,7 @@ import numpy as np
 from sanskrit_tok.metrics._ratio import RatioParts, token_ratio
 from sanskrit_tok.tokenizers.base import DetailedMetricResult, Tokenizer
 
-__all__ = ["tpp", "tpp_from_parts", "tpp_paired_delta"]
+__all__ = ["block_count", "tpp", "tpp_from_parts", "tpp_paired_delta"]
 
 #: Unit label carried into `results.json` and every figure axis.
 UNIT = "tokens/proposition ratio"
@@ -85,6 +85,132 @@ def _percentile_ci(draws: np.ndarray, ci: float) -> tuple[float, float]:
     return float(low), float(high)
 
 
+def block_count(n: int, block_length: int) -> int:
+    """How many contiguous blocks of `block_length` pairs an `n`-pair corpus splits into.
+
+    `ceil(n / block_length)`, i.e. the final short block counts. `0` for an empty corpus.
+    Public because `results.json` records it beside every block interval and the figure
+    captions read it back; raising on a non-positive `block_length` here means the check
+    happens once, at the top of both the CI and the summary.
+    """
+    if block_length < 1:
+        raise ValueError(f"block_length must be a positive number of pairs, got {block_length!r}")
+    return -(-n // block_length)
+
+
+def _block_draws(
+    n: int,
+    block_length: int,
+    n_bootstrap: int,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Draw `n_bootstrap` block resamples; return `(starts, lengths, ids, cut)`.
+
+    `starts`/`lengths` describe the corpus's own non-overlapping blocks — `0, L, 2L, ...`
+    with the last one short — and `ids[draw]` is the sequence of blocks that draw
+    concatenates, in order. `cut[draw]` is the column at which the concatenation first
+    reaches `n` pairs, i.e. the block that gets truncated.
+
+    Blocks are drawn `ceil(n / L)` at a time because that many *full* blocks always cover
+    `n`; a draw that happens to pick the short final block repeatedly can fall short, so
+    more columns are drawn for every row until none does. Redrawing in whole matrices
+    rather than per row keeps the result a pure function of `seed`, `n`, `L` and
+    `n_bootstrap`, which is what makes a recorded interval reproducible.
+
+    With `block_length == 1` this is exactly the i.i.d. draw: `ceil(n / 1) = n` blocks of
+    one pair each, from the same generator, in the same shape — so `_block_bootstrap_ci`
+    and `_bootstrap_ci` return identical intervals at the same seed, which is the property
+    the tests pin.
+    """
+    starts = np.arange(0, n, block_length)
+    lengths = np.minimum(block_length, n - starts)
+    per_draw = block_count(n, block_length)
+    ids = rng.integers(0, len(starts), size=(n_bootstrap, per_draw))
+    covered = np.cumsum(lengths[ids], axis=1)
+    while not bool((covered[:, -1] >= n).all()):
+        ids = np.concatenate(
+            [ids, rng.integers(0, len(starts), size=(n_bootstrap, per_draw))], axis=1
+        )
+        covered = np.cumsum(lengths[ids], axis=1)
+    cut = np.argmax(covered >= n, axis=1)
+    return starts, lengths, ids, cut
+
+
+def _block_resampled_totals(
+    counts: tuple[int, ...],
+    starts: np.ndarray,
+    lengths: np.ndarray,
+    ids: np.ndarray,
+    cut: np.ndarray,
+) -> np.ndarray:
+    """One side's resampled totals: the sum of each draw's blocks, truncated to `n` pairs.
+
+    Every block before `cut` contributes its whole sum (read off a cumulative sum over the
+    drawn blocks); the block *at* `cut` contributes only its first few pairs, read off a
+    prefix-sum of the original counts. Truncating rather than keeping the overshoot is what
+    makes every draw cover exactly `n` pairs, so a block resample and an i.i.d. one are
+    sums over the same number of sentences and their intervals are comparable.
+    """
+    values = np.asarray(counts, dtype=float)
+    prefix = np.concatenate([[0.0], np.cumsum(values)])
+    block_sums = prefix[starts + lengths] - prefix[starts]
+
+    rows = np.arange(ids.shape[0])
+    drawn_cumsum = np.cumsum(block_sums[ids], axis=1)
+    drawn_lengths = np.cumsum(lengths[ids], axis=1)
+    before = np.where(cut > 0, drawn_cumsum[rows, np.maximum(cut - 1, 0)], 0.0)
+    covered_before = np.where(cut > 0, drawn_lengths[rows, np.maximum(cut - 1, 0)], 0)
+    take = values.size - covered_before
+    cut_starts = starts[ids[rows, cut]]
+    partial = prefix[cut_starts + take] - prefix[cut_starts]
+    totals: np.ndarray = before + partial
+    return totals
+
+
+def _block_bootstrap_ci(
+    parts: RatioParts,
+    n_bootstrap: int,
+    seed: int,
+    ci: float,
+    block_length: int,
+) -> tuple[float, float]:
+    """Percentile CI of the ratio of sums under a **non-overlapping block** bootstrap.
+
+    The i.i.d. bootstrap (`_bootstrap_ci`) assumes sentences are exchangeable, and in these
+    corpora they are not: Itihāsa's test split is consecutive verses of one epic, FLORES
+    devtest is consecutive sentences of the documents it was drawn from, and neighbouring
+    sentences share a topic, a register and a translator's habits. Resampling single
+    sentences therefore treats correlated observations as independent and returns an
+    interval that is too narrow. Resampling contiguous blocks of `block_length` sentences
+    keeps that local correlation inside the resampled unit, so the interval widens to
+    roughly the amount the dependence justifies.
+
+    Returns `(nan, nan)` for an empty corpus or a non-positive `n_bootstrap`, and when
+    every draw is undefined — the same conventions as `_bootstrap_ci`. When
+    `block_length >= n` the corpus is a single block, every draw is that block, and the
+    interval collapses to the point estimate: a truthful statement that a bootstrap over
+    one exchangeable unit has nothing to resample, not a precise measurement.
+    """
+    n = len(parts.source_counts)
+    # Validated before the empty-corpus shortcut, so a bad `block_length` is an error even
+    # on an empty length stratum rather than only on the corpora that happen to be
+    # populated — the config value is wrong either way.
+    block_count(n, block_length)
+    if n == 0 or n_bootstrap <= 0:
+        return math.nan, math.nan
+    rng = np.random.default_rng(seed)
+    starts, lengths, ids, cut = _block_draws(n, block_length, n_bootstrap, rng)
+    source_sums = _block_resampled_totals(parts.source_counts, starts, lengths, ids, cut)
+    pivot_sums = _block_resampled_totals(parts.pivot_counts, starts, lengths, ids, cut)
+    ratios: np.ndarray = np.divide(
+        source_sums,
+        pivot_sums,
+        out=np.full(n_bootstrap, math.nan),
+        where=pivot_sums != 0.0,
+    )
+    return _percentile_ci(ratios, ci)
+
+
 def _bootstrap_ci(
     parts: RatioParts,
     n_bootstrap: int,
@@ -115,6 +241,7 @@ def tpp(
     n_bootstrap: int = 1000,
     seed: int = 0,
     ci: float = 0.95,
+    block_length: int | None = None,
 ) -> DetailedMetricResult:
     """Tokens-per-proposition of `texts` against `pivot_texts`, aligned by index.
 
@@ -129,6 +256,12 @@ def tpp(
     `n_undefined` = how many of those are `nan`, `source_tokens` / `pivot_tokens` = the two
     totals behind `value`, `ci_low` / `ci_high` = the percentile bootstrap interval, and
     `n_bootstrap` / `seed` = the settings that produced it.
+
+    `block_length`, when given, adds a **second** interval from a non-overlapping block
+    bootstrap (`ci_low_block` / `ci_high_block`, with `block_length` and `n_blocks`
+    recorded beside them) without touching the first: `ci_low` / `ci_high` stay the i.i.d.
+    interval every caller already reads. See `_block_bootstrap_ci` for why a corpus of
+    consecutive verses or consecutive document sentences needs one.
 
     Pooled, not averaged per pair, so `value` is generally not the mean of `per_pair`. A
     pair whose pivot side yields no tokens has no ratio and contributes `nan`, never `0.0`;
@@ -146,7 +279,9 @@ def tpp(
     """
     _require_ci(ci)
     parts = token_ratio(tokenizer, texts, pivot_texts, pivot_tokenizer)
-    return tpp_from_parts(parts, n_bootstrap=n_bootstrap, seed=seed, ci=ci)
+    return tpp_from_parts(
+        parts, n_bootstrap=n_bootstrap, seed=seed, ci=ci, block_length=block_length
+    )
 
 
 def tpp_from_parts(
@@ -155,6 +290,7 @@ def tpp_from_parts(
     n_bootstrap: int = 1000,
     seed: int = 0,
     ci: float = 0.95,
+    block_length: int | None = None,
 ) -> DetailedMetricResult:
     """`tpp` on token counts that have already been computed; the same dict, key for key.
 
@@ -170,10 +306,17 @@ def tpp_from_parts(
     share a bootstrap seed. That is intended: the draws are independent resamples of
     different index sets, and reproducing a stratum's interval should need only the seed
     `results.json` records beside it.
+
+    `block_length` adds the block-bootstrap keys `ci_low_block`, `ci_high_block`,
+    `block_length` and `n_blocks`; they are **absent** when it is `None`, so a caller that
+    does not ask for the second interval gets exactly the dict it got before this argument
+    existed. `block_length` is in *pairs* and is taken in corpus order, which is the order
+    the `RatioParts` were built in — for a length stratum that is the stratum's own order,
+    i.e. the corpus order of the pairs it kept.
     """
     _require_ci(ci)
     ci_low, ci_high = _bootstrap_ci(parts, n_bootstrap, seed, ci)
-    return {
+    result: DetailedMetricResult = {
         "value": parts.value,
         "n": len(parts.source_counts),
         "unit": UNIT,
@@ -186,6 +329,13 @@ def tpp_from_parts(
         "n_bootstrap": n_bootstrap,
         "seed": seed,
     }
+    if block_length is not None:
+        low_block, high_block = _block_bootstrap_ci(parts, n_bootstrap, seed, ci, block_length)
+        result["ci_low_block"] = low_block
+        result["ci_high_block"] = high_block
+        result["block_length"] = block_length
+        result["n_blocks"] = block_count(len(parts.source_counts), block_length)
+    return result
 
 
 def _bootstrap_delta_ci(

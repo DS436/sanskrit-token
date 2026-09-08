@@ -37,10 +37,13 @@ same kind of arm, one family over. `T1_*`/`T2_*` are the opposite: trained from 
 this project at matched vocabulary sizes (CLAUDE.md §5), so they are read from a
 `tokenizer.json` file on disk rather than downloaded, and are absent — `TokenizerUnavailable`
 — until `tokenizers/train_bpe.py` / `train_unigram.py` (Task 4) have written one. `E1_*`
-is the matched *English* control family (CLAUDE.md §6): the same two algorithms at the
-same two vocabulary sizes, trained on the English side of the same corpus, so a TPP ratio
-against an E1 arm holds algorithm, vocabulary size and training domain constant on both
-sides. It is file-backed for exactly the same reason as T1/T2 and loads the same way. `T4_*` is
+is the matched *English* control family (CLAUDE.md §6): the same algorithms at the same
+vocabulary sizes, trained on the English side of the same corpus, so a TPP ratio against an
+E1 arm holds algorithm, vocabulary size and training domain constant on both sides. It
+comes in two halves — pair-matched (one English sentence per Sanskrit sentence) and
+byte-matched (`_bm`, the English side cut to the Sanskrit corpus's byte count) — because
+those two ways of saying "the same corpus" disagree by 48% of the text; see `E1_ARMS`. It
+is file-backed for exactly the same reason as T1/T2 and loads the same way. `T4_*` is
 the sandhi-split family (Experiment 03): the same two algorithms at the same two
 vocabulary sizes as T1/T2, trained on the sandhi-split SLP1 corpus, and file-backed for
 the same reason again. The throughput rule selected the full training corpus
@@ -84,6 +87,7 @@ from typing import Any
 
 __all__ = [
     "DCS_ARMS",
+    "E1_ARMS",
     "REGISTRY",
     "T0_GEMMA3_CANDIDATES",
     "T0_GPT2_CANDIDATES",
@@ -853,6 +857,32 @@ def _load_byte_arm(name: str) -> LoadedTokenizer:
     )
 
 
+#: The matched English control family (CLAUDE.md §6), in two halves that differ only in how
+#: much English text they saw. The **pair-matched** arms (`E1_bpe_32k`, ...) are trained on
+#: the whole English side of the Sāmayik + Itihāsa training splits — the same *sentences*
+#: the Sanskrit arms saw, one sentence per pair. The **byte-matched** arms (the `_bm`
+#: suffix) are trained on a deterministic subsample of those lines cut to the Sanskrit
+#: corpus's UTF-8 byte count, because the pair-matched English corpus is 16,554,871 bytes
+#: against the Sanskrit corpus's 11,209,356 — 48% more text at the same vocabulary size,
+#: which a reviewer can read as the reason the English side tokenizes more cheaply
+#: (docs/decisions.md, 2026-09-08, "Byte-matched English control arms `E1_*_bm`"). Neither
+#: is the control: they bracket it, one matching sentences and one matching bytes.
+E1_ARMS: tuple[str, ...] = (
+    "E1_bpe_32k",
+    "E1_bpe_64k",
+    "E1_bpe_128k",
+    "E1_unigram_32k",
+    "E1_unigram_64k",
+    "E1_unigram_128k",
+    "E1_bpe_32k_bm",
+    "E1_bpe_64k_bm",
+    "E1_bpe_128k_bm",
+    "E1_unigram_32k_bm",
+    "E1_unigram_64k_bm",
+    "E1_unigram_128k_bm",
+)
+
+
 #: The fourteen Experiment 04 arms, every one trained by this project on the DCS training
 #: split (docs/decisions.md, 2026-09-05, "Experiment 04: DCS is the gold source and the
 #: first monolingual training corpus"). File-backed like T1/T2/E1/T4 and loaded by the same
@@ -896,12 +926,11 @@ REGISTRY: dict[str, Callable[[], LoadedTokenizer]] = {
     "T3_indicsuper": functools.partial(_load_hf_arm, "T3_indicsuper", T3_INDICSUPER_CANDIDATES),
     "T1_bpe_raw_32k": functools.partial(_load_trained_arm, "T1_bpe_raw_32k"),
     "T1_bpe_raw_64k": functools.partial(_load_trained_arm, "T1_bpe_raw_64k"),
+    "T1_bpe_raw_128k": functools.partial(_load_trained_arm, "T1_bpe_raw_128k"),
     "T2_unigram_raw_32k": functools.partial(_load_trained_arm, "T2_unigram_raw_32k"),
     "T2_unigram_raw_64k": functools.partial(_load_trained_arm, "T2_unigram_raw_64k"),
-    "E1_bpe_32k": functools.partial(_load_trained_arm, "E1_bpe_32k"),
-    "E1_bpe_64k": functools.partial(_load_trained_arm, "E1_bpe_64k"),
-    "E1_unigram_32k": functools.partial(_load_trained_arm, "E1_unigram_32k"),
-    "E1_unigram_64k": functools.partial(_load_trained_arm, "E1_unigram_64k"),
+    "T2_unigram_raw_128k": functools.partial(_load_trained_arm, "T2_unigram_raw_128k"),
+    **{name: functools.partial(_load_trained_arm, name) for name in E1_ARMS},
     "T4_bpe_split_32k": functools.partial(_load_trained_arm, "T4_bpe_split_32k"),
     "T4_bpe_split_64k": functools.partial(_load_trained_arm, "T4_bpe_split_64k"),
     "T4_unigram_split_32k": functools.partial(_load_trained_arm, "T4_unigram_split_32k"),

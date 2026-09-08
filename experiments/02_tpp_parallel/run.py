@@ -68,6 +68,7 @@ from sanskrit_tok.experiment import (
 )
 from sanskrit_tok.metrics._ratio import token_ratio
 from sanskrit_tok.metrics.compression import compression
+from sanskrit_tok.metrics.decomposition import decompose_ratio
 from sanskrit_tok.metrics.fertility import fertility
 from sanskrit_tok.metrics.renyi import renyi_efficiency
 from sanskrit_tok.metrics.summary import summarise_metric
@@ -92,6 +93,23 @@ HINDI_PIVOT_FAMILIES = frozenset({"T0", "T3"})
 #: The script variant the controlled (T1/T2 vs E1) comparison reads. T1/T2 have no other
 #: variant, and the English side is always the text as written.
 CONTROLLED_VARIANT = SLP1
+
+#: Suffix marking the byte-matched half of the English control family (`E1_bpe_32k_bm`):
+#: the same algorithm and vocabulary size trained on the English corpus cut to the Sanskrit
+#: corpus's UTF-8 byte count, rather than on all of it (docs/decisions.md, 2026-09-08).
+#: The two halves answer the same question about "the same corpus" two ways, so the figure
+#: draws them side by side and this is how it tells them apart.
+BYTE_MATCHED_SUFFIX = "_bm"
+
+#: The block-bootstrap keys `tpp()` attaches when a `block_length` is configured, copied
+#: into every stored summary by `summarise` below. `ci_low`/`ci_high` stay the i.i.d.
+#: interval: the block one is reported beside it, never in place of it.
+BLOCK_KEYS: tuple[str, ...] = ("ci_low_block", "ci_high_block", "block_length", "n_blocks")
+
+#: The tokenizer-free reference arm: UTF-8 itself. Its "TPP" is a ratio of *byte* counts,
+#: so it is the one line on the controlled panel that owes nothing to any vocabulary, and
+#: it is drawn as a reference line rather than as another arm.
+BYTE_ARM = "T7_byt5"
 
 FIGURE_STEM = "tpp_by_arm"
 #: The pivot and script variant the figure's main marker reads, so every arm — T0/T3
@@ -208,6 +226,22 @@ def variants_for_family(family: str, script_variants: Mapping[str, Sequence[str]
 # ------------------------------------------------------------------------- TPP / metrics
 
 
+def summarise(raw: Mapping[str, Any], ci: float) -> dict[str, Any]:
+    """`summarise_tpp` plus the block-bootstrap keys, when the caller asked for them.
+
+    `summarise_tpp` (`sanskrit_tok.experiment`) copies a fixed list of `tpp()` keys into the
+    stored summary. The second, block-resampled interval is optional — `tpp()` omits
+    `ci_low_block` and friends entirely when no `block_length` is given — so it is copied
+    here, conditionally, rather than by widening that shared list: an experiment that does
+    not ask for a block interval must keep writing exactly the summary it wrote before.
+    """
+    summary = summarise_tpp(raw, ci=ci)
+    for key in BLOCK_KEYS:
+        if key in raw:
+            summary[key] = raw[key]
+    return summary
+
+
 def compute_tpp(
     corpora: Sequence[CorpusData],
     arms: Mapping[str, LoadedTokenizer],
@@ -217,6 +251,7 @@ def compute_tpp(
     n_bootstrap: int,
     seed: int,
     ci: float,
+    block_length: int | None = None,
 ) -> dict[str, dict[str, dict[str, dict[str, dict[str, Any]]]]]:
     """`corpus -> arm -> variant -> pivot -> summary`, per the brief's `results.json` shape.
 
@@ -258,8 +293,9 @@ def compute_tpp(
                         n_bootstrap=n_bootstrap,
                         seed=seed,
                         ci=ci,
+                        block_length=block_length,
                     )
-                    pivot_result[pivot_name] = summarise_tpp(raw, ci=ci)
+                    pivot_result[pivot_name] = summarise(raw, ci)
                     logger.info(
                         "%s / %s / %s / vs %s: TPP %.3f [%.3f, %.3f]",
                         corpus.name,
@@ -321,6 +357,7 @@ def compute_tpp_controlled(
     n_bootstrap: int,
     seed: int,
     ci: float,
+    block_length: int | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """`corpus -> "<sa_arm>/<en_arm>" -> summary`: the controlled TPP (docs/decisions.md,
     "Add a matched English control family E1 for TPP").
@@ -335,6 +372,9 @@ def compute_tpp_controlled(
     The Sanskrit side is read in `CONTROLLED_VARIANT` (SLP1 — the only variant T1/T2
     have) and the English side as written; the summaries carry the same enriched keys as
     `tpp`, so the two blocks read the same way.
+
+    `block_length`, when given, adds the second (block-bootstrap) interval to every
+    summary; `ci_low`/`ci_high` stay the i.i.d. one (`summarise`).
     """
     results: dict[str, dict[str, dict[str, Any]]] = {}
     for corpus in corpora:
@@ -348,9 +388,10 @@ def compute_tpp_controlled(
                 n_bootstrap=n_bootstrap,
                 seed=seed,
                 ci=ci,
+                block_length=block_length,
             )
             key = controlled_pair_key(sanskrit_arm, english_arm)
-            pair_results[key] = summarise_tpp(raw, ci=ci)
+            pair_results[key] = summarise(raw, ci)
             logger.info(
                 "%s / controlled %s: TPP %.3f [%.3f, %.3f]",
                 corpus.name,
@@ -371,6 +412,7 @@ def compute_tpp_hindi(
     n_bootstrap: int,
     seed: int,
     ci: float,
+    block_length: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """`arm -> variant -> summary` for the Hindi pivot: T0/T3 arms only, same tokenizer
     scoring both sides (config.yaml resolution 4); `{}` if the corpus has no Hindi side.
@@ -391,8 +433,9 @@ def compute_tpp_hindi(
                 n_bootstrap=n_bootstrap,
                 seed=seed,
                 ci=ci,
+                block_length=block_length,
             )
-            variant_result[variant] = summarise_tpp(raw, ci=ci)
+            variant_result[variant] = summarise(raw, ci)
             logger.info(
                 "%s / %s / %s vs Hindi: TPP %.3f [%.3f, %.3f]",
                 corpus.name,
@@ -441,6 +484,111 @@ def compute_fertility_compression(
                     compression(tokenizer, texts)
                 )
     return fert, comp
+
+
+# --------------------------------------------------------------- side decomposition
+
+
+def _text_size(texts: Sequence[str]) -> tuple[int, int]:
+    """`(characters, UTF-8 bytes)` summed over `texts`.
+
+    Both, because they answer different questions and the answer differs by side: SLP1 is
+    ASCII, so the Sanskrit side's two numbers coincide, while the same sentences in
+    Devanagari are three bytes per character. Whitespace *between* the sentences is not
+    counted on either side, so the two are comparable.
+    """
+    characters = sum(len(text) for text in texts)
+    byte_count = sum(len(text.encode("utf-8")) for text in texts)
+    return characters, byte_count
+
+
+def compute_side_decomposition(
+    corpora: Sequence[CorpusData],
+    arms: Mapping[str, LoadedTokenizer],
+    pairs: Sequence[tuple[str, str]],
+    variant: str = CONTROLLED_VARIANT,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """`corpus -> "<sa_arm>/<en_arm>" -> decomposition`: where each TPP ratio comes from.
+
+    A TPP ratio says what Sanskrit costs per English token and nothing about why, and the
+    two readings it leaves open are not the same claim. `tokens_sa / tokens_en` factorises
+    exactly into a **character ratio** (`chars_sa / chars_en`: how much *text* the Sanskrit
+    side spends on the same propositions) times a **density ratio** (`tokens_per_char_sa /
+    tokens_per_char_en`: how expensively the two tokenizers charge for a character of their
+    own side) — see `sanskrit_tok.metrics.decomposition`. Itihāsa is the case that needs
+    it: Sanskrit stays below 1.0 there under the matched control, and a 19th-century verse
+    translation is a plausible source of a long English *denominator*, which would be a
+    fact about Dutt rather than about Sanskrit.
+
+    Every pair is measured on the same Sanskrit `variant` (SLP1 by default, so the arms are
+    on the same footing as the figure's main marker) and the English side as written. Both
+    the controlled pairs and the deployed-practice ones are passed in as `pairs`; the key
+    is the same `"<sa>/<en>"` used by `tpp_controlled`, and the two sets cannot collide
+    because an `E1_*` control arm and a `T0_*` pivot never share a name.
+
+    The `T7_byt5` pair is the one whose decomposition is knowable in advance: a byte arm's
+    token count *is* its byte count, so its `tpp` equals `bytes_sa / bytes_en` and its
+    density ratio is the ratio of the two sides' bytes-per-character. That is the check the
+    experiment's verification runs, and the reason the arm is in the table.
+    """
+    results: dict[str, dict[str, dict[str, Any]]] = {}
+    for corpus in corpora:
+        chars_en, bytes_en = _text_size(corpus.english)
+        chars_sa, bytes_sa = _text_size(corpus.sanskrit[variant])
+        pair_results: dict[str, dict[str, Any]] = {}
+        for sanskrit_arm, english_arm in pairs:
+            parts = token_ratio(
+                arms[sanskrit_arm],
+                corpus.sanskrit[variant],
+                corpus.english,
+                arms[english_arm],
+            )
+            entry: dict[str, Any] = {"variant": variant, "n": len(parts.source_counts)}
+            entry.update(
+                decompose_ratio(
+                    chars_sa=chars_sa,
+                    chars_en=chars_en,
+                    bytes_sa=bytes_sa,
+                    bytes_en=bytes_en,
+                    tokens_sa=parts.source_total,
+                    tokens_en=parts.pivot_total,
+                )
+            )
+            key = controlled_pair_key(sanskrit_arm, english_arm)
+            pair_results[key] = entry
+            logger.info(
+                "%s / %s (%s): TPP %.3f = char_ratio %.3f x density_ratio %.3f",
+                corpus.name,
+                key,
+                variant,
+                entry["tpp"],
+                entry["char_ratio"],
+                entry["density_ratio"],
+            )
+        results[corpus.name] = pair_results
+    return results
+
+
+def decomposition_pairs(
+    arms: Mapping[str, LoadedTokenizer],
+    controlled: Sequence[tuple[str, str]],
+    sanskrit_arm_names: Sequence[str],
+    english_pivots: Sequence[str],
+) -> list[tuple[str, str]]:
+    """The `(sanskrit_arm, english_arm)` pairs the decomposition is computed for.
+
+    Every controlled pair that loaded — the matched `E1_*` and `E1_*_bm` comparisons and
+    the `T7_byt5` byte reference — followed by every available Sanskrit arm against the
+    primary deployed pivot, which is the ratio the deployed-practice tables report. Order
+    is config order within each group, and a pair already present is not repeated.
+    """
+    pairs: list[tuple[str, str]] = list(controlled)
+    pivot_name = english_pivots[0] if english_pivots else None
+    if pivot_name is not None and pivot_name in arms:
+        for arm_name in sanskrit_arm_names:
+            if arm_name in arms and (arm_name, pivot_name) not in pairs:
+                pairs.append((arm_name, pivot_name))
+    return pairs
 
 
 # ------------------------------------------------------------- length-stratified TPP
@@ -510,6 +658,7 @@ def select_length_pairs(
     english_pivots: Sequence[str],
     controlled: Sequence[tuple[str, str]],
     script_variants: Mapping[str, Sequence[str]],
+    skip_arms: Sequence[str] = (),
 ) -> list[tuple[str, str, str]]:
     """The `(sanskrit_arm, variant, english_arm)` triples the length strata are measured on.
 
@@ -524,10 +673,20 @@ def select_length_pairs(
 
     Both sets are keyed `"<sanskrit_arm>/<english_arm>"` and cannot collide, since an E1
     control arm and a T0 pivot never share a name.
+
+    `skip_arms` (`config["length_strata_skip_arms"]`) drops every pair naming one of those
+    arms from *both* sets. The strata are the largest block in `results.json` — pairs x
+    four corpora x five bins x two stratifications, each bin with two bootstraps — and the
+    128k arms and the byte reference add nothing to the question the strata answer, which
+    is whether a length gradient survives being binned on either side. They are measured at
+    corpus level like every other arm; only their strata are omitted, and the README says
+    so.
     """
+    skipped = set(skip_arms)
     pairs = [
         (sanskrit_arm, CONTROLLED_VARIANT, english_arm)
         for sanskrit_arm, english_arm in controlled
+        if sanskrit_arm not in skipped and english_arm not in skipped
     ]
     if not english_pivots:
         return pairs
@@ -539,9 +698,11 @@ def select_length_pairs(
             pivot_name,
         )
         return pairs
+    if pivot_name in skipped:
+        return pairs
     for arm_name in sanskrit_arm_names:
         tokenizer = arms.get(arm_name)
-        if tokenizer is None:
+        if tokenizer is None or arm_name in skipped:
             continue
         variants = variants_for_family(tokenizer.family, script_variants)
         if not variants:
@@ -562,6 +723,7 @@ def compute_tpp_by_length(
     *,
     sparse_below: int = LENGTH_SPARSE_BELOW_DEFAULT,
     bin_on: Literal["english", "sanskrit"] = BIN_ON_ENGLISH,
+    block_length: int | None = None,
 ) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
     """`corpus -> "<sa_arm>/<en_arm>" -> bin label -> summary`: TPP within a length band.
 
@@ -639,9 +801,13 @@ def compute_tpp_by_length(
             bin_results: dict[str, dict[str, Any]] = {}
             for label, indices in zip(labels, indices_by_bin, strict=True):
                 raw = tpp_from_parts(
-                    parts.subset(indices), n_bootstrap=n_bootstrap, seed=seed, ci=ci
+                    parts.subset(indices),
+                    n_bootstrap=n_bootstrap,
+                    seed=seed,
+                    ci=ci,
+                    block_length=block_length,
                 )
-                summary = summarise_tpp(raw, ci=ci)
+                summary = summarise(raw, ci)
                 summary["n_pairs"] = len(indices)
                 summary["sparse"] = len(indices) < sparse_below
                 summary["mean_words_en"] = _mean_over(english_words, indices)
@@ -818,10 +984,16 @@ def compute_renyi_english(
 def arm_label(name: str, vocab_size: int) -> str:
     """X-tick label: arm name, a `*` for provisional (T1/T2) arms, vocab size in `Nk`.
 
-    `T1_bpe_raw_32k` -> `"T1_bpe_raw_32k* (32k)"`; `T0_o200k` -> `"T0_o200k (200k)"`.
+    `T1_bpe_raw_32k` -> `"T1_bpe_raw_32k* (32k)"`; `T0_o200k` -> `"T0_o200k (200k)"`. A
+    vocabulary below a thousand ids is written out in full (`T7_byt5` -> `"T7_byt5 (256)"`),
+    since rounding it to `0k` reads as a bug rather than as a byte vocabulary.
     """
     family = name.split("_", 1)[0]
     star = "*" if family in PROVISIONAL_FAMILIES else ""
+    if vocab_size < 1000:
+        # `T7_byt5` has 256 ids, which rounds to "0k" — a label that reads as a bug rather
+        # than as the point of the arm.
+        return f"{name}{star} ({vocab_size})"
     thousands = round(vocab_size / 1000)
     return f"{name}{star} ({thousands}k)"
 
@@ -839,68 +1011,162 @@ def controlled_pair_label(sanskrit_arm: str, english_arm: str) -> str:
     return f"{sanskrit_arm}{star} / {english_arm}"
 
 
+def is_byte_reference_pair(sanskrit_arm: str, english_arm: str) -> bool:
+    """Whether a controlled pair is the byte reference (`T7_byt5` on both sides).
+
+    The one pair whose two sides are the same arm: UTF-8 measured against itself, i.e. the
+    ratio of the two sides' byte counts. It is a reference line on the panel rather than a
+    marker in the row of matched pairs, because it is not a tokenizer comparison at all.
+    """
+    return sanskrit_arm == english_arm == BYTE_ARM
+
+
+def controlled_panel_groups(
+    pairs: Sequence[Sequence[str]],
+) -> list[tuple[str, str | None, str | None]]:
+    """`(sanskrit_arm, pair_matched_english, byte_matched_english)` per Sanskrit arm.
+
+    The controlled comparison now has two English sides per Sanskrit arm — the E1 arm
+    trained on all of the English corpus and the `_bm` twin trained on the byte-matched
+    subsample of it — and they belong at the same x position, because the question they
+    answer differs only in how much text the control saw. Groups appear in the order their
+    Sanskrit arm is first named in `config["controlled_pairs"]`; either half may be `None`
+    (an arm with only one of the two, which is what a `results.json` from before the `_bm`
+    family looks like). The byte reference pair is not a group — see
+    `is_byte_reference_pair`.
+    """
+    groups: dict[str, list[str | None]] = {}
+    order: list[str] = []
+    for pair in pairs:
+        sanskrit_arm, english_arm = pair[0], pair[1]
+        if is_byte_reference_pair(sanskrit_arm, english_arm):
+            continue
+        if sanskrit_arm not in groups:
+            groups[sanskrit_arm] = [None, None]
+            order.append(sanskrit_arm)
+        index = 1 if english_arm.endswith(BYTE_MATCHED_SUFFIX) else 0
+        if groups[sanskrit_arm][index] is None:
+            groups[sanskrit_arm][index] = english_arm
+    return [(name, groups[name][0], groups[name][1]) for name in order]
+
+
+def _controlled_point(
+    entry: Mapping[str, Any] | None,
+) -> tuple[float, float, float] | None:
+    """One matched pair's `(value, lower_error, upper_error)`, or `None` if it has none."""
+    if entry is None:
+        return None
+    value = entry.get("value")
+    if value is None or not math.isfinite(float(value)):
+        return None
+    ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
+    lower = float(value) - float(ci_low) if ci_low is not None else 0.0
+    upper = float(ci_high) - float(value) if ci_high is not None else 0.0
+    return float(value), max(lower, 0.0), max(upper, 0.0)
+
+
+#: Marker colours of the controlled panel's two English sides and its byte reference.
+CONTROLLED_COLOR = "#2f855a"
+CONTROLLED_BM_COLOR = "#2f855a"
+BYTE_REFERENCE_COLOR = "#c05621"
+#: How far either side of a Sanskrit arm's x position its two English controls are drawn.
+CONTROLLED_OFFSET = 0.14
+#: Legend labels for the three series of the controlled panel.
+CONTROLLED_LABEL = "vs E1 (pair-matched: same sentences)"
+CONTROLLED_BM_LABEL = "vs E1_bm (byte-matched: same UTF-8 bytes)"
+BYTE_REFERENCE_LABEL = "bytes (T7_byt5 both sides)"
+
+
 def _plot_controlled_panel(
     axes: Any,
     corpus_name: str,
     controlled: Mapping[str, Any],
     pairs: Sequence[Sequence[str]],
 ) -> None:
-    """One right-column panel: controlled TPP for every matched pair, with its CI.
+    """One right-column panel: controlled TPP per Sanskrit arm, with both English controls.
+
+    Each x position is one Sanskrit arm (`controlled_panel_groups`), carrying up to two
+    markers: **filled** for the pair-matched `E1_*` control, **hollow** for the
+    byte-matched `E1_*_bm` twin, each with its 95% bootstrap CI. Reading them as a pair is
+    the point — the gap between them is what the reviewer's objection is worth, in TPP.
+
+    The `T7_byt5` pair is drawn as a dashed **byte reference line**: the same corpus
+    measured with no vocabulary at all, i.e. the ratio of the two sides' UTF-8 bytes. A
+    matched pair above it is spending more tokens than the raw text ratio would suggest;
+    the line moves per corpus, which is why it is drawn per panel rather than stated once.
 
     `pairs` is `config["controlled_pairs"]` (config order); a pair with no entry for this
-    corpus — because one of its arms was unavailable — is omitted from the x-axis rather
-    than drawn as a gap. The dashed line at 1.0 is the same reference the left column
-    uses, so the two columns are read against the same threshold.
+    corpus — because one of its arms was unavailable — is simply not drawn. The dashed line
+    at 1.0 is the same reference the left column uses.
     """
     corpus_controlled = controlled.get(corpus_name, {})
-    labels: list[str] = []
-    values: list[float] = []
-    lower_err: list[float] = []
-    upper_err: list[float] = []
-    for pair in pairs:
-        sanskrit_arm, english_arm = pair[0], pair[1]
-        entry = corpus_controlled.get(controlled_pair_key(sanskrit_arm, english_arm))
-        if entry is None:
-            continue
-        value = entry.get("value")
-        labels.append(controlled_pair_label(sanskrit_arm, english_arm))
-        if value is None:
-            values.append(math.nan)
-            lower_err.append(0.0)
-            upper_err.append(0.0)
-            continue
-        ci_low, ci_high = entry.get("ci_low"), entry.get("ci_high")
-        values.append(float(value))
-        lower_err.append(float(value) - ci_low if ci_low is not None else 0.0)
-        upper_err.append(ci_high - float(value) if ci_high is not None else 0.0)
+    groups = controlled_panel_groups(pairs)
 
-    positions = list(range(len(labels)))
-    axes.errorbar(
-        positions,
-        values,
-        yerr=[lower_err, upper_err],
-        fmt="o",
-        capsize=3,
-        color="#2f855a",
-        zorder=3,
+    labels: list[str] = []
+    bounds: list[float] = []
+    drawn: dict[str, bool] = {}
+    for position, (sanskrit_arm, english_arm, bm_arm) in enumerate(groups):
+        labels.append(controlled_pair_label(sanskrit_arm, english_arm or bm_arm or ""))
+        for offset, arm_name, color, hollow, label in (
+            (-CONTROLLED_OFFSET, english_arm, CONTROLLED_COLOR, False, CONTROLLED_LABEL),
+            (CONTROLLED_OFFSET, bm_arm, CONTROLLED_BM_COLOR, True, CONTROLLED_BM_LABEL),
+        ):
+            if arm_name is None:
+                continue
+            point = _controlled_point(
+                corpus_controlled.get(controlled_pair_key(sanskrit_arm, arm_name))
+            )
+            if point is None:
+                continue
+            value, lower, upper = point
+            axes.errorbar(
+                [position + offset],
+                [value],
+                yerr=[[lower], [upper]],
+                fmt="o",
+                capsize=3,
+                color=color,
+                markerfacecolor="none" if hollow else color,
+                label=None if drawn.get(label) else label,
+                zorder=3,
+            )
+            drawn[label] = True
+            bounds.extend((value - lower, value + upper))
+
+    byte_pair = next(
+        (
+            (pair[0], pair[1])
+            for pair in pairs
+            if len(pair) >= 2 and is_byte_reference_pair(pair[0], pair[1])
+        ),
+        None,
     )
+    if byte_pair is not None:
+        entry = corpus_controlled.get(controlled_pair_key(*byte_pair))
+        byte_value = None if entry is None else entry.get("value")
+        if byte_value is not None and math.isfinite(float(byte_value)):
+            axes.axhline(
+                float(byte_value),
+                linestyle=":",
+                color=BYTE_REFERENCE_COLOR,
+                linewidth=1.2,
+                label=BYTE_REFERENCE_LABEL,
+                zorder=2,
+            )
+            bounds.append(float(byte_value))
+
     axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
 
     # 1.0 is the threshold every one of these panels is read against, so it is kept
     # inside the axes with headroom rather than left to land on the frame, where a CI
     # sitting just below it is indistinguishable from one sitting just above.
-    finite = [
-        bound
-        for value, lower, upper in zip(values, lower_err, upper_err, strict=True)
-        if not math.isnan(value)
-        for bound in (value - lower, value + upper)
-    ]
-    if finite:
-        span_low, span_high = min([*finite, 1.0]), max([*finite, 1.0])
+    if bounds:
+        span_low, span_high = min([*bounds, 1.0]), max([*bounds, 1.0])
         span = span_high - span_low
         pad = span * FIGURE_Y_PAD_FRACTION if span > 0 else max(span_high * 0.2, 0.1)
         axes.set_ylim(span_low - pad, span_high + pad)
 
+    positions = list(range(len(labels)))
     axes.set_xticks(positions)
     axes.set_xticklabels(labels, rotation=40, ha="right", fontsize=6)
     axes.set_xlim(-0.5, max(len(positions) - 0.5, 0.5))
@@ -920,8 +1186,10 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
     produced a controlled comparison (`figure_pivot_controlled` and a non-empty
     `tpp_controlled`; otherwise the left column alone, so a `results.json` from before the
     E1 arms existed still plots). **Right column — the controlled comparison, and the one
-    to read first:** each matched pair's TPP with its CI, Sanskrit arm over the English
-    arm that matches it on algorithm, vocabulary size and training corpus. **Left column —
+    to read first:** one x position per Sanskrit arm, carrying its TPP against the
+    pair-matched `E1_*` control (filled) and against the byte-matched `E1_*_bm` twin
+    (hollow), each with its CI, plus a dotted byte-reference line at the `T7_byt5` ratio
+    (`_plot_controlled_panel`). **Left column —
     deployed practice:** every arm against `T0_o200k`, whose 200k general-domain
     vocabulary makes it a description of what today's tokenizers do, not a control.
 
@@ -979,8 +1247,15 @@ def _build_tpp_figure(results: Mapping[str, Any]) -> Any:
     axes_list = [row[0] for row in axes_grid]
 
     if show_controlled:
-        for row, entry in zip(axes_grid, corpus_entries, strict=True):
+        for row_index, (row, entry) in enumerate(zip(axes_grid, corpus_entries, strict=True)):
             _plot_controlled_panel(row[1], str(entry["name"]), controlled, controlled_pairs)
+            if row_index == 0:
+                # One legend for the whole column: the filled/hollow distinction and the
+                # byte line are the same in every panel, and repeating them four times
+                # would cost the panels the space their CIs need.
+                handles, legend_labels = row[1].get_legend_handles_labels()
+                if handles:
+                    row[1].legend(handles, legend_labels, fontsize=6, loc="best")
 
     for panel_index, (axes, entry) in enumerate(zip(axes_list, corpus_entries, strict=True)):
         corpus_name = str(entry["name"])
@@ -1537,6 +1812,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     np.random.seed(seed)
     n_bootstrap = int(config["n_bootstrap"])
     ci = float(config.get("ci", 0.95))
+    # The second interval: `None` leaves every summary exactly as it was before the block
+    # bootstrap existed (`summarise`), which is how a config from an earlier run replays.
+    block_length_value = config.get("block_length")
+    block_length = None if block_length_value is None else int(block_length_value)
 
     corpora_config: list[dict[str, Any]] = list(config["corpora"])
     if not corpora_config:
@@ -1591,7 +1870,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     arms, unavailable_arms = load_arms(all_arm_names)
 
     tpp_results = compute_tpp(
-        corpora, arms, sanskrit_arm_names, english_pivots, script_variants, n_bootstrap, seed, ci
+        corpora,
+        arms,
+        sanskrit_arm_names,
+        english_pivots,
+        script_variants,
+        n_bootstrap,
+        seed,
+        ci,
+        block_length,
     )
     controlled_selected = select_controlled_pairs(controlled_pairs, arms)
     tpp_controlled = compute_tpp_controlled(
@@ -1601,6 +1888,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         n_bootstrap,
         seed,
         ci,
+        block_length,
+    )
+    # Where each of those ratios comes from: a shorter Sanskrit side, or a tokenizer that
+    # charges less per character of it (docs/decisions.md, 2026-09-08).
+    side_decomposition = compute_side_decomposition(
+        corpora,
+        arms,
+        decomposition_pairs(arms, controlled_selected, sanskrit_arm_names, english_pivots),
     )
     hindi_corpus = next((c for c in corpora if c.name == hindi_pivot_corpus_name), None)
     if hindi_corpus is None:
@@ -1610,7 +1905,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             hindi_pivot_corpus_name,
         )
     tpp_hindi = compute_tpp_hindi(
-        hindi_corpus, arms, sanskrit_arm_names, script_variants, n_bootstrap, seed, ci
+        hindi_corpus,
+        arms,
+        sanskrit_arm_names,
+        script_variants,
+        n_bootstrap,
+        seed,
+        ci,
+        block_length,
     )
     length_bin_edges = [
         int(edge) for edge in config.get("length_bin_edges", LENGTH_BIN_EDGES_DEFAULT)
@@ -1619,7 +1921,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         int(edge) for edge in config.get("length_bin_edges_sa", LENGTH_BIN_EDGES_SA_DEFAULT)
     ]
     length_pairs = select_length_pairs(
-        arms, sanskrit_arm_names, english_pivots, controlled_selected, script_variants
+        arms,
+        sanskrit_arm_names,
+        english_pivots,
+        controlled_selected,
+        script_variants,
+        [str(name) for name in config.get("length_strata_skip_arms", [])],
     )
     length_sparse_below = int(config.get("length_sparse_below", LENGTH_SPARSE_BELOW_DEFAULT))
     tpp_by_length = compute_tpp_by_length(
@@ -1632,6 +1939,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ci,
         sparse_below=length_sparse_below,
         bin_on=BIN_ON_ENGLISH,
+        block_length=block_length,
     )
     # The mirror stratification (docs/decisions.md, 2026-09-07): the same pairs and the
     # same measurement, binned on the other side, so that a length gradient can be told
@@ -1646,6 +1954,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ci,
         sparse_below=length_sparse_below,
         bin_on=BIN_ON_SANSKRIT,
+        block_length=block_length,
     )
     fertility_results, compression_results = compute_fertility_compression(
         corpora, arms, sanskrit_arm_names, script_variants
@@ -1672,6 +1981,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "exclusion_check": exclusion_check,
         "exclusion_check_en": exclusion_check_en,
         "tpp_controlled": tpp_controlled,
+        "side_decomposition": side_decomposition,
         "tpp": tpp_results,
         "tpp_hindi": tpp_hindi,
         "tpp_by_length": tpp_by_length,

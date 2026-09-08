@@ -1,14 +1,18 @@
 # Provisional T1/T2 tokenizer training and the matched English control E1 (exp02 Tasks 4, 6).
 #
 # Trains BPE and Unigram tokenizers on the Sanskrit side of the Sāmayik and Itihāsa
-# *training* splits, in SLP1, at matched 32k/64k vocabulary sizes (CLAUDE.md §2.5). These
-# arms are provisional (docs/decisions.md, "Provisional T1/T2 tokenizers..."): they will
+# *training* splits, in SLP1, at matched 32k/64k/128k vocabulary sizes (CLAUDE.md §2.5).
+# These arms are provisional (docs/decisions.md, "Provisional T1/T2 tokenizers..."): they will
 # be retrained on the monolingual corpus (DCS, GRETIL, Wikipedia) once milestone M1 lands.
 #
 # The `E1_*` arms (`side: en`) are the matched English control: same algorithms, same
 # vocabulary sizes, same trainer settings, trained on the *English* side of those same
 # training splits (docs/decisions.md, "Add a matched English control family E1 for TPP").
 # The English corpus is not transliterated and is asserted against its own exclusion list.
+# The `E1_*_bm` arms (`side: en_bm`) are the same control on a byte-matched subsample of
+# that English corpus (docs/decisions.md, 2026-09-08); every family is trained at 32k, 64k
+# and 128k so a controlled result can be checked against the vocabulary size it was
+# measured at.
 #
 # The `T4_*` arms (`side: sa_split`, Experiment 03) are the same again one transform over:
 # the same Devanagari sentences as `T1`/`T2`, written to the corpus as ByT5-Sanskrit's
@@ -22,6 +26,14 @@
 
 corpus_path: data/processed/tok_train_slp1.txt
 english_corpus_path: data/processed/tok_train_en.txt
+
+# The byte-matched English corpus (`side: en_bm`, the `E1_*_bm` arms): a deterministic
+# subsample of `english_corpus_path` cut to `corpus_path`'s UTF-8 byte count, written by
+# this script (`build_byte_matched_corpus`) with `manifest_en_bm.json` beside it. The
+# pair-matched English corpus is 48% larger in bytes than the Sanskrit one at the same
+# sentence count, so "the same corpus" has two readings and the two families measure both.
+english_bm_corpus_path: data/processed/tok_train_en_bm.txt
+byte_match_seed: 0
 split_corpus_path: data/processed/tok_train_slp1_split.txt
 
 # Both written by experiments/03_sandhi_split/split_corpora.py; read-only here. The
@@ -76,6 +88,46 @@ arms:
     algo: unigram
     vocab_size: 64000
     side: en
+  - name: T1_bpe_raw_128k
+    algo: bpe
+    vocab_size: 128000
+    side: sa
+  - name: T2_unigram_raw_128k
+    algo: unigram
+    vocab_size: 128000
+    side: sa
+  - name: E1_bpe_128k
+    algo: bpe
+    vocab_size: 128000
+    side: en
+  - name: E1_unigram_128k
+    algo: unigram
+    vocab_size: 128000
+    side: en
+  - name: E1_bpe_32k_bm
+    algo: bpe
+    vocab_size: 32000
+    side: en_bm
+  - name: E1_bpe_64k_bm
+    algo: bpe
+    vocab_size: 64000
+    side: en_bm
+  - name: E1_bpe_128k_bm
+    algo: bpe
+    vocab_size: 128000
+    side: en_bm
+  - name: E1_unigram_32k_bm
+    algo: unigram
+    vocab_size: 32000
+    side: en_bm
+  - name: E1_unigram_64k_bm
+    algo: unigram
+    vocab_size: 64000
+    side: en_bm
+  - name: E1_unigram_128k_bm
+    algo: unigram
+    vocab_size: 128000
+    side: en_bm
   - name: T4_bpe_split_32k
     algo: bpe
     vocab_size: 32000

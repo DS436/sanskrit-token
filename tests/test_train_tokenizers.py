@@ -27,7 +27,11 @@ from sanskrit_tok.data.exclusion import (
     sentence_hash_en,
 )
 from sanskrit_tok.encoding import from_slp1, to_slp1
-from sanskrit_tok.tokenizers.corpus import build_training_corpus, filter_leaked_sentences
+from sanskrit_tok.tokenizers.corpus import (
+    build_training_corpus,
+    byte_matched_prefix,
+    filter_leaked_sentences,
+)
 from sanskrit_tok.tokenizers.registry import load_tokenizer
 from sanskrit_tok.tokenizers.train_bpe import train_bpe
 from sanskrit_tok.tokenizers.train_unigram import train_unigram
@@ -288,7 +292,247 @@ def test_tokenizers_yaml_declares_the_english_control_arms_and_sides() -> None:
     assert by_name["E1_bpe_64k"]["vocab_size"] == 64000
     assert by_name["E1_unigram_32k"]["algo"] == "unigram"
     assert by_name["E1_unigram_64k"]["vocab_size"] == 64000
-    assert all(by_name[name]["side"] == "en" for name in by_name if name.startswith("E1_"))
+    pair_matched = [
+        name for name in by_name if name.startswith("E1_") and not name.endswith("_bm")
+    ]
+    assert all(by_name[name]["side"] == "en" for name in pair_matched)
+
+
+def test_tokenizers_yaml_declares_the_byte_matched_control_arms() -> None:
+    """The `_bm` half of the E1 family: same algorithms and sizes, `side: en_bm`, cut to
+    the Sanskrit corpus's byte count (docs/decisions.md, 2026-09-08)."""
+    config = yaml.safe_load(TOKENIZERS_YAML.read_text(encoding="utf-8"))
+
+    assert config["english_bm_corpus_path"] == "data/processed/tok_train_en_bm.txt"
+    assert config["byte_match_seed"] == 0
+
+    by_name = {arm["name"]: arm for arm in config["arms"]}
+    byte_matched = [name for name in by_name if name.endswith("_bm")]
+    assert sorted(byte_matched) == sorted(
+        f"E1_{algo}_{size}_bm" for algo in ("bpe", "unigram") for size in ("32k", "64k", "128k")
+    )
+    for name in byte_matched:
+        assert by_name[name]["side"] == "en_bm"
+        assert by_name[name]["algo"] == ("bpe" if "_bpe_" in name else "unigram")
+    assert by_name["E1_bpe_128k_bm"]["vocab_size"] == 128000
+
+
+def test_tokenizers_yaml_declares_every_family_at_three_vocabulary_sizes() -> None:
+    """CLAUDE.md §2.5: a controlled comparison is at matched vocabulary sizes, and the 128k
+    row exists so a result can be checked against the size it was measured at."""
+    config = yaml.safe_load(TOKENIZERS_YAML.read_text(encoding="utf-8"))
+    by_name = {arm["name"]: arm["vocab_size"] for arm in config["arms"]}
+    for name, size in (
+        ("T1_bpe_raw_128k", 128000),
+        ("T2_unigram_raw_128k", 128000),
+        ("E1_bpe_128k", 128000),
+        ("E1_unigram_128k", 128000),
+    ):
+        assert by_name[name] == size
+
+
+# ------------------------------------------------------- the byte-matched English corpus
+
+
+def test_byte_matched_prefix_stops_as_soon_as_it_reaches_the_target() -> None:
+    """Each line below is 4 bytes written (3 + the newline), so 3 lines is 12 bytes: a
+    target of 9 or 12 takes 3 lines, and 13 takes 4."""
+    lines = [f"ab{index}" for index in range(10)]
+    assert len(byte_matched_prefix(lines, 9, seed=0)) == 3
+    assert len(byte_matched_prefix(lines, 12, seed=0)) == 3
+    assert len(byte_matched_prefix(lines, 13, seed=0)) == 4
+    assert byte_matched_prefix(lines, 0, seed=0) == []
+
+
+def test_byte_matched_prefix_counts_utf8_bytes_not_characters() -> None:
+    """One Devanagari character is three UTF-8 bytes, so a 4-byte budget takes one line."""
+    lines = ["\u0915", "\u0916", "\u0917"]
+    assert len(byte_matched_prefix(lines, 4, seed=0)) == 1
+    assert len(byte_matched_prefix(lines, 5, seed=0)) == 2
+
+
+def test_byte_matched_prefix_is_deterministic_and_seed_dependent() -> None:
+    lines = [f"line-{index}" for index in range(200)]
+    first = byte_matched_prefix(lines, 300, seed=0)
+    assert first == byte_matched_prefix(lines, 300, seed=0)
+    assert first != byte_matched_prefix(lines, 300, seed=1)
+    assert set(first) <= set(lines) and len(set(first)) == len(first)
+
+
+def test_byte_matched_prefix_returns_everything_when_the_corpus_is_too_small() -> None:
+    lines = ["a", "b", "c"]
+    assert sorted(byte_matched_prefix(lines, 10_000, seed=0)) == ["a", "b", "c"]
+
+
+def test_byte_matched_prefix_rejects_a_negative_target() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        byte_matched_prefix(["a"], -1, seed=0)
+
+
+def test_arm_side_accepts_the_byte_matched_english_side() -> None:
+    assert train_tokenizers.arm_side({"name": "E1_bpe_32k_bm", "side": "en_bm"}) == "en_bm"
+
+
+def test_side_spec_for_the_byte_matched_side_points_at_its_own_corpus_and_manifest(
+    tmp_path: Path,
+) -> None:
+    """Same exclusion list and hash function as the pair-matched English side — it is the
+    same text — but its own corpus file and manifest, so the two cannot overwrite each
+    other's provenance."""
+    config = {
+        "corpus_path": "data/processed/tok_train_slp1.txt",
+        "english_corpus_path": "data/processed/tok_train_en.txt",
+        "english_bm_corpus_path": "data/processed/tok_train_en_bm.txt",
+        "english_exclusion_path": "data/exclusion_hashes_en.txt",
+        "english_sources": ["samayik_train_en"],
+        "sources": ["samayik_train"],
+        "exclusion_path": "data/exclusion_hashes.txt",
+    }
+    spec = train_tokenizers.side_spec("en_bm", config, tmp_path)
+    plain = train_tokenizers.side_spec("en", config, tmp_path)
+
+    assert spec.corpus_path == tmp_path / "data/processed/tok_train_en_bm.txt"
+    assert spec.manifest_path == tmp_path / "data/processed/manifest_en_bm.json"
+    assert spec.exclusion_path == plain.exclusion_path
+    assert spec.hash_fn is plain.hash_fn
+    assert spec.transform is plain.transform
+    assert spec.precheck is None
+
+
+def _write_parallel_corpora(
+    processed: Path, sanskrit: list[str], english: list[str]
+) -> None:
+    """Write `sa.txt` and `en.txt` plus the `manifest_en.json` that makes the English
+    corpus *current*, so `build_byte_matched_corpus` subsamples it instead of rebuilding
+    it from sources (which is what it does in a real run, where the corpus already exists).
+    """
+    (processed / "sa.txt").write_text("\n".join(sanskrit) + "\n", encoding="utf-8")
+    english_path = processed / "en.txt"
+    english_path.write_text("\n".join(english) + "\n", encoding="utf-8")
+    (processed / "manifest_en.json").write_text(
+        json.dumps(
+            {
+                "n_in": {"fixture": len(english)},
+                "n_out": len(english),
+                "n_dedup_removed": 0,
+                "sha256": hashlib.sha256(english_path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_build_byte_matched_corpus_cuts_to_the_sanskrit_byte_count(tmp_path: Path) -> None:
+    """The whole point of the family, on a miniature corpus: the written file's byte count
+    reaches the reference corpus's and overshoots by at most one line, the manifest records
+    both sizes and their ratio, and it is a strict subset of the pair-matched corpus."""
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+    sanskrit = [f"vAkyam {index}" for index in range(20)]
+    english = [f"english sentence number {index}" for index in range(60)]
+    _write_parallel_corpora(processed, sanskrit, english)
+    (tmp_path / "exclusion_en.txt").write_text("", encoding="utf-8")
+    config = {
+        "corpus_path": "data/processed/sa.txt",
+        "english_corpus_path": "data/processed/en.txt",
+        "english_bm_corpus_path": "data/processed/en_bm.txt",
+        "english_exclusion_path": "exclusion_en.txt",
+        "english_sources": [],
+        "sources": [],
+        "exclusion_path": "exclusion_en.txt",
+        "byte_match_seed": 0,
+    }
+
+    manifest = train_tokenizers.build_byte_matched_corpus(config, tmp_path)
+
+    written = (processed / "en_bm.txt").read_text(encoding="utf-8").splitlines()
+    reference_bytes = (processed / "sa.txt").stat().st_size
+    assert set(written) < set(english)
+    assert manifest["reference"]["bytes"] == reference_bytes
+    assert manifest["bytes"] >= reference_bytes
+    assert manifest["bytes"] - reference_bytes <= max(
+        len(line.encode("utf-8")) + 1 for line in written
+    )
+    assert manifest["n_out"] == len(written)
+    assert manifest["bytes_ratio_to_reference"] == manifest["bytes"] / reference_bytes
+    assert manifest["chars"] == sum(len(line) + 1 for line in written)
+    assert manifest["n_leaked"] == 0 and manifest["n_checked"] == len(written)
+
+
+def test_build_byte_matched_corpus_reuses_a_current_corpus(tmp_path: Path) -> None:
+    """A second call must not redraw the subsample: the arms' numbers are attached to the
+    corpus that was actually written (`corpus_is_current`)."""
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+    _write_parallel_corpora(
+        processed,
+        [f"vAkyam {index}" for index in range(20)],
+        [f"sentence {index}" for index in range(60)],
+    )
+    (tmp_path / "exclusion_en.txt").write_text("", encoding="utf-8")
+    config = {
+        "corpus_path": "data/processed/sa.txt",
+        "english_corpus_path": "data/processed/en.txt",
+        "english_bm_corpus_path": "data/processed/en_bm.txt",
+        "english_exclusion_path": "exclusion_en.txt",
+        "english_sources": [],
+        "sources": [],
+        "exclusion_path": "exclusion_en.txt",
+    }
+
+    first = train_tokenizers.build_byte_matched_corpus(config, tmp_path)
+    written = (processed / "en_bm.txt").read_text(encoding="utf-8")
+    second = train_tokenizers.build_byte_matched_corpus(config, tmp_path)
+
+    assert (processed / "en_bm.txt").read_text(encoding="utf-8") == written
+    assert second["sha256"] == first["sha256"]
+
+
+def test_build_byte_matched_corpus_raises_on_a_leaked_line(tmp_path: Path) -> None:
+    """The corpus it is cut from is already filtered, so a hit here means that corpus is
+    stale — a hard stop, not a silent drop (CLAUDE.md §2.4)."""
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+    _write_parallel_corpora(
+        processed,
+        [f"vAkyam {index}" for index in range(20)],
+        [f"sentence {index}" for index in range(60)],
+    )
+    (tmp_path / "exclusion_en.txt").write_text(
+        "\n".join(sentence_hash_en(f"sentence {i}") for i in range(60)) + "\n",
+        encoding="utf-8",
+    )
+    config = {
+        "corpus_path": "data/processed/sa.txt",
+        "english_corpus_path": "data/processed/en.txt",
+        "english_bm_corpus_path": "data/processed/en_bm.txt",
+        "english_exclusion_path": "exclusion_en.txt",
+        "english_sources": [],
+        "sources": [],
+        "exclusion_path": "exclusion_en.txt",
+    }
+    with pytest.raises(LeakageError, match="exclusion list"):
+        train_tokenizers.build_byte_matched_corpus(config, tmp_path)
+
+
+def test_training_corpus_sizes_report_bytes_and_chars_per_side(tmp_path: Path) -> None:
+    """SLP1 is ASCII, so the Sanskrit corpus's bytes and chars coincide; an English corpus
+    with a non-ASCII character does not, and both numbers are recorded."""
+    processed = tmp_path / "data" / "processed"
+    processed.mkdir(parents=True)
+    (processed / "sa.txt").write_text("rAmaH gacCati\n", encoding="utf-8")
+    (processed / "en.txt").write_text("Rama go\u0113s\n", encoding="utf-8")
+    config = {
+        "corpus_path": "data/processed/sa.txt",
+        "english_corpus_path": "data/processed/en.txt",
+        "english_bm_corpus_path": "data/processed/absent.txt",
+    }
+
+    stats = train_tokenizers.training_corpus_stats(config, tmp_path)
+
+    assert set(stats) == {"sa", "en"}  # the byte-matched corpus does not exist yet
+    assert stats["sa"] == {"n_lines": 1, "bytes": 14, "chars": 14}
+    assert stats["en"] == {"n_lines": 1, "bytes": 11, "chars": 10}
 
 
 # ------------------------------------------------------------------------------ train_bpe

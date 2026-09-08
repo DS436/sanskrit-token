@@ -121,15 +121,16 @@ Each `experiments/NN_name/` has `run.py`, `config.yaml`, and a `README.md` stati
 | Key | Description |
 |-----|-------------|
 | `T0_llama4`, `T0_gemma3`, `T0_o200k` | Off-the-shelf English-centric |
-| `T1_bpe_raw_{32k,64k}` | BPE on raw sandhied Sanskrit |
-| `T2_unigram_raw_{32k,64k}` | Unigram on raw Sanskrit |
+| `T1_bpe_raw_{32k,64k,128k}` | BPE on raw sandhied Sanskrit |
+| `T2_unigram_raw_{32k,64k,128k}` | Unigram on raw Sanskrit |
 | `T3_sarvam`, `T3_sutra`, `T3_indicsuper`, `T3_brahmic131k` | Off-the-shelf Indic |
 | `T4_bpe_split_{32k,64k}`, `T4_unigram_split_{32k,64k}` | Sandhi-split then subword |
 | `T5_morphbpe_raw_{32k,64k}` | Morpheme-constrained merges on raw |
 | `T5_morphbpe_rawseg_{32k,64k}` | Merges constrained on gold **segment** boundaries only, on raw |
 | `T6_morphbpe_split_{32k,64k}` | Sandhi-split + morpheme-constrained (**proposed**) |
 | `T7_byt5` | Byte-level, no subword |
-| `E1_bpe_{32k,64k}`, `E1_unigram_{32k,64k}` | Matched English control trained on the English side of the same corpus |
+| `E1_bpe_{32k,64k,128k}`, `E1_unigram_{32k,64k,128k}` | Matched English control trained on the English side of the same corpus |
+| `E1_bpe_{32k,64k,128k}_bm`, `E1_unigram_{32k,64k,128k}_bm` | Byte-matched English control: English side subsampled to the Sanskrit corpus's UTF-8 byte count |
 
 Ablation suffixes: `_deva` / `_slp1` / `_iast` for script; `_oracle` for gold splits.
 

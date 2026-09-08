@@ -47,6 +47,7 @@ SCRIPT_VARIANTS = {
     "T3": ["original", "slp1"],
     "T1": ["slp1"],
     "T2": ["slp1"],
+    "T7": ["original", "slp1"],
 }
 
 
@@ -1066,3 +1067,361 @@ def test_make_figure_writes_the_length_figure_too(tmp_path: Path) -> None:
     assert [path.name for path in length_paths] == ["tpp_by_length.pdf", "tpp_by_length.png"]
     for path in length_paths:
         assert path.exists() and path.stat().st_size > 0
+
+
+# --- the byte-matched control, the byte reference and the side decomposition ------------
+
+
+def _decomposition_corpus() -> object:
+    """One corpus whose two sides have hand-countable characters and bytes.
+
+    The Sanskrit side is given in both variants: `original` is Devanagari (three UTF-8
+    bytes per character) and `slp1` its ASCII transliteration, so a test can tell a
+    character count from a byte count.
+    """
+    return run.CorpusData(
+        name="corpus_a",
+        split="test",
+        n_total=2,
+        n_used=2,
+        sanskrit={
+            run.ORIGINAL: ["रामः", "सीता"],
+            run.SLP1: ["rAmaH", "sItA"],
+        },
+        english=["Rama", "Sita speaks"],
+        hindi=None,
+    )
+
+
+def _byte_arm(name: str) -> object:
+    """A `LoadedTokenizer` emitting one id per UTF-8 byte, like the real `T7_byt5`."""
+    return run.LoadedTokenizer(
+        name=name,
+        source_id="bytes/utf-8",
+        vocab_size=256,
+        _encode=lambda text: list(text.encode("utf-8")),
+        family="T7",
+        attempted=("bytes",),
+    )
+
+
+def test_arm_label_writes_a_sub_thousand_vocabulary_in_full() -> None:
+    """`T7_byt5` has 256 ids; "0k" would read as a bug rather than as a byte vocabulary."""
+    assert run.arm_label("T7_byt5", 256) == "T7_byt5 (256)"
+
+
+def test_select_controlled_pairs_accepts_the_same_arm_on_both_sides() -> None:
+    """The byte reference is `T7_byt5` over `T7_byt5` — a ratio of byte counts, which is
+    the one controlled row that owes nothing to any vocabulary."""
+    arms = {"T7_byt5": _byte_arm("T7_byt5")}
+    assert run.select_controlled_pairs(
+        [["T7_byt5", "T7_byt5"]],
+        arms,  # type: ignore[arg-type]
+    ) == [("T7_byt5", "T7_byt5")]
+
+
+def test_is_byte_reference_pair_only_for_the_byte_arm_on_both_sides() -> None:
+    assert run.is_byte_reference_pair("T7_byt5", "T7_byt5")
+    assert not run.is_byte_reference_pair("T7_byt5", "E1_bpe_32k")
+    assert not run.is_byte_reference_pair("T1_bpe_raw_32k", "T1_bpe_raw_32k")
+
+
+def test_compute_side_decomposition_is_keyed_by_corpus_and_pair_and_multiplies_back() -> None:
+    corpus = _decomposition_corpus()
+    arms = {
+        "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+        "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+    }
+    results = run.compute_side_decomposition(
+        [corpus],  # type: ignore[list-item]
+        arms,  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+    )
+    entry = results["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+    assert entry["variant"] == run.SLP1 and entry["n"] == 2
+    # SLP1 is ASCII: "rAmaH" + "sItA" is 9 characters and 9 bytes; the English side is
+    # "Rama" + "Sita speaks" = 15 of each. Both fakes emit one id per character.
+    assert entry["chars_sa"] == 9 and entry["bytes_sa"] == 9
+    assert entry["chars_en"] == 15 and entry["bytes_en"] == 15
+    assert entry["tokens_sa"] == 9 and entry["tokens_en"] == 15
+    assert entry["char_ratio"] == pytest.approx(9 / 15)
+    assert entry["density_ratio"] == pytest.approx(1.0)
+    assert entry["tpp"] == pytest.approx(9 / 15)
+    assert abs(entry["char_ratio"] * entry["density_ratio"] - entry["tpp"]) < 1e-9
+
+
+def test_side_decomposition_of_the_byte_arm_is_the_ratio_of_bytes() -> None:
+    """The check the experiment's verification runs: a byte arm's token count *is* its byte
+    count, so its `tpp` must equal `bytes_sa / bytes_en` exactly."""
+    corpus = _decomposition_corpus()
+    results = run.compute_side_decomposition(
+        [corpus],  # type: ignore[list-item]
+        {"T7_byt5": _byte_arm("T7_byt5")},  # type: ignore[arg-type]
+        [("T7_byt5", "T7_byt5")],
+    )
+    entry = results["corpus_a"]["T7_byt5/T7_byt5"]
+    assert entry["tpp"] == pytest.approx(entry["bytes_sa"] / entry["bytes_en"])
+
+
+def test_side_decomposition_reads_the_original_script_when_asked() -> None:
+    """`variant` is part of the entry because the character counts depend on it: the same
+    sentences in Devanagari are three bytes per character and fewer characters."""
+    corpus = _decomposition_corpus()
+    results = run.compute_side_decomposition(
+        [corpus],  # type: ignore[list-item]
+        {"T7_byt5": _byte_arm("T7_byt5")},  # type: ignore[arg-type]
+        [("T7_byt5", "T7_byt5")],
+        variant=run.ORIGINAL,
+    )
+    entry = results["corpus_a"]["T7_byt5/T7_byt5"]
+    assert entry["variant"] == run.ORIGINAL
+    assert entry["chars_sa"] == 8  # रामः + सीता
+    assert entry["bytes_sa"] == 24  # three UTF-8 bytes per Devanagari character
+
+
+def test_decomposition_pairs_takes_controlled_then_the_primary_pivot() -> None:
+    arms = {
+        "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+        "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        "T0_o200k": _char_arm("T0_o200k", "T0"),
+        "T7_byt5": _byte_arm("T7_byt5"),
+    }
+    pairs = run.decomposition_pairs(
+        arms,  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k"), ("T7_byt5", "T7_byt5")],
+        ["T1_bpe_raw_32k", "T7_byt5", "T3_missing"],
+        ["T0_o200k", "T0_llama4"],
+    )
+    assert pairs == [
+        ("T1_bpe_raw_32k", "E1_bpe_32k"),
+        ("T7_byt5", "T7_byt5"),
+        ("T1_bpe_raw_32k", "T0_o200k"),
+        ("T7_byt5", "T0_o200k"),
+    ]
+
+
+def test_decomposition_pairs_without_an_available_pivot_is_the_controlled_set() -> None:
+    arms = {"T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1")}
+    assert run.decomposition_pairs(
+        arms,  # type: ignore[arg-type]
+        [],
+        ["T1_bpe_raw_32k"],
+        ["T0_o200k"],
+    ) == []
+
+
+# --- the block bootstrap, as wired into every stored summary ---------------------------
+
+
+def test_compute_tpp_controlled_adds_the_block_interval_when_asked() -> None:
+    corpus = _one_corpus()
+    arms = _controlled_arms()
+    with_block = run.compute_tpp_controlled(
+        [corpus],
+        arms,  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        n_bootstrap=20,
+        seed=0,
+        ci=0.95,
+        block_length=1,
+    )["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+    without = run.compute_tpp_controlled(
+        [corpus],
+        arms,  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        n_bootstrap=20,
+        seed=0,
+        ci=0.95,
+    )["corpus_a"]["T1_bpe_raw_32k/E1_bpe_32k"]
+
+    assert set(with_block) - set(without) == set(run.BLOCK_KEYS)
+    assert all(with_block[key] == without[key] for key in without)
+    # blocks of one pair are the i.i.d. resample itself
+    assert with_block["ci_low_block"] == with_block["ci_low"]
+    assert with_block["block_length"] == 1 and with_block["n_blocks"] == 2
+
+
+def test_compute_tpp_and_hindi_and_length_carry_the_block_keys() -> None:
+    arms = {
+        "T0_o200k": _char_arm("T0_o200k", "T0"),
+        "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+    }
+    deployed = run.compute_tpp(
+        [_one_corpus()],
+        arms,  # type: ignore[arg-type]
+        ["T1_bpe_raw_32k"],
+        ["T0_o200k"],
+        {"T1": ["slp1"]},
+        n_bootstrap=10,
+        seed=0,
+        ci=0.95,
+        block_length=2,
+    )
+    summary = deployed["corpus_a"]["T1_bpe_raw_32k"]["slp1"]["T0_o200k"]
+    assert all(key in summary for key in run.BLOCK_KEYS)
+
+    strata = run.compute_tpp_by_length(
+        [_decomposition_corpus()],  # type: ignore[list-item]
+        arms,  # type: ignore[arg-type]
+        [("T1_bpe_raw_32k", run.SLP1, "T0_o200k")],
+        [1, 3],
+        n_bootstrap=10,
+        seed=0,
+        ci=0.95,
+        block_length=2,
+    )
+    for bins in strata["corpus_a"]["T1_bpe_raw_32k/T0_o200k"].values():
+        assert all(key in bins for key in run.BLOCK_KEYS)
+
+
+def test_summarise_leaves_a_summary_untouched_without_a_block_interval() -> None:
+    """Every leaf of a `results.json` written before the block bootstrap must be
+    reproducible key-for-key by a run that does not configure one."""
+    raw = {
+        "value": 1.0,
+        "n": 2,
+        "unit": "tokens/proposition ratio",
+        "per_pair": [1.0, 1.0],
+        "n_undefined": 0,
+        "source_tokens": 4,
+        "pivot_tokens": 4,
+        "ci_low": 1.0,
+        "ci_high": 1.0,
+        "n_bootstrap": 10,
+        "seed": 0,
+    }
+    assert not [key for key in run.summarise(raw, 0.95) if key in run.BLOCK_KEYS]
+
+
+# --- length strata: skipped arms --------------------------------------------------------
+
+
+def test_select_length_pairs_skips_the_configured_arms_on_both_sides() -> None:
+    arms = {
+        "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+        "T1_bpe_raw_128k": _char_arm("T1_bpe_raw_128k", "T1"),
+        "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        "E1_bpe_128k": _char_arm("E1_bpe_128k", "E1"),
+        "T0_o200k": _char_arm("T0_o200k", "T0"),
+        "T7_byt5": _byte_arm("T7_byt5"),
+    }
+    pairs = run.select_length_pairs(
+        arms,  # type: ignore[arg-type]
+        ["T1_bpe_raw_32k", "T1_bpe_raw_128k", "T7_byt5"],
+        ["T0_o200k"],
+        [
+            ("T1_bpe_raw_32k", "E1_bpe_32k"),
+            ("T1_bpe_raw_128k", "E1_bpe_128k"),
+            ("T7_byt5", "T7_byt5"),
+        ],
+        SCRIPT_VARIANTS,
+        ["T1_bpe_raw_128k", "E1_bpe_128k", "T7_byt5"],
+    )
+    assert pairs == [
+        ("T1_bpe_raw_32k", run.SLP1, "E1_bpe_32k"),
+        ("T1_bpe_raw_32k", run.SLP1, "T0_o200k"),
+    ]
+
+
+def test_select_length_pairs_skips_nothing_by_default() -> None:
+    arms = {
+        "T1_bpe_raw_32k": _char_arm("T1_bpe_raw_32k", "T1"),
+        "E1_bpe_32k": _char_arm("E1_bpe_32k", "E1"),
+        "T0_o200k": _char_arm("T0_o200k", "T0"),
+    }
+    pairs = run.select_length_pairs(
+        arms,  # type: ignore[arg-type]
+        ["T1_bpe_raw_32k"],
+        ["T0_o200k"],
+        [("T1_bpe_raw_32k", "E1_bpe_32k")],
+        SCRIPT_VARIANTS,
+    )
+    assert pairs == [
+        ("T1_bpe_raw_32k", run.SLP1, "E1_bpe_32k"),
+        ("T1_bpe_raw_32k", run.SLP1, "T0_o200k"),
+    ]
+
+
+# --- the controlled column, with both English controls and the byte reference -----------
+
+
+def test_controlled_panel_groups_pairs_each_sanskrit_arm_with_both_controls() -> None:
+    groups = run.controlled_panel_groups(
+        [
+            ["T1_bpe_raw_32k", "E1_bpe_32k"],
+            ["T2_unigram_raw_32k", "E1_unigram_32k"],
+            ["T1_bpe_raw_32k", "E1_bpe_32k_bm"],
+            ["T7_byt5", "T7_byt5"],
+        ]
+    )
+    assert groups == [
+        ("T1_bpe_raw_32k", "E1_bpe_32k", "E1_bpe_32k_bm"),
+        ("T2_unigram_raw_32k", "E1_unigram_32k", None),
+    ]
+
+
+def test_controlled_panel_groups_keeps_an_arm_with_only_a_byte_matched_control() -> None:
+    assert run.controlled_panel_groups([["T1_bpe_raw_32k", "E1_bpe_32k_bm"]]) == [
+        ("T1_bpe_raw_32k", None, "E1_bpe_32k_bm")
+    ]
+
+
+def _synthetic_results_with_both_controls() -> dict[str, object]:
+    results = _synthetic_results_with_control()
+    config = results["config"]
+    assert isinstance(config, dict)
+    config["controlled_pairs"] = [
+        ["T1_bpe_raw_32k", "E1_bpe_32k"],
+        ["T1_bpe_raw_32k", "E1_bpe_32k_bm"],
+        ["T7_byt5", "T7_byt5"],
+    ]
+    sources = results["tokenizer_sources"]
+    assert isinstance(sources, dict)
+    sources["E1_bpe_32k_bm"] = {"source_id": "en_bm.json", "vocab_size": 32000, "family": "E1"}
+    controlled = results["tpp_controlled"]
+    assert isinstance(controlled, dict)
+    for corpus_name, value in (("corpus_a", 0.9), ("corpus_b", 1.2)):
+        controlled[corpus_name]["T1_bpe_raw_32k/E1_bpe_32k_bm"] = {
+            "value": value,
+            "ci_low": value - 0.05,
+            "ci_high": value + 0.05,
+            "n": 5,
+            "unit": "x",
+        }
+        controlled[corpus_name]["T7_byt5/T7_byt5"] = {
+            "value": 0.75,
+            "ci_low": 0.75,
+            "ci_high": 0.75,
+            "n": 5,
+            "unit": "x",
+        }
+    return results
+
+
+def test_build_tpp_figure_draws_both_controls_at_one_x_position_with_a_byte_line() -> None:
+    """Two markers per Sanskrit arm (filled = pair-matched, hollow = byte-matched) and a
+    dotted reference line at the byte ratio, so the reviewer's objection is readable off
+    the panel rather than only off the table."""
+    import matplotlib.pyplot as plt
+
+    figure = run._build_tpp_figure(_synthetic_results_with_both_controls())
+    try:
+        controlled_axes = figure.axes[1]
+        # one x position, not two: both controls sit on the same Sanskrit arm
+        assert [label.get_text() for label in controlled_axes.get_xticklabels()] == [
+            "T1_bpe_raw_32k* / E1_bpe_32k"
+        ]
+        byte_lines = [
+            line
+            for line in controlled_axes.get_lines()
+            if line.get_linestyle() == ":" and line.get_ydata()[0] == 0.75
+        ]
+        assert byte_lines, "the byte reference line is missing"
+        legend = controlled_axes.get_legend()
+        assert legend is not None
+        legend_labels = [text.get_text() for text in legend.get_texts()]
+        assert run.CONTROLLED_LABEL in legend_labels
+        assert run.CONTROLLED_BM_LABEL in legend_labels
+        assert run.BYTE_REFERENCE_LABEL in legend_labels
+    finally:
+        plt.close(figure)

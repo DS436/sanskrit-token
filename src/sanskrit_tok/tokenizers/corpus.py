@@ -37,6 +37,7 @@ on the transformed text on top.
 
 import hashlib
 import logging
+import random
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from sanskrit_tok.encoding import to_slp1
 
 __all__ = [
     "build_training_corpus",
+    "byte_matched_prefix",
     "deduplicate_sources",
     "filter_leaked_sentences",
     "identity_transform",
@@ -67,6 +69,52 @@ def identity_transform(text: str) -> str:
     a corpus built without transliteration says so in a traceback.
     """
     return text
+
+
+def byte_matched_prefix(
+    lines: Sequence[str], target_bytes: int, *, seed: int = 0
+) -> list[str]:
+    """A deterministic subsample of `lines` whose written size first reaches `target_bytes`.
+
+    The English side of the Sāmayik + Itihāsa training splits is 16,554,871 bytes against
+    the Sanskrit side's 11,209,356 — one sentence per pair, but 48% more text, because an
+    English sentence spells out what sandhi and compounding pack into one Sanskrit word.
+    Matching the two corpora on *sentences* therefore leaves them unmatched on *bytes*, and
+    a reviewer can read the English control's cheaper tokenization as the extra text rather
+    than as the language. This function cuts the English side to the Sanskrit side's byte
+    count so that the two readings can be told apart; the pair-matched corpus is kept and
+    both are trained on (docs/decisions.md, 2026-09-08).
+
+    The selection is: shuffle a copy of `lines` with `random.Random(seed)`, then take the
+    prefix whose cumulative size **first reaches** `target_bytes`, so the result is never
+    short by a whole sentence and overshoots by at most the last line. A line's size counts
+    its UTF-8 bytes **plus one for the newline it is written with**, which is what makes the
+    resulting file's size directly comparable to the corpus file whose byte count
+    `target_bytes` came from. Uniform over lines rather than over sentences of some target
+    length: any length-aware selection would change the corpus's length distribution as
+    well as its size, and the size is the variable under control here.
+
+    Returns the lines in the shuffled order, which is the order they are written in; a
+    subword trainer counts over the whole file, so order does not affect what it learns,
+    and preserving it makes the selection reproducible by re-running the shuffle. Returns
+    every line (in shuffled order) when the corpus is smaller than `target_bytes`, since
+    there is nothing else to give; the caller's manifest records the ratio actually
+    achieved, so a shortfall is visible rather than assumed away.
+
+    Raises `ValueError` for a negative `target_bytes`.
+    """
+    if target_bytes < 0:
+        raise ValueError(f"target_bytes must be non-negative, got {target_bytes}")
+    shuffled = list(lines)
+    random.Random(seed).shuffle(shuffled)
+    selected: list[str] = []
+    total = 0
+    for line in shuffled:
+        if total >= target_bytes:
+            break
+        selected.append(line)
+        total += len(line.encode("utf-8")) + 1
+    return selected
 
 
 def filter_leaked_sentences(

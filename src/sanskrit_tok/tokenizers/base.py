@@ -120,6 +120,10 @@ class DetailedMetricResult(MetricResult, total=False):
     because an undefined item is a property of the corpus, not a measurement of zero.
     `ci_low`/`ci_high`/`n_bootstrap`/`seed` and `source_tokens`/`pivot_tokens` are the
     bootstrap interval and the two token totals behind a ratio metric such as `tpp`.
+    `ci_low_block`/`ci_high_block`/`block_length`/`n_blocks` are `tpp`'s *second*,
+    non-overlapping-block interval, present only when the caller asked for one: sentences
+    of a verse corpus or of one document are not exchangeable, so the i.i.d. interval in
+    `ci_low`/`ci_high` is too narrow for them (`metrics/tpp.py`).
 
     `entropy_bits`, `n_types`, `alpha`, `vocab_size` and `efficiency_nominal` belong to
     `renyi`, whose `value` is a ratio of two numbers a reader needs separately: the Rényi
@@ -149,6 +153,10 @@ class DetailedMetricResult(MetricResult, total=False):
     seed: int
     source_tokens: int
     pivot_tokens: int
+    ci_low_block: float
+    ci_high_block: float
+    block_length: int
+    n_blocks: int
     precision: float
     recall: float
     per_word_f1: list[float]
