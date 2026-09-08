@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import statistics
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -26,9 +27,10 @@ EXPECTED_TABLES = (
     "parity.tex",
     "fertility_compression.tex",
     "fertility_compression_full.tex",
-    "tpp_deployed.tex",
     "tpp_deployed_all.tex",
     "tpp_controlled.tex",
+    "decomposition.tex",
+    "block_ci.tex",
     "tpp_hindi.tex",
     "preregistration.tex",
     "arms.tex",
@@ -43,6 +45,8 @@ EXPECTED_FIGURES = (
     "parity.png",
     "denominator.pdf",
     "denominator.png",
+    "vocab.pdf",
+    "vocab.png",
     "length.pdf",
     "length.png",
 )
@@ -128,25 +132,42 @@ def test_parity_numbers_match_the_snapshot(
         assert printed == expected, f"{arm}: {printed} != {expected}"
 
 
+def _controlled_rows(text: str, pairs: list[str]) -> dict[str, list[str]]:
+    """Map each reported pair to its row's cells, in the table's own row order.
+
+    The controlled table labels a row by the pair's short name and its control, not by the
+    arm, and carries two rows per Sanskrit arm, so the rows are matched to
+    `CONTROLLED_PAIRS` positionally after the header.
+    """
+    body = [
+        line
+        for line in text.splitlines()
+        if line.endswith(r"\\") and (" & " in line) and "Matched pair" not in line
+    ]
+    assert len(body) == len(pairs), f"{len(body)} rows for {len(pairs)} pairs"
+    return {pair: row.rstrip("\\").split("&") for pair, row in zip(pairs, body, strict=True)}
+
+
 def test_controlled_numbers_match_the_snapshot(
     generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
 ) -> None:
     tables, _ = generated
     _, exp02 = snapshot
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = {
-        pair.split("/")[0]: pair for pair in paper_tables.controlled_pair_keys(exp02)
-    }
-    rows = _rows((tables / "tpp_controlled.tex").read_text())
-    assert set(rows) == set(pairs), f"{set(rows)} != {set(pairs)}"
-    for arm, rest in rows.items():
-        printed = VALUE_CI.findall(rest)
-        assert len(printed) == len(corpora), f"{arm}: got {printed}"
+    pairs = paper_tables.reported_pairs(exp02)
+    rows = _controlled_rows((tables / "tpp_controlled.tex").read_text(), pairs)
+    for pair, cells in rows.items():
+        sa_arm, en_arm = pair.split("/")
+        assert paper_tables.matched_pair_short(sa_arm) == cells[0].strip()
+        expected_control = "E1_bm" if en_arm.endswith("_bm") else "E1"
+        assert expected_control in _unescape(cells[1]), f"{pair}: control column"
+        printed = VALUE_CI.findall(" & ".join(cells[2:]))
+        assert len(printed) == len(corpora), f"{pair}: got {printed}"
         for (value, low, high), corpus in zip(printed, corpora, strict=True):
-            node = exp02["tpp_controlled"][corpus][pairs[arm]]
-            assert value == f"{float(node['value']):.3f}", f"{arm}/{corpus} value"
-            assert low == f"{float(node['ci_low']):.3f}", f"{arm}/{corpus} ci_low"
-            assert high == f"{float(node['ci_high']):.3f}", f"{arm}/{corpus} ci_high"
+            node = exp02["tpp_controlled"][corpus][pair]
+            assert value == f"{float(node['value']):.3f}", f"{pair}/{corpus} value"
+            assert low == f"{float(node['ci_low']):.3f}", f"{pair}/{corpus} ci_low"
+            assert high == f"{float(node['ci_high']):.3f}", f"{pair}/{corpus} ci_high"
 
 
 def test_controlled_bolding_marks_only_intervals_below_one(
@@ -156,14 +177,31 @@ def test_controlled_bolding_marks_only_intervals_below_one(
     tables, _ = generated
     _, exp02 = snapshot
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = {
-        pair.split("/")[0]: pair for pair in paper_tables.controlled_pair_keys(exp02)
-    }
-    for arm, rest in _rows((tables / "tpp_controlled.tex").read_text()).items():
-        cells = [cell for cell in rest.split("&") if VALUE_CI.search(cell)]
-        for cell, corpus in zip(cells, corpora, strict=True):
-            below = float(exp02["tpp_controlled"][corpus][pairs[arm]]["ci_high"]) < 1.0
-            assert (r"\textbf" in cell) is below, f"{arm}/{corpus}: bolding disagrees"
+    pairs = paper_tables.reported_pairs(exp02)
+    rows = _controlled_rows((tables / "tpp_controlled.tex").read_text(), pairs)
+    for pair, cells in rows.items():
+        values = [cell for cell in cells[2:] if VALUE_CI.search(cell)]
+        for cell, corpus in zip(values, corpora, strict=True):
+            below = float(exp02["tpp_controlled"][corpus][pair]["ci_high"]) < 1.0
+            assert (r"\textbf" in cell) is below, f"{pair}/{corpus}: bolding disagrees"
+
+
+def test_undersized_controls_are_marked_in_the_controlled_table(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """A control the trainer could not bring to its requested size carries a dagger."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    pairs = paper_tables.reported_pairs(exp02)
+    rows = _controlled_rows((tables / "tpp_controlled.tex").read_text(), pairs)
+    undersized = set(paper_tables.undersized_control_arms(exp02))
+    assert undersized, "the snapshot no longer carries an undersized control arm"
+    for pair, cells in rows.items():
+        marked = "ddagger" in cells[1]
+        assert marked is (pair.split("/")[1] in undersized), f"{pair}: dagger disagrees"
+    caption = (tables / "tpp_controlled.tex").read_text()
+    for arm in undersized:
+        assert f"{paper_tables.vocab_size(exp02, arm):,}" in caption
 
 
 def test_numbers_tex_defines_every_macro_the_manuscript_uses(
@@ -230,7 +268,7 @@ def test_renyi_macros_match_the_snapshot(
     # the snapshot happens to carry.
     en = sorted(
         f"{float(english[arm][alpha]['value']):.3f}"
-        for arm in (*paper_tables.T0_ARMS, *paper_tables.controlled_english_arms())
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.RENYI_ENGLISH_ARMS)
         if arm in english
     )
     assert values["numRenyiEnglishLo"] == en[0]
@@ -281,7 +319,7 @@ def test_renyi_prose_claims_hold_in_the_snapshot(
     # under it, and neither above its top.
     english_band = [
         float(english_arms[arm][alpha]["value"])
-        for arm in (*paper_tables.T0_ARMS, *paper_tables.controlled_english_arms())
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.RENYI_ENGLISH_ARMS)
         if arm in english_arms
     ]
     assert max(unigram) < max(english_band), "a Unigram arm now sits above the English band"
@@ -596,28 +634,40 @@ def test_hindi_table_drops_the_slp1_artifact_column(
         assert f"{float(node['slp1']['value']):.3f}" not in text, arm
 
 
-def test_controlled_pairs_are_restricted_to_the_reported_four(
-    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+def test_reported_pairs_are_restricted_to_the_ones_the_prose_discusses(
+    snapshot: tuple[dict[str, Any], dict[str, Any]],
 ) -> None:
     """A pair the snapshot gains without prose to go with it must not reach a table."""
-    tables, _ = generated
     _, exp02 = snapshot
-    assert paper_tables.controlled_pair_keys(exp02) == [
-        pair
-        for pair in paper_tables.CONTROLLED_PAIRS
-        if pair in {f"{a}/{b}" for a, b in exp02["config"]["controlled_pairs"]}
+    configured = {f"{a}/{b}" for a, b in exp02["config"]["controlled_pairs"]}
+    assert paper_tables.reported_pairs(exp02) == [
+        pair for pair in paper_tables.CONTROLLED_PAIRS if pair in configured
     ]
-    rows = _rows((tables / "tpp_controlled.tex").read_text())
-    assert set(rows) == {pair.split("/")[0] for pair in paper_tables.controlled_pair_keys(exp02)}
+    # The byte reference is a pair in the snapshot and is never a matched pair here.
+    assert paper_tables.BYTE_PAIR not in paper_tables.CONTROLLED_PAIRS
+    # The length strata skip the 128k arms, the byte-matched controls and the reference,
+    # so the length blocks run over the four pairs the snapshot actually stratifies.
+    assert paper_tables.controlled_pair_keys(exp02) == list(paper_tables.LENGTH_PAIRS)
+    for pair in paper_tables.LENGTH_PAIRS:
+        assert pair in exp02["tpp_by_length"]["samayik_test"]
 
 
-def test_preregistration_marks_the_untested_arm_as_untested(
-    generated: tuple[Path, Path],
+def test_preregistration_scopes_the_crossing_to_where_it_was_observed(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
 ) -> None:
-    """An Outcome verdict on a prediction for an arm this paper does not build is wrong."""
+    """The fifth row's Outcome names both the pivot and the one controlled crossing."""
+    _, exp02 = snapshot
     text = (generated[0] / "preregistration.tex").read_text()
-    assert "Untested: the predicted arm is not built here" in text
-    assert "Observed against the pivot" not in text
+    assert "\\texttt{T6} is not built here" in text
+    assert "Observed against the pivot; under the matched control only at" in text
+    huge = f"{paper_tables.requested_vocab('T1_bpe_raw_128k'):,} in domain"
+    assert huge in text
+    for corpus, pair in (
+        ("samayik_test", "T1_bpe_raw_128k/E1_bpe_128k"),
+        ("samayik_test_ood", "T1_bpe_raw_128k/E1_bpe_128k"),
+    ):
+        node = exp02["tpp_controlled"][corpus][pair]
+        assert f"{float(node['value']):.3f}" in text
 
 
 def test_training_split_sizes_agree_with_the_data_readme() -> None:
@@ -625,6 +675,26 @@ def test_training_split_sizes_agree_with_the_data_readme() -> None:
     readme = (REPO_ROOT / "data" / "README.md").read_text()
     assert f"train {paper_tables.SAMAYIK_TRAIN_PAIRS:,} / dev 2,416" in readme
     assert f"train {paper_tables.ITIHASA_TRAIN_PAIRS:,} / dev 6,148" in readme
+
+
+def test_training_corpus_bytes_agree_with_the_experiment_readme() -> None:
+    """The byte constants §5.3 and the Limitations quote still match Experiment 02.
+
+    They are constants because the training corpora live under the gitignored
+    `data/processed/` and the tracked snapshot records no corpus size, so the generator
+    cannot read them. This is the check that keeps them honest.
+    """
+    readme = " ".join(
+        (REPO_ROOT / "experiments" / "02_tpp_parallel" / "README.md").read_text().split()
+    )
+    for value in (
+        paper_tables.SANSKRIT_TRAIN_BYTES,
+        paper_tables.ENGLISH_TRAIN_BYTES,
+        paper_tables.ENGLISH_BM_TRAIN_BYTES,
+    ):
+        assert f"{value:,} bytes" in readme, f"{value:,} bytes not in the README"
+    assert f"{paper_tables.ENGLISH_BM_TRAIN_LINES:,} lines" in readme
+    assert f"{paper_tables.ENGLISH_TRAIN_LINES:,} training sentences" in readme
 
 
 def test_committed_tables_are_current(
@@ -663,3 +733,292 @@ def test_snapshot_is_never_written(generated: tuple[Path, Path]) -> None:
         assert RESULTS_DIR not in path.parents and path != RESULTS_DIR
     before = json.loads((RESULTS_DIR / "01_baseline_penalty" / "results.json").read_text())
     assert "parity" in before
+
+
+# --------------------------------------------------------------------------------------
+# The 2026-09-08 wave: byte-matched control, vocabulary sweep, decomposition, block CIs
+# --------------------------------------------------------------------------------------
+
+
+def _byte_matched_moves(exp02: dict[str, Any]) -> list[float]:
+    """Every pair-matched ratio's move when the control is byte-matched instead."""
+    controlled = exp02["tpp_controlled"]
+    moves: list[float] = []
+    for corpus in controlled:
+        for pair in paper_tables.reported_pairs(exp02):
+            sa_arm, en_arm = pair.split("/")
+            if en_arm.endswith("_bm"):
+                continue
+            twin = f"{sa_arm}/{en_arm}_bm"
+            moves.append(
+                float(controlled[corpus][twin]["value"])
+                - float(controlled[corpus][pair]["value"])
+            )
+    return moves
+
+
+def test_byte_matched_macros_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """§5.3's byte-matched paragraph, recomputed from the JSON and the two constants."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+    moves = _byte_matched_moves(exp02)
+    sizes = sorted(abs(move) for move in moves)
+
+    assert values["numBmMoveCount"] == str(len(moves))
+    assert values["numBmMaxMove"] == f"{max(sizes):.3f}"
+    assert values["numBmMedianMove"] == f"{statistics.median(sizes):.3f}"
+    assert values["numBmDownwardCount"] == str(sum(1 for move in moves if move < 0))
+    assert values["numBmLines"] == f"{paper_tables.ENGLISH_BM_TRAIN_LINES:,}"
+    assert values["numBmLinePct"] == (
+        f"{paper_tables.ENGLISH_BM_TRAIN_LINES / paper_tables.ENGLISH_TRAIN_LINES * 100:.1f}"
+    )
+    for name, constant in (
+        ("numBytesSanskritTrain", paper_tables.SANSKRIT_TRAIN_BYTES),
+        ("numBytesEnglishTrain", paper_tables.ENGLISH_TRAIN_BYTES),
+        ("numBytesEnglishBmTrain", paper_tables.ENGLISH_BM_TRAIN_BYTES),
+    ):
+        assert values[name] == f"{constant / 1_000_000:.2f}"
+    excess = paper_tables.ENGLISH_TRAIN_BYTES / paper_tables.SANSKRIT_TRAIN_BYTES - 1.0
+    assert values["numBytesEnglishExcessPct"] == f"{excess * 100:.0f}"
+
+
+def test_vocabulary_macros_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """The 128k numbers §5.3 and the abstract read."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+    controlled = exp02["tpp_controlled"]
+    for key, corpus, pair in (
+        ("numTppBpeHugeSamayik", "samayik_test", "T1_bpe_raw_128k/E1_bpe_128k"),
+        ("numTppBpeHugeSamayikBm", "samayik_test", "T1_bpe_raw_128k/E1_bpe_128k_bm"),
+        ("numTppBpeHugeOod", "samayik_test_ood", "T1_bpe_raw_128k/E1_bpe_128k"),
+    ):
+        node = controlled[corpus][pair]
+        assert values[key] == f"{float(node['value']):.3f}"
+        assert values[f"{key}Ci"] == (
+            f"[{float(node['ci_low']):.3f}, {float(node['ci_high']):.3f}]"
+        )
+    ood = controlled["samayik_test_ood"]["T1_bpe_raw_128k/E1_bpe_128k"]
+    assert values["numTppBpeHugeOodBlockCi"] == (
+        f"[{float(ood['ci_low_block']):.3f}, {float(ood['ci_high_block']):.3f}]"
+    )
+    flores = controlled["flores_devtest"]["T1_bpe_raw_128k/E1_bpe_128k"]
+    assert values["numTppBpeHugeFlores"] == f"{float(flores['value']):.3f}"
+    assert values["numVocabHuge"] == f"{paper_tables.requested_vocab('T1_bpe_raw_128k'):,}"
+    assert values["numUnigramBmPieces"] == (
+        f"{paper_tables.vocab_size(exp02, 'E1_unigram_64k_bm'):,}"
+    )
+    assert values["numUnigramHugePieces"] == (
+        f"{paper_tables.vocab_size(exp02, 'E1_unigram_128k'):,}"
+    )
+    small = paper_tables.reported_pairs(exp02, paper_tables.SMALL_VOCAB_TOKENS)
+    huge = paper_tables.reported_pairs(exp02, (paper_tables.HUGE_VOCAB_TOKEN,))
+    assert values["numControlledPairsSmall"] == str(len(small)) == "8"
+    assert values["numControlledPairsHuge"] == str(len(huge)) == "4"
+    assert values["numControlledPairsAll"] == str(len(small) + len(huge))
+    out_of_domain = [
+        float(controlled[corpus][pair]["value"])
+        for corpus in ("samayik_test_ood", "flores_devtest")
+        for pair in huge
+    ]
+    assert values["numTppControlledHugeOodLo"] == f"{min(out_of_domain):.3f}"
+    assert values["numTppControlledHugeOodHi"] == f"{max(out_of_domain):.3f}"
+
+
+def test_decomposition_macros_and_table_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """§5.4's numbers, and the identity the whole section rests on."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+    prose = exp02["side_decomposition"]["samayik_test"]
+    verse = exp02["side_decomposition"]["itihasa_test"]
+    small = paper_tables.reported_pairs(exp02, paper_tables.SMALL_VOCAB_TOKENS)
+    huge = paper_tables.reported_pairs(exp02, (paper_tables.HUGE_VOCAB_TOKEN,))
+
+    # The factorisation is exact, which is what lets the section attribute the ratio.
+    for node in (*prose.values(), *verse.values()):
+        product = float(node["char_ratio"]) * float(node["density_ratio"])
+        assert abs(product - float(node["tpp"])) < 1e-9
+
+    char_prose = float(prose[small[0]]["char_ratio"])
+    char_verse = float(verse[small[0]]["char_ratio"])
+    assert values["numCharRatioSamayik"] == f"{char_prose:.3f}"
+    assert values["numCharRatioItihasa"] == f"{char_verse:.3f}"
+    assert values["numCharRatioFactor"] == f"{char_prose / char_verse:.3f}"
+    huge_bpe = [pair for pair in huge if "_bpe_" in pair.split("/")[0]]
+    for key, node, pairs in (
+        ("numDensityRatioSamayik", prose, small),
+        ("numDensityRatioItihasa", verse, small),
+        ("numDensityRatioSamayikHuge", prose, huge_bpe),
+    ):
+        band = [float(node[pair]["density_ratio"]) for pair in pairs]
+        assert values[f"{key}Lo"] == f"{min(band):.3f}"
+        assert values[f"{key}Hi"] == f"{max(band):.3f}"
+    gap = max(
+        abs(float(prose[pair]["density_ratio"]) - float(verse[pair]["density_ratio"]))
+        for pair in small
+    )
+    assert values["numDensityPairGap"] == f"{gap:.3f}"
+    assert values["numTSevenSamayik"] == f"{float(prose[paper_tables.BYTE_PAIR]['tpp']):.3f}"
+    assert values["numTSevenItihasa"] == f"{float(verse[paper_tables.BYTE_PAIR]['tpp']):.3f}"
+    assert values["numTSevenVocab"] == f"{paper_tables.vocab_size(exp02, 'T7_byt5'):,}"
+
+    # Every printed cell of the table is in the snapshot at the printed precision.
+    text = (tables / "decomposition.tex").read_text()
+    for pair in (*small, *[p for p in huge if "_bpe_" in p and not p.endswith("_bm")]):
+        for node in (prose[pair], verse[pair]):
+            for key in ("char_ratio", "density_ratio", "tpp"):
+                assert f"{float(node[key]):.3f}" in text, f"{pair} {key}"
+
+
+def test_block_macros_match_the_snapshot(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """The widths Appendix \\ref{sec:blockci} states, recomputed."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    values = _macro_values((tables / "numbers.tex").read_text())
+    controlled = exp02["tpp_controlled"]
+    pairs = [*paper_tables.reported_pairs(exp02), paper_tables.BYTE_PAIR]
+    assert values["numBlockRowsPerCorpus"] == str(len(pairs))
+    assert values["numBlockLength"] == str(
+        int(controlled["samayik_test"][pairs[0]]["block_length"])
+    )
+    for key, corpus in (
+        ("numBlockWidenSamayik", "samayik_test"),
+        ("numBlockWidenOod", "samayik_test_ood"),
+        ("numBlockWidenItihasa", "itihasa_test"),
+        ("numBlockWidenFlores", "flores_devtest"),
+    ):
+        ratios = [
+            (
+                float(controlled[corpus][pair]["ci_high_block"])
+                - float(controlled[corpus][pair]["ci_low_block"])
+            )
+            / (
+                float(controlled[corpus][pair]["ci_high"])
+                - float(controlled[corpus][pair]["ci_low"])
+            )
+            for pair in pairs
+        ]
+        assert values[f"{key}Lo"] == f"{min(ratios):.1f}"
+        assert values[f"{key}Hi"] == f"{max(ratios):.1f}"
+    assert values["numBlockItihasaMaxUpper"] == (
+        f"{max(float(controlled['itihasa_test'][p]['ci_high_block']) for p in pairs):.3f}"
+    )
+    text = (tables / "block_ci.tex").read_text()
+    for corpus in controlled:
+        for pair in pairs:
+            node = controlled[corpus][pair]
+            assert (
+                f"[{float(node['ci_low_block']):.3f}, {float(node['ci_high_block']):.3f}]"
+                in text
+            ), f"{corpus}/{pair} block interval missing from the table"
+
+
+def test_wave_one_prose_claims_hold_in_the_snapshot(
+    snapshot: tuple[dict[str, Any], dict[str, Any]],
+) -> None:
+    """The ordinal claims of the abstract, §5.3 and §5.4, checked against the numbers.
+
+    Every one of these is a sentence in the manuscript rather than a printed value, so a
+    re-run that reverses one leaves the prose wrong and nothing else would catch it.
+    """
+    _, exp02 = snapshot
+    controlled = exp02["tpp_controlled"]
+
+    def verdict(node: dict[str, Any]) -> str:
+        if float(node["ci_low"]) > 1.0:
+            return "above"
+        return "below" if float(node["ci_high"]) < 1.0 else "straddles"
+
+    # (1) The byte-matched control changes no verdict, at any size.
+    for corpus in controlled:
+        for pair in paper_tables.reported_pairs(exp02):
+            sa_arm, en_arm = pair.split("/")
+            if en_arm.endswith("_bm"):
+                continue
+            twin = controlled[corpus][f"{sa_arm}/{en_arm}_bm"]
+            assert verdict(controlled[corpus][pair]) == verdict(twin), f"{corpus}/{pair}"
+
+    # (1) At 32k and 64k every prose and FLORES pair is above parity under both controls,
+    # and every verse pair is below it.
+    for pair in paper_tables.reported_pairs(exp02, paper_tables.SMALL_VOCAB_TOKENS):
+        for corpus in ("samayik_test", "samayik_test_ood", "flores_devtest"):
+            assert float(controlled[corpus][pair]["ci_low"]) > 1.0, f"{corpus}/{pair}"
+        assert float(controlled["itihasa_test"][pair]["ci_high"]) < 1.0, pair
+
+    # (2) The BPE ratio falls with the vocabulary size on every corpus and both controls,
+    # strictly at every step except in one sequence, which the prose names.
+    series = paper_tables.bpe_progression(exp02)
+    assert len(series) == 2 * len(controlled)
+    monotone = 0
+    for name, values in series.items():
+        assert values[2] < values[0] and values[2] < values[1], f"{name} not falling"
+        if values[0] > values[1] > values[2]:
+            monotone += 1
+    assert monotone == len(series) - 1
+    exception = [name for name, v in series.items() if not v[0] > v[1] > v[2]]
+    assert exception == ["flores_devtest/E1"], exception
+
+    # (2) At 128k, in-domain prose crosses under both controls and stays above parity out
+    # of domain and on FLORES.
+    for suffix in ("", "_bm"):
+        pair = f"T1_bpe_raw_128k/E1_bpe_128k{suffix}"
+        assert float(controlled["samayik_test"][pair]["ci_high"]) < 1.0
+        for corpus in ("samayik_test_ood", "flores_devtest"):
+            assert float(controlled[corpus][pair]["ci_low"]) > 1.0, corpus
+
+    # (3) The density ratios sit in a narrow band about 1 and agree between the corpora,
+    # so the verse crossing lives in the character ratio.
+    prose = exp02["side_decomposition"]["samayik_test"]
+    verse = exp02["side_decomposition"]["itihasa_test"]
+    small = paper_tables.reported_pairs(exp02, paper_tables.SMALL_VOCAB_TOKENS)
+    for pair in small:
+        for node in (prose[pair], verse[pair]):
+            assert 0.99 < float(node["density_ratio"]) < 1.12, pair
+        gap = abs(float(prose[pair]["density_ratio"]) - float(verse[pair]["density_ratio"]))
+        assert gap <= 0.032, f"{pair}: density ratios diverge by {gap:.3f}"
+    assert float(prose[small[0]]["char_ratio"]) > 1.0, "prose Sanskrit is no longer longer"
+    assert float(verse[small[0]]["char_ratio"]) < 1.0, "verse Sanskrit is no longer shorter"
+
+    # (3) The byte reference is the two sides' byte ratio and nothing else.
+    for corpus, node in exp02["side_decomposition"].items():
+        entry = node[paper_tables.BYTE_PAIR]
+        expected = float(entry["bytes_sa"]) / float(entry["bytes_en"])
+        assert abs(float(entry["tpp"]) - expected) < 1e-9, corpus
+
+    # (4) Blocking never narrows a verse interval, and every verse verdict survives it.
+    for pair in (*paper_tables.reported_pairs(exp02), paper_tables.BYTE_PAIR):
+        node = controlled["itihasa_test"][pair]
+        iid = float(node["ci_high"]) - float(node["ci_low"])
+        block = float(node["ci_high_block"]) - float(node["ci_low_block"])
+        assert block >= iid, f"{pair}: block interval is narrower on verse"
+        assert float(node["ci_high_block"]) < 1.0, pair
+
+    # (4) The one controlled verdict the block bootstrap changes is the 128k BPE pair on
+    # the out-of-domain prose split, under either control.
+    changed = [
+        (corpus, pair)
+        for corpus in controlled
+        for pair in paper_tables.reported_pairs(exp02)
+        if verdict(controlled[corpus][pair])
+        != (
+            "above"
+            if float(controlled[corpus][pair]["ci_low_block"]) > 1.0
+            else "below"
+            if float(controlled[corpus][pair]["ci_high_block"]) < 1.0
+            else "straddles"
+        )
+    ]
+    assert changed == [
+        ("samayik_test_ood", "T1_bpe_raw_128k/E1_bpe_128k"),
+        ("samayik_test_ood", "T1_bpe_raw_128k/E1_bpe_128k_bm"),
+    ], changed

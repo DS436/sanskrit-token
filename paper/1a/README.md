@@ -1,34 +1,48 @@
 # Paper 1a — the measurement paper (RQ1 and RQ2)
 
-**Status: review wave 1 applied; the measurement-dependent half is still open.** The
-structural and textual changes an ARR-style review asked for are in: a Related Work
-section (§2), an unnumbered Limitations section after the Conclusion as ARR requires, the
-Rényi subsection and the pre-registration table moved to Appendices C and D, a table of
-translation direction and the sign of its bias per corpus (Table 1), and the figure and
-table fixes listed below. Five `% TODO(wave1-results)` markers in `main.tex` mark where
-the next wave's numbers land: the block bootstrap, the byte-matched control and the 128k
-arms, the byte-level reference arm, and the verse side decomposition. The acknowledgements
-print in final mode only.
+**Status: review wave 1 complete, results included.** The structural and textual changes an
+ARR-style review asked for are in (Related Work as §2, an unnumbered Limitations section
+after the Conclusion, the Rényi subsection and the pre-registration table in appendices, a
+table of translation direction and the sign of its bias per corpus), and the five
+`% TODO(wave1-results)` markers are gone: the byte-matched control and the 128k vocabulary
+sweep are in §6.3, the byte-level reference arm `T7_byt5` in §5, the verse side
+decomposition in §6.4, and the block-resampled intervals in §3 and Appendix A.2. The
+acknowledgements print in final mode only.
 
-**Format: long paper.** 17 pages in final mode, 16 in review mode; References start on
-page 9 in both. The body runs to eight pages: the Conclusion ends on page 8, against the
-eight-page limit for a long paper at ACL venues, and the Limitations section, which ARR
-excludes from that limit, starts on page 9. arXiv imposes no limit. `placeins` puts a
+**The central finding, as the paper now states it.** Against a matched English control the
+prose flip disappears at 32k and 64k pieces, under a pair-matched control and a
+byte-matched one alike (the byte-matched family subsamples the English training text to the
+Sanskrit corpus's byte count; every controlled ratio moves by at most 0.025 and no verdict
+changes). The controlled penalty shrinks with vocabulary size: at 128k the size-matched BPE
+pair reads just below parity on in-domain prose and stays above it out of domain and on
+FLORES, so the negative result is scoped to the sizes it was measured at. Tokens per
+proposition factorises exactly into a character ratio and a tokens-per-character ratio, and
+the second is near 1 for every matched pair, so the verse crossing lives in the character
+ratio, which these corpora cannot attribute to meter rather than to a verbose 19th-century
+English translation.
+
+**Format: long paper.** 19 pages in final mode; the body runs to eight pages, with the
+Conclusion and the Limitations section, which ARR excludes from that limit, both on page 8
+and References starting on page 9. arXiv imposes no limit. `placeins` puts a
 `\FloatBarrier` before the bibliography, so no body float is deferred into the references,
-and the float parameters are relaxed in the preamble because the defaults pushed Figure 3
-three pages past its first reference. Fertility and compression sit in the appendix
-(Tables 11 and 12), where fertility belongs: it is reported and never led with. The length
-strata for all four corpora are in Appendix A.1; the body tabulates only the two primary
-corpora.
+and the float parameters are relaxed in the preamble because the defaults pushed a figure
+several pages past its first reference. To hold the body to eight pages against the new
+results, two things moved to the appendix: the deployed-practice table (§6.2 keeps one
+sentence of macros and points at Appendix A, which already carried the same rows for all
+four corpora with a second English pivot) and the parity table (Figure 1 draws the same
+numbers in the body). Fertility and compression sit in the appendix, where fertility
+belongs: it is reported and never led with.
 
-**Two-sided length strata, in one table.** §6.5 bins each pair twice, once on the English
-side's word count and once on the Sanskrit side's, because binning selects the binned
-side's wordiness into the bin and so tilts the ratio in a known direction. Both
-stratifications are two halves of a single Table 5 rather than a facing pair, because the
+**Two-sided length strata, in the appendix.** §6.5 bins each pair twice, once on the
+English side's word count and once on the Sanskrit side's, because binning selects the
+binned side's wordiness into the bin and so tilts the ratio in a known direction. Both
+stratifications are two halves of a single table rather than a facing pair, because the
 section's whole argument is that neither is read alone; every within-corpus gradient
 reverses between them, which is why the section draws no length claim, while the
-verse-below-prose separation survives both. Nothing in that table is bolded, and a bin
-holding fewer than ten pairs prints its dagger alone, its ratio left to the appendix.
+verse-below-prose separation survives both. That separation is now read as the character
+ratio of §6.4 surviving a control for length on either side. The table and its figure sit
+in Appendix A.1 with the all-corpora versions; nothing in them is bolded, and a bin holding
+fewer than ten pairs prints its dagger alone.
 
 *Fewer Words, Not Fewer Tokens: Measuring the Sanskrit Tokenization Penalty per
 Proposition.* Scope is Experiments 01 and 02 only. The proposed sandhi-aware and
@@ -121,11 +135,26 @@ Nothing in `main.tex` contains a typed-in measurement.
   from the JSON, and fails if either ordering that section asserts in words (every
   gradient reverses; verse sits below prose at every jointly populated bin) stops holding.
   It also checks that the thin bin is suppressed in the body and kept in the appendix,
-  that no length cell is bolded, that the Hindi table's SLP1 artefact column is gone, and
-  that only the four reported matched pairs reach a table: the snapshot carries pairs
-  whose prose is not written yet, and `CONTROLLED_PAIRS` in `scripts/paper_tables.py` (and
-  its twin in `scripts/paper_figures.py`) is the list that decides what is printed. It
-  also fails if the committed tables are stale.
+  that no length cell is bolded, that the Hindi table's SLP1 artefact column is gone, that
+  every undersized control is daggered, and that only the twelve reported matched pairs
+  reach a table: the snapshot carries pairs whose prose is not written yet, and
+  `CONTROLLED_PAIRS` in `scripts/paper_tables.py` (with `LENGTH_PAIRS` for the four the
+  strata cover, and its twin in `scripts/paper_figures.py`) is the list that decides what
+  is printed. It
+  also fails if the committed tables are stale. The wave-1 additions have their own
+  checks: the byte-matched moves, the vocabulary sweep, the side decomposition and the
+  block intervals are each recomputed from the JSON, and a prose-claims test asserts the
+  ordinal statements the manuscript makes in words (no verdict changes between the two
+  controls; the BPE ratio falls with vocabulary size on every corpus, strictly at every
+  step in seven of the eight sequences; the 128k BPE pair is below 1.0 in domain under
+  both controls; the density ratios stay in the band §6.4 quotes; `T7_byt5` is exactly the
+  two sides' byte ratio; and no Itihāsa block interval is narrower than its i.i.d. one).
+
+  The training-corpus byte counts §6.3 and the Limitations section quote are constants in
+  `scripts/paper_tables.py`, like the training-split sizes: the corpora live under the
+  gitignored `data/processed/` and the tracked snapshot records no corpus size, so the
+  generator cannot read them. A test greps `experiments/02_tpp_parallel/README.md` for
+  each of them.
 
 Both generators read `results/` and never write to it.
 

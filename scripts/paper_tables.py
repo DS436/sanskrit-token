@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -44,21 +45,75 @@ T0_ARMS = ("T0_o200k", "T0_llama4", "T0_gemma3", "T0_gpt2")
 T3_ARMS = ("T3_sarvam", "T3_sutra", "T3_brahmic131k")
 #: The trained Sanskrit arms. Provisional: trained on the parallel corpora, not on a
 #: monolingual corpus (`experiments/02_tpp_parallel/README.md`, caveats).
-TRAINED_ARMS = ("T1_bpe_raw_32k", "T1_bpe_raw_64k", "T2_unigram_raw_32k", "T2_unigram_raw_64k")
+TRAINED_ARMS = (
+    "T1_bpe_raw_32k",
+    "T1_bpe_raw_64k",
+    "T1_bpe_raw_128k",
+    "T2_unigram_raw_32k",
+    "T2_unigram_raw_64k",
+    "T2_unigram_raw_128k",
+)
+#: The byte-level reference: UTF-8 itself, 256 ids, no training. Not a trained arm and not
+#: deployed practice, so it is named separately everywhere it appears.
+BYTE_ARM = "T7_byt5"
+#: Scored on both sides of the same pairs, the byte arm is the two sides' byte ratio.
+BYTE_PAIR = f"{BYTE_ARM}/{BYTE_ARM}"
 #: Arms whose ≥200k vocabulary makes them current practice rather than a period piece.
 LARGE_VOCAB_T0 = ("T0_o200k", "T0_llama4", "T0_gemma3")
 
-#: The matched pairs this paper reports, in reporting order. Named explicitly rather than
-#: read off `config["controlled_pairs"]` because Experiment 02 is still adding pairs (a
-#: byte-matched control, a byte-level reference, larger vocabularies) and each of those
-#: needs its own prose before it can appear in a table. A pair the snapshot does not carry
-#: is skipped; a pair the snapshot gains and this tuple does not name is ignored.
+#: The matched pairs this paper reports, in reporting order: each trained Sanskrit arm
+#: over its pair-matched English control (`E1_*`, the English side of the same sentences)
+#: and over its byte-matched one (`E1_*_bm`, a subsample of that English side cut to the
+#: Sanskrit corpus's byte count). Named explicitly rather than read off
+#: `config["controlled_pairs"]` because Experiment 02 keeps adding pairs and each needs
+#: its own prose before it can appear in a table. A pair the snapshot does not carry is
+#: skipped; a pair the snapshot gains and this tuple does not name is ignored.
 CONTROLLED_PAIRS: tuple[str, ...] = (
+    "T1_bpe_raw_32k/E1_bpe_32k",
+    "T1_bpe_raw_32k/E1_bpe_32k_bm",
+    "T1_bpe_raw_64k/E1_bpe_64k",
+    "T1_bpe_raw_64k/E1_bpe_64k_bm",
+    "T1_bpe_raw_128k/E1_bpe_128k",
+    "T1_bpe_raw_128k/E1_bpe_128k_bm",
+    "T2_unigram_raw_32k/E1_unigram_32k",
+    "T2_unigram_raw_32k/E1_unigram_32k_bm",
+    "T2_unigram_raw_64k/E1_unigram_64k",
+    "T2_unigram_raw_64k/E1_unigram_64k_bm",
+    "T2_unigram_raw_128k/E1_unigram_128k",
+    "T2_unigram_raw_128k/E1_unigram_128k_bm",
+)
+
+#: The vocabulary sizes, smallest first, as the arm names spell them.
+VOCAB_TOKENS = ("32k", "64k", "128k")
+#: The two vocabulary sizes at which every pair is size-matched on both sides, and at
+#: which the paper's prose-corpus statement holds. Read off the pair names, not hard-coded
+#: as a set of pairs, so that adding a pair to `CONTROLLED_PAIRS` needs no second edit.
+SMALL_VOCAB_TOKENS = ("32k", "64k")
+#: The third size, added in the 2026-09-08 wave, at which the in-domain prose verdict
+#: changes for BPE.
+HUGE_VOCAB_TOKEN = "128k"
+
+#: The matched pairs the length strata carry. Experiment 02's `length_strata_skip_arms`
+#: excludes the 128k arms, the byte-matched controls and the byte reference from the
+#: stratification, so §5.5's tables and macros run over these four and no more.
+LENGTH_PAIRS: tuple[str, ...] = (
     "T1_bpe_raw_32k/E1_bpe_32k",
     "T1_bpe_raw_64k/E1_bpe_64k",
     "T2_unigram_raw_32k/E1_unigram_32k",
     "T2_unigram_raw_64k/E1_unigram_64k",
 )
+
+#: The arms the R\'enyi appendix tabulates. It is a diagnostic that supports no claim
+#: here (Cognetta et al. 2024), so it is reported for the arm set it was introduced for —
+#: the size-matched 32k and 64k arms and their pair-matched controls — rather than
+#: extended over the byte-matched and 128k arms of §5.3. The caption says so.
+RENYI_TRAINED_ARMS = (
+    "T1_bpe_raw_32k",
+    "T1_bpe_raw_64k",
+    "T2_unigram_raw_32k",
+    "T2_unigram_raw_64k",
+)
+RENYI_ENGLISH_ARMS = ("E1_bpe_32k", "E1_bpe_64k", "E1_unigram_32k", "E1_unigram_64k")
 
 #: Below this many pairs a length bin's ratio is not printed in a body table: its interval
 #: spans more than an order of magnitude and the cell distracts from the rest of the row.
@@ -98,6 +153,19 @@ PREREG_PARITY_THRESHOLD = "1.5"
 #: against `data/exclusion_hashes.txt` and exact deduplication.
 SAMAYIK_TRAIN_PAIRS = 43_493
 ITIHASA_TRAIN_PAIRS = 75_161
+
+#: Sizes of the three tokenizer-training corpora in UTF-8 bytes, and the line count of the
+#: byte-matched English subsample, quoted from `experiments/02_tpp_parallel/README.md`
+#: ("Byte-matched control") and from the matching `docs/decisions.md` entry of 2026-09-08.
+#: They are constants for the same reason the pair counts above are: the training corpora
+#: and their manifests live under the gitignored `data/processed/`, and the tracked results
+#: snapshot records vocabulary sizes and hashes but not corpus sizes, so this script cannot
+#: read them. `tests/test_paper_tables.py` greps the README for each of them.
+SANSKRIT_TRAIN_BYTES = 11_209_356
+ENGLISH_TRAIN_BYTES = 16_554_871
+ENGLISH_BM_TRAIN_BYTES = 11_209_371
+ENGLISH_BM_TRAIN_LINES = 78_624
+ENGLISH_TRAIN_LINES = 116_127
 
 #: The two length stratifications, as (results key, bin-edge config key, binned side).
 #: Both are reported because binning on one side selects that side's noise into the bin,
@@ -177,7 +245,68 @@ MACROS: tuple[str, ...] = (
     "numTppControlledFloresHi",
     "numTppControlledItihasaLo",
     "numTppControlledItihasaHi",
+    "numTppControlledItihasaAllLo",
+    "numTppControlledItihasaAllHi",
+    "numTppControlledHugeOodLo",
+    "numTppControlledHugeOodHi",
     "numControlledPairs",
+    "numControlledPairsAll",
+    "numControlledPairsSmall",
+    "numControlledPairsHuge",
+    # The byte-matched control.
+    "numBmLines",
+    "numBmLinePct",
+    "numBytesSanskritTrain",
+    "numBytesEnglishTrain",
+    "numBytesEnglishBmTrain",
+    "numBytesEnglishExcessPct",
+    "numBmMoveCount",
+    "numBmMaxMove",
+    "numBmMedianMove",
+    "numBmDownwardCount",
+    "numBmVerdictChanges",
+    # The vocabulary sweep.
+    "numVocabHuge",
+    "numTppBpeHugeSamayik",
+    "numTppBpeHugeSamayikCi",
+    "numTppBpeHugeSamayikBm",
+    "numTppBpeHugeSamayikBmCi",
+    "numTppBpeHugeOod",
+    "numTppBpeHugeOodCi",
+    "numTppBpeHugeOodBlockCi",
+    "numTppBpeHugeFlores",
+    "numBpeMonotoneSequences",
+    "numBpeSequencesTotal",
+    "numBpeFloresStepGap",
+    "numUnigramBmPieces",
+    "numUnigramHugePieces",
+    # The side decomposition.
+    "numCharRatioSamayik",
+    "numCharRatioItihasa",
+    "numCharRatioFactor",
+    "numDensityRatioSamayikLo",
+    "numDensityRatioSamayikHi",
+    "numDensityRatioItihasaLo",
+    "numDensityRatioItihasaHi",
+    "numDensityRatioSamayikHugeLo",
+    "numDensityRatioSamayikHugeHi",
+    "numDensityPairGap",
+    "numTSevenSamayik",
+    "numTSevenItihasa",
+    "numTSevenVocab",
+    # The block bootstrap.
+    "numBlockLength",
+    "numBlockRowsPerCorpus",
+    "numBlockWidenItihasaLo",
+    "numBlockWidenItihasaHi",
+    "numBlockWidenFloresLo",
+    "numBlockWidenFloresHi",
+    "numBlockWidenOodLo",
+    "numBlockWidenOodHi",
+    "numBlockWidenSamayikLo",
+    "numBlockWidenSamayikHi",
+    "numBlockNarrowerSamayik",
+    "numBlockItihasaMaxUpper",
     "numEnTokensOTwoHundredK",
     "numEnTokensEOneBpe",
     "numEnTokenSavingPct",
@@ -385,7 +514,63 @@ def available_trained(exp02: dict[str, Any]) -> list[str]:
 
 def controlled_english_arms() -> tuple[str, ...]:
     """The English control arms this paper reports, from its matched pairs."""
-    return tuple(pair.split("/")[1] for pair in CONTROLLED_PAIRS)
+    return tuple(dict.fromkeys(pair.split("/")[1] for pair in CONTROLLED_PAIRS))
+
+
+def vocab_token(arm: str) -> str:
+    """The vocabulary size an arm's name asks for: `E1_bpe_64k_bm` -> `64k`."""
+    parts = arm.split("_")
+    for part in reversed(parts):
+        if part.endswith("k") and part[:-1].isdigit():
+            return part
+    raise ValueError(f"no vocabulary size in arm name {arm}")  # pragma: no cover
+
+
+def requested_vocab(arm: str) -> int:
+    """The id-space size an arm was asked for, from its name."""
+    return int(vocab_token(arm)[:-1]) * 1000
+
+
+def is_size_matched(exp02: dict[str, Any], arm: str) -> bool:
+    """False when the trainer stopped short of the vocabulary size the arm asked for.
+
+    The Unigram EM trainer stops when the corpus supports no more pieces, so two of the
+    English control arms carry fewer pieces than their names promise. That breaks
+    CLAUDE.md §2.5's matched-vocabulary requirement for those rows, which is why every
+    table that prints them marks them and every caption states the direction of the bias.
+    """
+    return vocab_size(exp02, arm) == requested_vocab(arm)
+
+
+def is_byte_matched(en_arm: str) -> bool:
+    """True for the byte-matched control arms, whose names end in `_bm`."""
+    return en_arm.endswith("_bm")
+
+
+def control_label(exp02: dict[str, Any], en_arm: str) -> str:
+    """`E1` or `E1\\_bm`, daggered when the arm is not size-matched."""
+    label = "\\texttt{E1\\_bm}" if is_byte_matched(en_arm) else "\\texttt{E1}"
+    return label + ("$^{\\ddagger}$" if not is_size_matched(exp02, en_arm) else "")
+
+
+def reported_pairs(exp02: dict[str, Any], tokens: tuple[str, ...] | None = None) -> list[str]:
+    """The reported matched pairs the snapshot carries, optionally at given sizes."""
+    configured = {f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]}
+    return [
+        pair
+        for pair in CONTROLLED_PAIRS
+        if pair in configured
+        and (tokens is None or vocab_token(pair.split("/")[0]) in tokens)
+    ]
+
+
+def undersized_control_arms(exp02: dict[str, Any]) -> list[str]:
+    """Every English control arm the trainer could not bring to its requested size."""
+    return [
+        arm
+        for arm in controlled_english_arms()
+        if arm in exp02["tokenizer_sources"] and not is_size_matched(exp02, arm)
+    ]
 
 
 def reported_arms(exp02: dict[str, Any]) -> list[str]:
@@ -395,7 +580,7 @@ def reported_arms(exp02: dict[str, Any]) -> list[str]:
     whose prose is not written yet. Enumerating the snapshot instead of this list would
     put an undiscussed arm into the arms table and the R\'enyi table.
     """
-    order = (*T0_ARMS, *T3_ARMS, *TRAINED_ARMS, *controlled_english_arms())
+    order = (*T0_ARMS, *T3_ARMS, *TRAINED_ARMS, BYTE_ARM, *controlled_english_arms())
     return [arm for arm in order if arm in exp02["tokenizer_sources"]]
 
 
@@ -525,122 +710,236 @@ def fertility_compression_full_table(exp01: dict[str, Any]) -> str:
     return table_float(body, caption, "tab:fertcompfull", wide=True)
 
 
-def _deployed_rows(
-    exp02: dict[str, Any], corpus: str, second_pivot: bool = True
-) -> list[list[str]]:
+def _deployed_rows(exp02: dict[str, Any], corpus: str) -> list[list[str]]:
     rows: list[list[str]] = []
     tpp = exp02["tpp"][corpus]
     fert = exp02["fertility"][corpus]
-    for arm in (*available_deployed(exp02), *available_trained(exp02)):
+    byte_arm = [BYTE_ARM] if BYTE_ARM in tpp else []
+    for arm in (*available_deployed(exp02), *available_trained(exp02), *byte_arm):
         slp1 = tpp[arm]["slp1"]
         original = tpp[arm].get("original")
         cells = [
             arm_tt(arm, provisional=is_provisional(arm)),
             count(vocab_size(exp02, arm)),
             value_ci(slp1["T0_o200k"], bold_below_one=True),
+            value_ci(slp1["T0_llama4"], bold_below_one=True),
+            value_ci(original["T0_o200k"]) if original else "n/a",
+            two(float(fert[arm]["slp1"]["value"])),
         ]
-        if second_pivot:
-            cells.append(value_ci(slp1["T0_llama4"], bold_below_one=True))
-        cells.append(value_ci(original["T0_o200k"]) if original else "n/a")
-        cells.append(two(float(fert[arm]["slp1"]["value"])))
         rows.append(cells)
     return rows
 
 
-def _deployed_header(second_pivot: bool = True) -> list[str]:
-    header = ["Arm", "Vocab.", "SLP1 vs \\texttt{o200k}"]
-    if second_pivot:
-        header.append("SLP1 vs Llama-4")
-    header.extend(["Orig.\\ vs \\texttt{o200k}", "Fert."])
-    return header
-
-
-def tpp_deployed_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
-    """Table 3: deployed-practice TPP on the primary prose corpus."""
-    body = tabular(
-        "lllll",
-        _deployed_header(second_pivot=False),
-        _deployed_rows(exp02, corpus, second_pivot=False),
-        size="\\footnotesize",
-    )
-    n = int(exp02["corpora"][corpus]["n_used"])
-    caption = (
-        "Deployed practice on S\\=amayik test (prose, primary; "
-        f"$n={math_count(n)}$ aligned pairs). Tokens per proposition: Sanskrit tokens under "
-        "the "
-        "named arm divided by English tokens under a deployed 200k-vocabulary English "
-        "tokenizer, with 95\\% paired bootstrap intervals. This is not a controlled "
-        "comparison: vocabulary size and training domain vary alongside language, which is "
-        "what Table~\\ref{tab:tppcontrolled} holds fixed. $^{*}$~marks the provisional "
-        "trained arms. Fertility is in the last column for completeness and is not part of "
-        "any claim here. Bold marks an interval entirely below 1.0. The second English "
-        "pivot, and the other three corpora, are in Appendix~\\ref{sec:fulltables}. "
-        "\\texttt{T3\\_indicsuper} is omitted: no candidate repository resolved."
-    )
-    return table_float(body, caption, "tab:tppdeployed", wide=True)
+def _deployed_header() -> list[str]:
+    return [
+        "Arm",
+        "Vocab.",
+        "SLP1 vs \\texttt{o200k}",
+        "SLP1 vs Llama-4",
+        "Orig.\\ vs \\texttt{o200k}",
+        "Fert.",
+    ]
 
 
 def tpp_deployed_all_tables(exp02: dict[str, Any]) -> str:
-    """Appendix: the deployed-practice table for every corpus."""
+    """Appendix A: the deployed-practice table for every corpus, primary corpus first.
+
+    The first of these carries the column description and the rest point at it. Deployed
+    practice is reported here rather than in the body because it is not a controlled
+    comparison (CLAUDE.md §2.5): vocabulary size and training domain vary alongside
+    language, which is what Table \\ref{tab:tppcontrolled} holds fixed.
+    """
     parts: list[str] = []
+    first: str | None = None
     for corpus in exp02["tpp"]:
         body = tabular("llllll", _deployed_header(), _deployed_rows(exp02, corpus),
                        size="\\scriptsize")
         n = int(exp02["corpora"][corpus]["n_used"])
-        caption = (
-            f"Deployed practice on {CORPUS_LABELS.get(corpus, tex_escape(corpus))}, "
-            f"$n={math_count(n)}$ pairs. Columns as in Table~\\ref{{tab:tppdeployed}}."
-        )
-        parts.append(table_float(body, caption, f"tab:tppdeployed-{corpus.replace('_', '-')}",
-                                 wide=True))
+        label = f"tab:tppdeployed-{corpus.replace('_', '-')}"
+        if first is None:
+            caption = (
+                "Deployed practice on "
+                f"{CORPUS_LABELS.get(corpus, tex_escape(corpus))}, "
+                f"$n={math_count(n)}$ aligned pairs. Tokens per proposition: Sanskrit "
+                "tokens under the named arm divided by English tokens under a deployed "
+                "200k-vocabulary English tokenizer, with 95\\% paired bootstrap "
+                "intervals. This is not a controlled comparison: vocabulary size and "
+                "training domain vary alongside language, which is what "
+                "Table~\\ref{tab:tppcontrolled} holds fixed. $^{*}$~marks the provisional "
+                f"trained arms and {arm_tt(BYTE_ARM)} the byte-level reference. Fertility "
+                "is in the last column for completeness and is not part of any claim "
+                "here. Bold marks an interval entirely below 1.0. "
+                "\\texttt{T3\\_indicsuper} is omitted: no candidate repository resolved."
+            )
+            first = label
+        else:
+            caption = (
+                f"Deployed practice on {CORPUS_LABELS.get(corpus, tex_escape(corpus))}, "
+                f"$n={math_count(n)}$ pairs. Columns as in Table~\\ref{{{first}}}."
+            )
+        parts.append(table_float(body, caption, label, wide=True))
     return "\n".join(parts)
 
 
 def tpp_controlled_table(exp02: dict[str, Any]) -> str:
-    """Table 4: the matched-control TPP, the paper's headline."""
+    """Table 4: the matched-control TPP under both controls and all three sizes.
+
+    Rows are grouped by algorithm and ordered by vocabulary size, so that the sweep of
+    §5.3 reads down a column, and each Sanskrit arm carries two rows: its pair-matched
+    control and its byte-matched one. Neither is *the* control, so neither is given the
+    table to itself.
+    """
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = [
-        pair for pair in CONTROLLED_PAIRS if pair in exp02["tpp_controlled"][corpora[0]]
-    ]
+    pairs = reported_pairs(exp02)
     rows: list[list[str]] = []
     for pair in pairs:
         sa_arm, en_arm = pair.split("/")
-        cells = [arm_tt(sa_arm, provisional=True)]
+        cells = [matched_pair_short(sa_arm), control_label(exp02, en_arm)]
         cells.extend(
             value_ci(exp02["tpp_controlled"][corpus][pair], bold_below_one=True)
             for corpus in corpora
         )
         rows.append(cells)
-    twins = ", ".join(
-        f"{arm_tt(pair.split('/')[0])} over {arm_tt(pair.split('/')[1])}" for pair in pairs
-    )
-    header = ["Sanskrit arm, over its matched English control"]
+    header = ["Matched pair", "Control"]
     header.extend(SHORT_CORPUS_LABELS.get(corpus, tex_escape(corpus)) for corpus in corpora)
     body = tabular(
-        "l" + "l" * len(corpora), header, rows, size="\\scriptsize", colsep_pt=4.0
+        "ll" + "l" * len(corpora), header, rows, size="\\scriptsize", colsep_pt=3.4
     )
     n_by_corpus = ", ".join(
         f"{CORPUS_LABELS.get(corpus, corpus)} {count(int(exp02['corpora'][corpus]['n_used']))}"
         for corpus in corpora
     )
+    settled = sorted({vocab_size(exp02, arm) for arm in undersized_control_arms(exp02)})
+    undersized = " and ".join(count(size) for size in settled)
     caption = (
         "The controlled comparison. Each row is one matched pair: a trained Sanskrit arm "
-        "over the English arm sharing its algorithm, its vocabulary size and its training "
-        "corpus (the two sides of the same S\\=amayik and Itih\\=asa training splits). "
-        f"The pairs are {twins}. "
-        "Values are tokens per proposition with 95\\% paired bootstrap intervals; bold "
-        "marks an interval entirely below 1.0. Sanskrit is scored in SLP1, English as "
-        f"written, and each arm's name carries its vocabulary size. Pairs: {n_by_corpus}. "
-        "Only the verse corpus stays below parity, and "
-        "verse carries a meter confound and a 19th-century English translation in the "
-        "denominator. Both sides of a pair were asked for the same vocabulary size; "
-        "\\texttt{E1\\_unigram\\_64k} settles on "
-        f"{count(vocab_size(exp02, 'E1_unigram_64k'))} pieces, because the EM trainer "
-        "stops short when the corpus does not support the full vocabulary. That shortfall "
-        "makes the English side dearer, so it pushes the last row down, against the "
-        "direction that row is read for."
+        "over an English arm sharing its algorithm, vocabulary size and training corpus. "
+        "\\texttt{E1} is the pair-matched control, trained on the English side of the very "
+        "sentences whose Sanskrit side trained the arm; \\texttt{E1\\_bm} is the "
+        "byte-matched control, trained on a subsample of that text cut to the Sanskrit "
+        "corpus's byte count. \\texttt{BPE 32k} is \\texttt{T1\\_bpe\\_raw\\_32k} over "
+        "\\texttt{E1\\_bpe\\_32k}, and so on. Values are tokens per proposition with 95\\% "
+        "paired bootstrap intervals, Sanskrit scored in SLP1 and English as written; bold "
+        f"marks an interval entirely below 1.0. Pairs: {n_by_corpus}. "
+        "$^{\\ddagger}$~marks a Unigram control the trainer could not bring to the "
+        f"requested size, settling at {undersized} pieces, which makes the English side "
+        "dearer and pushes those rows down."
     )
     return table_float(body, caption, "tab:tppcontrolled", wide=True)
+
+
+def decomposition_table(exp02: dict[str, Any]) -> str:
+    """The exact factorisation of the ratio into text length and tokens per character."""
+    if "side_decomposition" not in exp02:
+        return "% not available in this snapshot\n"
+    corpora = (LENGTH_PROSE_CORPUS, LENGTH_VERSE_CORPUS)
+    pairs = [
+        *reported_pairs(exp02, SMALL_VOCAB_TOKENS),
+        *[
+            pair
+            for pair in reported_pairs(exp02, (HUGE_VOCAB_TOKEN,))
+            if "_bpe_" in pair.split("/")[0] and not is_byte_matched(pair.split("/")[1])
+        ],
+    ]
+    rows: list[list[str]] = []
+    for pair in pairs:
+        sa_arm, en_arm = pair.split("/")
+        cells = [matched_pair_short(sa_arm), control_label(exp02, en_arm)]
+        for corpus in corpora:
+            node = exp02["side_decomposition"][corpus][pair]
+            cells.extend(
+                ratio(float(node[key])) for key in ("char_ratio", "density_ratio", "tpp")
+            )
+        rows.append(cells)
+    if BYTE_PAIR in exp02["side_decomposition"][corpora[0]]:
+        cells = [arm_tt(BYTE_ARM), "---"]
+        for corpus in corpora:
+            node = exp02["side_decomposition"][corpus][BYTE_PAIR]
+            cells.extend(
+                ratio(float(node[key])) for key in ("char_ratio", "density_ratio", "tpp")
+            )
+        rows.append(cells)
+    header = ["Matched pair", "Control"]
+    for corpus in corpora:
+        label = SHORT_CORPUS_LABELS.get(corpus, tex_escape(corpus))
+        header.extend([f"{label} chars", "density", "TPP"])
+    body = tabular("ll" + "r" * 6, header, rows, size="\\scriptsize", colsep_pt=4.0)
+    caption = (
+        "Tokens per proposition factorised exactly, on the primary prose corpus and on the "
+        "verse corpus. Per corpus: the character ratio "
+        "$\\sum_i c(s_i) / \\sum_i c(e_i)$, how much text each side spends on the same "
+        "propositions; the density ratio, each side's tokens per character over the "
+        "other's; and their product, the ratio of Table~\\ref{tab:tppcontrolled}. Sanskrit "
+        "is read in SLP1, one character per phoneme, so the character ratio does not depend "
+        f"on the tokenizer and repeats down its column. {arm_tt(BYTE_ARM)} has no "
+        "vocabulary to vary, so its product is the text ratio itself."
+    )
+    return table_float(body, caption, "tab:decomposition", wide=True)
+
+
+def block_ci_table(exp02: dict[str, Any]) -> str:
+    """Appendix: the i.i.d. interval beside the block-resampled one, pair by corpus."""
+    corpora = list(exp02["tpp_controlled"].keys())
+    pairs = [*reported_pairs(exp02)]
+    if BYTE_PAIR in exp02["tpp_controlled"][corpora[0]]:
+        pairs.append(BYTE_PAIR)
+    sample = exp02["tpp_controlled"][corpora[0]][pairs[0]]
+    if "ci_low_block" not in sample:  # pragma: no cover - not this snapshot
+        return "% not available in this snapshot\n"
+    header = ["Matched pair", "Control", "TPP", "i.i.d.\\ interval", "Block interval",
+              "Width"]
+    lines = [
+        "\\setlength{\\tabcolsep}{4pt}",
+        "\\scriptsize",
+        "\\begin{tabular}{llrrrr}",
+        "\\toprule",
+        " & ".join(header) + r" \\",
+    ]
+    for corpus in corpora:
+        lines.append("\\midrule")
+        label = CORPUS_LABELS.get(corpus, tex_escape(corpus))
+        node0 = exp02["tpp_controlled"][corpus][pairs[0]]
+        n_blocks = int(node0["n_blocks"])
+        lines.append(
+            f"\\multicolumn{{6}}{{l}}{{\\emph{{{label}}}, "
+            f"{count(int(node0['n']))} pairs, {n_blocks} blocks}} \\\\"
+        )
+        for pair in pairs:
+            sa_arm, en_arm = pair.split("/")
+            node = exp02["tpp_controlled"][corpus][pair]
+            width = float(node["ci_high"]) - float(node["ci_low"])
+            width_block = float(node["ci_high_block"]) - float(node["ci_low_block"])
+            if pair == BYTE_PAIR:
+                cells = [arm_tt(BYTE_ARM), "---"]
+            else:
+                cells = [matched_pair_short(sa_arm), control_label(exp02, en_arm)]
+            cells.extend(
+                [
+                    ratio(float(node["value"])),
+                    ci(node),
+                    f"[{float(node['ci_low_block']):.3f}, "
+                    f"{float(node['ci_high_block']):.3f}]",
+                    f"{width_block / width:.2f}$\\times$",
+                ]
+            )
+            lines.append(" & ".join(cells) + r" \\")
+    lines.extend(["\\bottomrule", "\\end{tabular}"])
+    block_length = int(sample["block_length"])
+    level = int(float(sample["ci"]) * 100)
+    caption = (
+        f"Every controlled ratio under both resampling schemes. The {level}\\% i.i.d.\\ "
+        "interval resamples aligned pairs, and is the interval every other table in this "
+        "paper reports; the block interval resamples non-overlapping blocks of "
+        f"{block_length} consecutive pairs in corpus order, the final short block kept, "
+        "and is reported because these corpora are not exchangeable sentence by sentence: "
+        "Itih\\=asa test is consecutive verses of one epic and FLORES devtest consecutive "
+        "sentences of the documents it was drawn from. Width is the block interval's "
+        "width over the i.i.d.\\ one. Rows, controls and the $^{\\ddagger}$ mark are as in "
+        f"Table~\\ref{{tab:tppcontrolled}}, with {arm_tt(BYTE_ARM)}, the byte-level "
+        "reference, added at the foot of each block."
+    )
+    return table_float(body="\n".join(lines), caption=caption, label="tab:blockci",
+                       wide=True)
 
 
 def tpp_hindi_table(exp02: dict[str, Any]) -> str:
@@ -680,6 +979,8 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     ]
     best = exp02["tpp"]["samayik_test"]["T1_bpe_raw_64k"]["slp1"]["T0_o200k"]
     best_ctrl = exp02["tpp_controlled"]["samayik_test"]["T1_bpe_raw_64k/E1_bpe_64k"]
+    huge_ctrl = exp02["tpp_controlled"]["samayik_test"]["T1_bpe_raw_128k/E1_bpe_128k"]
+    huge_ood = exp02["tpp_controlled"]["samayik_test_ood"]["T1_bpe_raw_128k/E1_bpe_128k"]
 
     # The Hindi band was pre-registered as [2, 4]. Count the arms that fall outside it
     # rather than asserting "held": one arm below the floor is not the same as holding.
@@ -738,9 +1039,13 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
             "\\texttt{T6} is not built here. On the raw-subword baselines, the only "
             "Sanskrit-native arms this paper builds: "
             f"{ratio(float(best['value']))} {ci(best)} on prose against the deployed "
-            f"pivot, {ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched "
-            "control",
-            "Untested: the predicted arm is not built here",
+            f"pivot; {ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched "
+            f"control at {count(vocab_size(exp02, 'T1_bpe_raw_64k'))} pieces, and "
+            f"{ratio(float(huge_ctrl['value']))} {ci(huge_ctrl)} at "
+            f"{count(requested_vocab('T1_bpe_raw_128k'))} on in-domain prose against "
+            f"{ratio(float(huge_ood['value']))} {ci(huge_ood)} out of domain",
+            "Observed against the pivot; under the matched control only at "
+            f"{count(requested_vocab('T1_bpe_raw_128k'))} in domain",
         ],
     ]
     body = tabular(
@@ -755,10 +1060,10 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         "timestamp, and it is reported for that reason and no stronger one. The first "
         "four are guesses at magnitudes rather than substantive hypotheses. The fifth was "
         "written for a sandhi-split, morpheme-constrained arm this paper does not build, "
-        "so it is untested; what its Measured cell carries instead is this paper's "
-        "central negative result for the baselines it does build, where the crossing is "
-        "real against the deployed English pivot and disappears against the matched "
-        "English control."
+        "so its Outcome is recorded against the raw-subword baselines this paper does "
+        "build instead: the crossing is real against the deployed English pivot, and "
+        "against the matched English control it appears only at the largest vocabulary "
+        "trained here and only on in-domain prose."
     )
     return table_float(body, caption, "tab:prereg", wide=True)
 
@@ -827,13 +1132,15 @@ def bin_label_tex(name: str) -> str:
 
 
 def controlled_pair_keys(exp02: dict[str, Any]) -> list[str]:
-    """The matched pairs this paper reports, as they key the controlled and length blocks.
+    """The matched pairs the length blocks carry.
 
-    Restricted to `CONTROLLED_PAIRS`: the snapshot may carry pairs whose prose is not
-    written yet, and a table must not print a number the manuscript does not discuss.
+    Restricted to `LENGTH_PAIRS`, which is what Experiment 02 stratifies: its
+    `length_strata_skip_arms` leaves the 128k arms, the byte-matched controls and the byte
+    reference out of the strata, and a table must not print a number the snapshot does not
+    hold or the manuscript does not discuss.
     """
     configured = {f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]}
-    return [pair for pair in CONTROLLED_PAIRS if pair in configured]
+    return [pair for pair in LENGTH_PAIRS if pair in configured]
 
 
 def _length_cell(node: dict[str, Any] | None, suppress_below: int | None = None) -> str:
@@ -1051,7 +1358,7 @@ def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
     alphas = [str(float(alpha)) for alpha in exp02["config"]["renyi_alphas"]]
 
     rows: list[list[str]] = []
-    for arm in (*T0_ARMS, *T3_ARMS, *TRAINED_ARMS):
+    for arm in (*T0_ARMS, *T3_ARMS, *RENYI_TRAINED_ARMS):
         node = renyi.get(arm)
         if node is None:
             continue
@@ -1061,7 +1368,7 @@ def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
                 entry = node.get(variant, {}).get(alpha)
                 cells.append(ratio(float(entry["value"])) if entry else "n/a")
         rows.append(cells)
-    for arm in (*T0_ARMS, *controlled_english_arms()):
+    for arm in (*T0_ARMS, *RENYI_ENGLISH_ARMS):
         node = english.get(arm)
         if node is None:
             continue
@@ -1082,7 +1389,12 @@ def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
         "variants. The English-side rows carry the English text under the named pivot and "
         "have no script variant, so their values are placed in the right-hand pair of "
         "columns. Reported as a diagnostic only: the measure can be gamed, so it supports "
-        "no claim in this paper on its own."
+        "no claim in this paper on its own, and it is tabulated for the size-matched "
+        f"{count(vocab_size(exp02, 'T1_bpe_raw_32k'))}- and "
+        f"{count(vocab_size(exp02, 'T1_bpe_raw_64k'))}-piece arms and their pair-matched "
+        "controls rather than extended over the byte-matched and "
+        f"{count(requested_vocab('T1_bpe_raw_128k'))}-piece arms of "
+        "Section~\\ref{sec:rq2-controlled}."
     )
     return table_float(body, caption, "tab:renyi", wide=True)
 
@@ -1114,7 +1426,7 @@ def renyi_macros(exp02: dict[str, Any]) -> dict[str, str]:
     slp1 = [sanskrit(arm, "slp1") for arm in band]
     english_values = [
         float(english[arm][alpha]["value"])
-        for arm in (*T0_ARMS, *controlled_english_arms())
+        for arm in (*T0_ARMS, *RENYI_ENGLISH_ARMS)
         if arm in english
     ]
     unigram = [
@@ -1309,6 +1621,205 @@ def length_macros(exp02: dict[str, Any]) -> dict[str, str]:
     return values
 
 
+def _megabytes(value: int) -> str:
+    """A corpus size in megabytes, to two decimals, as the Limitations section reads it."""
+    return f"{value / 1_000_000:.2f}"
+
+
+def byte_matched_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §5.3's byte-matched paragraph reads.
+
+    The move is measured pair by pair: for each Sanskrit arm and corpus, the ratio against
+    the pair-matched control against the ratio against the byte-matched one. A verdict is
+    whether the interval sits above 1.0, below it, or straddles it, and the count of
+    verdicts that change between the two controls is what the paragraph claims.
+    """
+    controlled = exp02["tpp_controlled"]
+    moves: list[float] = []
+    changed = 0
+    for corpus in controlled:
+        for pair in reported_pairs(exp02):
+            sa_arm, en_arm = pair.split("/")
+            if is_byte_matched(en_arm):
+                continue
+            twin = f"{sa_arm}/{en_arm}_bm"
+            if twin not in controlled[corpus]:  # pragma: no cover - not this snapshot
+                continue
+            node = controlled[corpus][pair]
+            twin_node = controlled[corpus][twin]
+            moves.append(float(twin_node["value"]) - float(node["value"]))
+            if _verdict(node) != _verdict(twin_node):
+                changed += 1
+    median = statistics.median(abs(move) for move in moves)
+    excess = ENGLISH_TRAIN_BYTES / SANSKRIT_TRAIN_BYTES - 1.0
+    return {
+        "numBmLines": count(ENGLISH_BM_TRAIN_LINES),
+        "numBmLinePct": f"{ENGLISH_BM_TRAIN_LINES / ENGLISH_TRAIN_LINES * 100:.1f}",
+        "numBytesSanskritTrain": _megabytes(SANSKRIT_TRAIN_BYTES),
+        "numBytesEnglishTrain": _megabytes(ENGLISH_TRAIN_BYTES),
+        "numBytesEnglishBmTrain": _megabytes(ENGLISH_BM_TRAIN_BYTES),
+        "numBytesEnglishExcessPct": f"{excess * 100:.0f}",
+        "numBmMoveCount": str(len(moves)),
+        "numBmMaxMove": f"{max(abs(move) for move in moves):.3f}",
+        "numBmMedianMove": f"{median:.3f}",
+        "numBmDownwardCount": str(sum(1 for move in moves if move < 0)),
+        "numBmVerdictChanges": str(changed),
+    }
+
+
+def _verdict(node: dict[str, Any]) -> str:
+    """Where an interval sits relative to parity: above it, below it, or across it."""
+    if float(node["ci_low"]) > 1.0:
+        return "above"
+    if float(node["ci_high"]) < 1.0:
+        return "below"
+    return "straddles"  # pragma: no cover - no controlled interval straddles i.i.d. here
+
+
+def bpe_progression(exp02: dict[str, Any]) -> dict[str, list[float]]:
+    """The BPE ratio at each vocabulary size, per corpus and per control.
+
+    Keyed `corpus/E1` and `corpus/E1_bm`, values in `VOCAB_TOKENS` order. This is the
+    sweep §5.3 reads: whether the controlled penalty shrinks as the vocabulary grows.
+    """
+    controlled = exp02["tpp_controlled"]
+    series: dict[str, list[float]] = {}
+    for corpus in controlled:
+        for suffix, name in (("", "E1"), ("_bm", "E1_bm")):
+            values: list[float] = []
+            for token in VOCAB_TOKENS:
+                pair = f"T1_bpe_raw_{token}/E1_bpe_{token}{suffix}"
+                if pair not in controlled[corpus]:  # pragma: no cover - not this snapshot
+                    break
+                values.append(float(controlled[corpus][pair]["value"]))
+            if len(values) == len(VOCAB_TOKENS):
+                series[f"{corpus}/{name}"] = values
+    return series
+
+
+def vocabulary_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §5.3's vocabulary paragraph reads."""
+    controlled = exp02["tpp_controlled"]
+    series = bpe_progression(exp02)
+    monotone = sum(
+        1 for values in series.values() if values[0] > values[1] > values[2]
+    )
+    # The one sequence that is not monotone at every step: FLORES under the pair-matched
+    # control, where the first two sizes are within a thousandth of each other. The prose
+    # states that gap rather than rounding it away.
+    steps = [
+        abs(values[1] - values[0])
+        for values in series.values()
+        if not values[0] > values[1] > values[2]
+    ]
+    values: dict[str, str] = {
+        "numVocabHuge": count(requested_vocab("T1_bpe_raw_128k")),
+        "numBpeMonotoneSequences": str(monotone),
+        "numBpeSequencesTotal": str(len(series)),
+        "numBpeFloresStepGap": f"{max(steps):.3f}" if steps else "0.000",
+    }
+    for key, corpus, pair in (
+        ("numTppBpeHugeSamayik", "samayik_test", "T1_bpe_raw_128k/E1_bpe_128k"),
+        ("numTppBpeHugeSamayikBm", "samayik_test", "T1_bpe_raw_128k/E1_bpe_128k_bm"),
+        ("numTppBpeHugeOod", "samayik_test_ood", "T1_bpe_raw_128k/E1_bpe_128k"),
+    ):
+        node = controlled[corpus][pair]
+        values[key] = ratio(float(node["value"]))
+        values[f"{key}Ci"] = ci(node)
+    ood = controlled["samayik_test_ood"]["T1_bpe_raw_128k/E1_bpe_128k"]
+    values["numTppBpeHugeOodBlockCi"] = (
+        f"[{float(ood['ci_low_block']):.3f}, {float(ood['ci_high_block']):.3f}]"
+    )
+    values["numTppBpeHugeFlores"] = ratio(
+        float(controlled["flores_devtest"]["T1_bpe_raw_128k/E1_bpe_128k"]["value"])
+    )
+    return values
+
+
+def decomposition_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §5.4 reads: the character ratio, the density band, the byte reference."""
+    if "side_decomposition" not in exp02:  # pragma: no cover - not this snapshot
+        return {}
+    decomposition = exp02["side_decomposition"]
+    small = reported_pairs(exp02, SMALL_VOCAB_TOKENS)
+    huge = reported_pairs(exp02, (HUGE_VOCAB_TOKEN,))
+    prose = decomposition[LENGTH_PROSE_CORPUS]
+    verse = decomposition[LENGTH_VERSE_CORPUS]
+    char_prose = float(prose[small[0]]["char_ratio"])
+    char_verse = float(verse[small[0]]["char_ratio"])
+    values = {
+        "numCharRatioSamayik": ratio(char_prose),
+        "numCharRatioItihasa": ratio(char_verse),
+        "numCharRatioFactor": ratio(char_prose / char_verse),
+        "numDensityPairGap": ratio(
+            max(
+                abs(float(prose[pair]["density_ratio"]) - float(verse[pair]["density_ratio"]))
+                for pair in small
+            )
+        ),
+        "numTSevenSamayik": ratio(float(prose[BYTE_PAIR]["tpp"])),
+        "numTSevenItihasa": ratio(float(verse[BYTE_PAIR]["tpp"])),
+        "numTSevenVocab": count(vocab_size(exp02, BYTE_ARM)),
+    }
+    # The 128k band the prose quotes is the size-matched BPE pair under both controls:
+    # it is read beside the crossing, and the Unigram rows at that size are not
+    # size-matched and do not cross.
+    huge_bpe = [pair for pair in huge if "_bpe_" in pair.split("/")[0]]
+    for key, node, pairs in (
+        ("numDensityRatioSamayik", prose, small),
+        ("numDensityRatioItihasa", verse, small),
+        ("numDensityRatioSamayikHuge", prose, huge_bpe),
+    ):
+        band = [float(node[pair]["density_ratio"]) for pair in pairs]
+        values[f"{key}Lo"] = ratio(min(band))
+        values[f"{key}Hi"] = ratio(max(band))
+    return values
+
+
+def block_macros(exp02: dict[str, Any]) -> dict[str, str]:
+    """The macros §3 and the block-interval appendix read."""
+    controlled = exp02["tpp_controlled"]
+    pairs = [*reported_pairs(exp02)]
+    if BYTE_PAIR in controlled[LENGTH_PROSE_CORPUS]:
+        pairs.append(BYTE_PAIR)
+    sample = controlled[LENGTH_PROSE_CORPUS][pairs[0]]
+    values = {
+        "numBlockLength": str(int(sample["block_length"])),
+        "numBlockRowsPerCorpus": str(len(pairs)),
+    }
+    for key, corpus in (
+        ("numBlockWidenSamayik", "samayik_test"),
+        ("numBlockWidenOod", "samayik_test_ood"),
+        ("numBlockWidenItihasa", "itihasa_test"),
+        ("numBlockWidenFlores", "flores_devtest"),
+    ):
+        widths = []
+        for pair in pairs:
+            node = controlled[corpus][pair]
+            iid = float(node["ci_high"]) - float(node["ci_low"])
+            block = float(node["ci_high_block"]) - float(node["ci_low_block"])
+            widths.append(block / iid)
+        values[f"{key}Lo"] = f"{min(widths):.1f}"
+        values[f"{key}Hi"] = f"{max(widths):.1f}"
+    narrower = sum(
+        1
+        for pair in pairs
+        if (
+            float(controlled["samayik_test"][pair]["ci_high_block"])
+            - float(controlled["samayik_test"][pair]["ci_low_block"])
+        )
+        < (
+            float(controlled["samayik_test"][pair]["ci_high"])
+            - float(controlled["samayik_test"][pair]["ci_low"])
+        )
+    )
+    values["numBlockNarrowerSamayik"] = str(narrower)
+    values["numBlockItihasaMaxUpper"] = ratio(
+        max(float(controlled["itihasa_test"][pair]["ci_high_block"]) for pair in pairs)
+    )
+    return values
+
+
 def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     """Every number the manuscript's prose contains, as a `\\newcommand`."""
     values: dict[str, str] = {}
@@ -1414,24 +1925,53 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     values["numEnTokensEOneBpe"] = count(int(best["pivot_tokens"]))
     saving = 1.0 - float(best["pivot_tokens"]) / float(node["pivot_tokens"])
     values["numEnTokenSavingPct"] = f"{saving * 100:.1f}"
-    reported_pairs = controlled_pair_keys(exp02)
+    # The prose-corpus statement of §5.3 is about the sizes at which both sides are
+    # size-matched under both controls, so these ranges run over those eight pairs; the
+    # 128k pairs, where the in-domain verdict changes, carry their own macros below.
+    small_pairs = reported_pairs(exp02, SMALL_VOCAB_TOKENS)
+    huge_pairs = reported_pairs(exp02, (HUGE_VOCAB_TOKEN,))
     for key, corpus in (
         ("numTppControlledSamayik", "samayik_test"),
         ("numTppControlledOod", "samayik_test_ood"),
         ("numTppControlledItihasa", "itihasa_test"),
         ("numTppControlledFlores", "flores_devtest"),
     ):
-        pairs = [float(controlled[corpus][pair]["value"]) for pair in reported_pairs]
+        pairs = [float(controlled[corpus][pair]["value"]) for pair in small_pairs]
         values[f"{key}Lo"] = ratio(min(pairs))
         values[f"{key}Hi"] = ratio(max(pairs))
+    every = [
+        float(controlled["itihasa_test"][pair]["value"])
+        for pair in reported_pairs(exp02)
+    ]
+    values["numTppControlledItihasaAllLo"] = ratio(min(every))
+    values["numTppControlledItihasaAllHi"] = ratio(max(every))
+    # Out of domain for both sides: the out-of-domain prose split and FLORES.
+    out_of_domain = [
+        float(controlled[corpus][pair]["value"])
+        for corpus in ("samayik_test_ood", "flores_devtest")
+        for pair in huge_pairs
+    ]
+    values["numTppControlledHugeOodLo"] = ratio(min(out_of_domain))
+    values["numTppControlledHugeOodHi"] = ratio(max(out_of_domain))
     values["numTppControlledBpeThirtyTwo"] = ratio(
         float(controlled["samayik_test"]["T1_bpe_raw_32k/E1_bpe_32k"]["value"])
     )
-    values["numControlledPairs"] = str(len(reported_pairs))
-    requested = 64000
+    values["numControlledPairs"] = str(len(controlled_pair_keys(exp02)))
+    values["numControlledPairsAll"] = str(len(reported_pairs(exp02)))
+    values["numControlledPairsSmall"] = str(len(small_pairs))
+    values["numControlledPairsHuge"] = str(len(huge_pairs))
     actual = vocab_size(exp02, "E1_unigram_64k")
     values["numUnigramSixtyFourPieces"] = count(actual)
-    values["numUnigramSixtyFourShortfallPct"] = f"{(1 - actual / requested) * 100:.1f}"
+    values["numUnigramSixtyFourShortfallPct"] = (
+        f"{(1 - actual / requested_vocab('E1_unigram_64k')) * 100:.1f}"
+    )
+    values["numUnigramBmPieces"] = count(vocab_size(exp02, "E1_unigram_64k_bm"))
+    values["numUnigramHugePieces"] = count(vocab_size(exp02, "E1_unigram_128k"))
+
+    values.update(byte_matched_macros(exp02))
+    values.update(vocabulary_macros(exp02))
+    values.update(decomposition_macros(exp02))
+    values.update(block_macros(exp02))
 
     # Setup.
     deployed_vocabs = [vocab_size(exp02, arm) for arm in available_deployed(exp02)]
@@ -1488,9 +2028,10 @@ def build(exp01: dict[str, Any], exp02: dict[str, Any]) -> dict[str, str]:
         "parity.tex": parity_table(exp01),
         "fertility_compression.tex": fertility_compression_table(exp01),
         "fertility_compression_full.tex": fertility_compression_full_table(exp01),
-        "tpp_deployed.tex": tpp_deployed_table(exp02),
         "tpp_deployed_all.tex": tpp_deployed_all_tables(exp02),
         "tpp_controlled.tex": tpp_controlled_table(exp02),
+        "decomposition.tex": decomposition_table(exp02),
+        "block_ci.tex": block_ci_table(exp02),
         "tpp_hindi.tex": tpp_hindi_table(exp02),
         "preregistration.tex": preregistration_table(exp01, exp02),
         "arms.tex": arms_table(exp01, exp02),

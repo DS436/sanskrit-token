@@ -1,0 +1,23 @@
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4.0pt}
+\scriptsize
+\begin{tabular}{llrrrrrr}
+\toprule
+Matched pair & Control & S\=amayik test chars & density & TPP & Itih\=asa test chars & density & TPP \\
+\midrule
+BPE 32k & \texttt{E1} & 1.028 & 1.054 & 1.084 & 0.596 & 1.083 & 0.645 \\
+BPE 32k & \texttt{E1\_bm} & 1.028 & 1.051 & 1.081 & 0.596 & 1.082 & 0.645 \\
+BPE 64k & \texttt{E1} & 1.028 & 1.006 & 1.035 & 0.596 & 1.003 & 0.598 \\
+BPE 64k & \texttt{E1\_bm} & 1.028 & 1.002 & 1.030 & 0.596 & 1.001 & 0.597 \\
+Unigram 32k & \texttt{E1} & 1.028 & 1.111 & 1.142 & 0.596 & 1.104 & 0.658 \\
+Unigram 32k & \texttt{E1\_bm} & 1.028 & 1.102 & 1.133 & 0.596 & 1.092 & 0.651 \\
+Unigram 64k & \texttt{E1}$^{\ddagger}$ & 1.028 & 1.076 & 1.107 & 0.596 & 1.045 & 0.623 \\
+Unigram 64k & \texttt{E1\_bm}$^{\ddagger}$ & 1.028 & 1.058 & 1.088 & 0.596 & 1.029 & 0.613 \\
+BPE 128k & \texttt{E1} & 1.028 & 0.956 & 0.983 & 0.596 & 0.934 & 0.557 \\
+\texttt{T7\_byt5} & --- & 1.028 & 0.999 & 1.027 & 0.596 & 0.998 & 0.595 \\
+\bottomrule
+\end{tabular}
+\caption{Tokens per proposition factorised exactly, on the primary prose corpus and on the verse corpus. Per corpus: the character ratio $\sum_i c(s_i) / \sum_i c(e_i)$, how much text each side spends on the same propositions; the density ratio, each side's tokens per character over the other's; and their product, the ratio of Table~\ref{tab:tppcontrolled}. Sanskrit is read in SLP1, one character per phoneme, so the character ratio does not depend on the tokenizer and repeats down its column. \texttt{T7\_byt5} has no vocabulary to vary, so its product is the text ratio itself.}
+\label{tab:decomposition}
+\end{table*}

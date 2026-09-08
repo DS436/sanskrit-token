@@ -14,11 +14,14 @@ Arm & Vocab. & SLP1 vs \texttt{o200k} & SLP1 vs Llama-4 & Orig.\ vs \texttt{o200
 \texttt{T3\_brahmic131k} & 131,072 & 1.873 [1.850, 1.896] & 1.839 [1.816, 1.862] & 1.899 [1.872, 1.924] & 3.22 \\
 \texttt{T1\_bpe\_raw\_32k}$^{*}$ & 32,000 & \textbf{0.984 [0.970, 0.998]} & \textbf{0.966 [0.952, 0.980]} & n/a & 1.65 \\
 \texttt{T1\_bpe\_raw\_64k}$^{*}$ & 64,000 & \textbf{0.887 [0.875, 0.899]} & \textbf{0.871 [0.859, 0.883]} & n/a & 1.49 \\
+\texttt{T1\_bpe\_raw\_128k}$^{*}$ & 128,000 & \textbf{0.818 [0.807, 0.830]} & \textbf{0.804 [0.792, 0.815]} & n/a & 1.37 \\
 \texttt{T2\_unigram\_raw\_32k}$^{*}$ & 32,000 & 1.069 [1.055, 1.085] & 1.050 [1.036, 1.066] & n/a & 1.80 \\
 \texttt{T2\_unigram\_raw\_64k}$^{*}$ & 64,000 & 1.002 [0.988, 1.017] & \textbf{0.984 [0.970, 0.998]} & n/a & 1.69 \\
+\texttt{T2\_unigram\_raw\_128k}$^{*}$ & 128,000 & \textbf{0.952 [0.939, 0.966]} & \textbf{0.935 [0.921, 0.949]} & n/a & 1.60 \\
+\texttt{T7\_byt5} & 256 & 4.480 [4.424, 4.537] & 4.399 [4.344, 4.458] & 10.816 [10.672, 10.960] & 6.69 \\
 \bottomrule
 \end{tabular}
-\caption{Deployed practice on S\=amayik test (prose), $n=2{,}417$ pairs. Columns as in Table~\ref{tab:tppdeployed}.}
+\caption{Deployed practice on S\=amayik test (prose), $n=2{,}417$ aligned pairs. Tokens per proposition: Sanskrit tokens under the named arm divided by English tokens under a deployed 200k-vocabulary English tokenizer, with 95\% paired bootstrap intervals. This is not a controlled comparison: vocabulary size and training domain vary alongside language, which is what Table~\ref{tab:tppcontrolled} holds fixed. $^{*}$~marks the provisional trained arms and \texttt{T7\_byt5} the byte-level reference. Fertility is in the last column for completeness and is not part of any claim here. Bold marks an interval entirely below 1.0. \texttt{T3\_indicsuper} is omitted: no candidate repository resolved.}
 \label{tab:tppdeployed-samayik-test}
 \end{table*}
 
@@ -38,11 +41,14 @@ Arm & Vocab. & SLP1 vs \texttt{o200k} & SLP1 vs Llama-4 & Orig.\ vs \texttt{o200
 \texttt{T3\_brahmic131k} & 131,072 & 1.972 [1.949, 1.993] & 1.943 [1.921, 1.964] & 1.952 [1.929, 1.974] & 4.05 \\
 \texttt{T1\_bpe\_raw\_32k}$^{*}$ & 32,000 & 1.139 [1.126, 1.152] & 1.123 [1.109, 1.134] & n/a & 2.31 \\
 \texttt{T1\_bpe\_raw\_64k}$^{*}$ & 64,000 & 1.048 [1.036, 1.059] & 1.032 [1.020, 1.044] & n/a & 2.12 \\
+\texttt{T1\_bpe\_raw\_128k}$^{*}$ & 128,000 & \textbf{0.977 [0.966, 0.988]} & \textbf{0.963 [0.951, 0.973]} & n/a & 1.98 \\
 \texttt{T2\_unigram\_raw\_32k}$^{*}$ & 32,000 & 1.260 [1.244, 1.274] & 1.241 [1.226, 1.255] & n/a & 2.55 \\
 \texttt{T2\_unigram\_raw\_64k}$^{*}$ & 64,000 & 1.189 [1.174, 1.202] & 1.171 [1.157, 1.184] & n/a & 2.40 \\
+\texttt{T2\_unigram\_raw\_128k}$^{*}$ & 128,000 & 1.115 [1.101, 1.127] & 1.098 [1.085, 1.110] & n/a & 2.26 \\
+\texttt{T7\_byt5} & 256 & 4.576 [4.522, 4.627] & 4.508 [4.455, 4.557] & 11.339 [11.206, 11.467] & 8.34 \\
 \bottomrule
 \end{tabular}
-\caption{Deployed practice on S\=amayik test\_ood (prose, OOD), $n=4{,}047$ pairs. Columns as in Table~\ref{tab:tppdeployed}.}
+\caption{Deployed practice on S\=amayik test\_ood (prose, OOD), $n=4{,}047$ pairs. Columns as in Table~\ref{tab:tppdeployed-samayik-test}.}
 \label{tab:tppdeployed-samayik-test-ood}
 \end{table*}
 
@@ -62,11 +68,14 @@ Arm & Vocab. & SLP1 vs \texttt{o200k} & SLP1 vs Llama-4 & Orig.\ vs \texttt{o200
 \texttt{T3\_brahmic131k} & 131,072 & 1.121 [1.115, 1.126] & 1.102 [1.097, 1.107] & 1.151 [1.146, 1.156] & 4.25 \\
 \texttt{T1\_bpe\_raw\_32k}$^{*}$ & 32,000 & \textbf{0.513 [0.511, 0.516]} & \textbf{0.505 [0.502, 0.507]} & n/a & 1.90 \\
 \texttt{T1\_bpe\_raw\_64k}$^{*}$ & 64,000 & \textbf{0.462 [0.460, 0.464]} & \textbf{0.454 [0.452, 0.457]} & n/a & 1.71 \\
+\texttt{T1\_bpe\_raw\_128k}$^{*}$ & 128,000 & \textbf{0.425 [0.423, 0.427]} & \textbf{0.418 [0.416, 0.420]} & n/a & 1.57 \\
 \texttt{T2\_unigram\_raw\_32k}$^{*}$ & 32,000 & \textbf{0.551 [0.548, 0.553]} & \textbf{0.542 [0.539, 0.544]} & n/a & 2.04 \\
 \texttt{T2\_unigram\_raw\_64k}$^{*}$ & 64,000 & \textbf{0.513 [0.511, 0.516]} & \textbf{0.505 [0.502, 0.507]} & n/a & 1.90 \\
+\texttt{T2\_unigram\_raw\_128k}$^{*}$ & 128,000 & \textbf{0.484 [0.481, 0.486]} & \textbf{0.476 [0.473, 0.478]} & n/a & 1.79 \\
+\texttt{T7\_byt5} & 256 & 2.549 [2.538, 2.561] & 2.507 [2.496, 2.518] & 6.573 [6.542, 6.602] & 8.54 \\
 \bottomrule
 \end{tabular}
-\caption{Deployed practice on Itih\=asa test (verse), $n=11{,}721$ pairs. Columns as in Table~\ref{tab:tppdeployed}.}
+\caption{Deployed practice on Itih\=asa test (verse), $n=11{,}721$ pairs. Columns as in Table~\ref{tab:tppdeployed-samayik-test}.}
 \label{tab:tppdeployed-itihasa-test}
 \end{table*}
 
@@ -86,10 +95,13 @@ Arm & Vocab. & SLP1 vs \texttt{o200k} & SLP1 vs Llama-4 & Orig.\ vs \texttt{o200
 \texttt{T3\_brahmic131k} & 131,072 & 2.244 [2.219, 2.269] & 2.230 [2.205, 2.254] & 2.087 [2.064, 2.110] & 3.57 \\
 \texttt{T1\_bpe\_raw\_32k}$^{*}$ & 32,000 & 1.312 [1.297, 1.327] & 1.304 [1.288, 1.318] & n/a & 2.07 \\
 \texttt{T1\_bpe\_raw\_64k}$^{*}$ & 64,000 & 1.220 [1.204, 1.234] & 1.212 [1.197, 1.226] & n/a & 1.92 \\
+\texttt{T1\_bpe\_raw\_128k}$^{*}$ & 128,000 & 1.145 [1.130, 1.158] & 1.137 [1.123, 1.150] & n/a & 1.80 \\
 \texttt{T2\_unigram\_raw\_32k}$^{*}$ & 32,000 & 1.450 [1.432, 1.467] & 1.441 [1.423, 1.458] & n/a & 2.29 \\
 \texttt{T2\_unigram\_raw\_64k}$^{*}$ & 64,000 & 1.366 [1.349, 1.382] & 1.357 [1.341, 1.373] & n/a & 2.15 \\
+\texttt{T2\_unigram\_raw\_128k}$^{*}$ & 128,000 & 1.283 [1.268, 1.298] & 1.275 [1.259, 1.290] & n/a & 2.02 \\
+\texttt{T7\_byt5} & 256 & 5.203 [5.142, 5.259] & 5.170 [5.110, 5.226] & 12.906 [12.747, 13.053] & 7.29 \\
 \bottomrule
 \end{tabular}
-\caption{Deployed practice on FLORES devtest, $n=1{,}012$ pairs. Columns as in Table~\ref{tab:tppdeployed}.}
+\caption{Deployed practice on FLORES devtest, $n=1{,}012$ pairs. Columns as in Table~\ref{tab:tppdeployed-samayik-test}.}
 \label{tab:tppdeployed-flores-devtest}
 \end{table*}

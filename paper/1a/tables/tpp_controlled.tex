@@ -1,17 +1,25 @@
 \begin{table*}[t]
 \centering
-\setlength{\tabcolsep}{4.0pt}
+\setlength{\tabcolsep}{3.4pt}
 \scriptsize
-\begin{tabular}{lllll}
+\begin{tabular}{llllll}
 \toprule
-Sanskrit arm, over its matched English control & S\=amayik test & S\=amayik test\_ood & Itih\=asa test & FLORES devtest \\
+Matched pair & Control & S\=amayik test & S\=amayik test\_ood & Itih\=asa test & FLORES devtest \\
 \midrule
-\texttt{T1\_bpe\_raw\_32k}$^{*}$ & 1.084 [1.070, 1.098] & 1.086 [1.072, 1.098] & \textbf{0.645 [0.642, 0.649]} & 1.143 [1.131, 1.154] \\
-\texttt{T1\_bpe\_raw\_64k}$^{*}$ & 1.035 [1.021, 1.049] & 1.061 [1.048, 1.073] & \textbf{0.598 [0.594, 0.601]} & 1.144 [1.131, 1.155] \\
-\texttt{T2\_unigram\_raw\_32k}$^{*}$ & 1.142 [1.128, 1.157] & 1.163 [1.148, 1.176] & \textbf{0.658 [0.655, 0.661]} & 1.206 [1.194, 1.219] \\
-\texttt{T2\_unigram\_raw\_64k}$^{*}$ & 1.107 [1.092, 1.121] & 1.156 [1.142, 1.169] & \textbf{0.623 [0.619, 0.626]} & 1.219 [1.206, 1.232] \\
+BPE 32k & \texttt{E1} & 1.084 [1.070, 1.098] & 1.086 [1.072, 1.098] & \textbf{0.645 [0.642, 0.649]} & 1.143 [1.131, 1.154] \\
+BPE 32k & \texttt{E1\_bm} & 1.081 [1.067, 1.096] & 1.085 [1.072, 1.097] & \textbf{0.645 [0.641, 0.648]} & 1.139 [1.127, 1.150] \\
+BPE 64k & \texttt{E1} & 1.035 [1.021, 1.049] & 1.061 [1.048, 1.073] & \textbf{0.598 [0.594, 0.601]} & 1.144 [1.131, 1.155] \\
+BPE 64k & \texttt{E1\_bm} & 1.030 [1.017, 1.043] & 1.055 [1.042, 1.066] & \textbf{0.597 [0.593, 0.600]} & 1.131 [1.119, 1.142] \\
+BPE 128k & \texttt{E1} & \textbf{0.983 [0.971, 0.997]} & 1.025 [1.013, 1.037] & \textbf{0.557 [0.554, 0.560]} & 1.116 [1.103, 1.127] \\
+BPE 128k & \texttt{E1\_bm} & \textbf{0.978 [0.965, 0.991]} & 1.015 [1.002, 1.026] & \textbf{0.555 [0.552, 0.559]} & 1.103 [1.091, 1.115] \\
+Unigram 32k & \texttt{E1} & 1.142 [1.128, 1.157] & 1.163 [1.148, 1.176] & \textbf{0.658 [0.655, 0.661]} & 1.206 [1.194, 1.219] \\
+Unigram 32k & \texttt{E1\_bm} & 1.133 [1.118, 1.148] & 1.159 [1.145, 1.173] & \textbf{0.651 [0.647, 0.654]} & 1.209 [1.196, 1.222] \\
+Unigram 64k & \texttt{E1}$^{\ddagger}$ & 1.107 [1.092, 1.121] & 1.156 [1.142, 1.169] & \textbf{0.623 [0.619, 0.626]} & 1.219 [1.206, 1.232] \\
+Unigram 64k & \texttt{E1\_bm}$^{\ddagger}$ & 1.088 [1.073, 1.102] & 1.138 [1.124, 1.150] & \textbf{0.613 [0.610, 0.617]} & 1.194 [1.181, 1.206] \\
+Unigram 128k & \texttt{E1}$^{\ddagger}$ & 1.051 [1.037, 1.065] & 1.084 [1.071, 1.096] & \textbf{0.586 [0.584, 0.590]} & 1.145 [1.132, 1.157] \\
+Unigram 128k & \texttt{E1\_bm}$^{\ddagger}$ & 1.033 [1.019, 1.047] & 1.067 [1.054, 1.079] & \textbf{0.578 [0.575, 0.581]} & 1.122 [1.110, 1.133] \\
 \bottomrule
 \end{tabular}
-\caption{The controlled comparison. Each row is one matched pair: a trained Sanskrit arm over the English arm sharing its algorithm, its vocabulary size and its training corpus (the two sides of the same S\=amayik and Itih\=asa training splits). The pairs are \texttt{T1\_bpe\_raw\_32k} over \texttt{E1\_bpe\_32k}, \texttt{T1\_bpe\_raw\_64k} over \texttt{E1\_bpe\_64k}, \texttt{T2\_unigram\_raw\_32k} over \texttt{E1\_unigram\_32k}, \texttt{T2\_unigram\_raw\_64k} over \texttt{E1\_unigram\_64k}. Values are tokens per proposition with 95\% paired bootstrap intervals; bold marks an interval entirely below 1.0. Sanskrit is scored in SLP1, English as written, and each arm's name carries its vocabulary size. Pairs: S\=amayik test (prose) 2,417, S\=amayik test\_ood (prose, OOD) 4,047, Itih\=asa test (verse) 11,721, FLORES devtest 1,012. Only the verse corpus stays below parity, and verse carries a meter confound and a 19th-century English translation in the denominator. Both sides of a pair were asked for the same vocabulary size; \texttt{E1\_unigram\_64k} settles on 62,896 pieces, because the EM trainer stops short when the corpus does not support the full vocabulary. That shortfall makes the English side dearer, so it pushes the last row down, against the direction that row is read for.}
+\caption{The controlled comparison. Each row is one matched pair: a trained Sanskrit arm over an English arm sharing its algorithm, vocabulary size and training corpus. \texttt{E1} is the pair-matched control, trained on the English side of the very sentences whose Sanskrit side trained the arm; \texttt{E1\_bm} is the byte-matched control, trained on a subsample of that text cut to the Sanskrit corpus's byte count. \texttt{BPE 32k} is \texttt{T1\_bpe\_raw\_32k} over \texttt{E1\_bpe\_32k}, and so on. Values are tokens per proposition with 95\% paired bootstrap intervals, Sanskrit scored in SLP1 and English as written; bold marks an interval entirely below 1.0. Pairs: S\=amayik test (prose) 2,417, S\=amayik test\_ood (prose, OOD) 4,047, Itih\=asa test (verse) 11,721, FLORES devtest 1,012. $^{\ddagger}$~marks a Unigram control the trainer could not bring to the requested size, settling at 50,659 and 62,896 pieces, which makes the English side dearer and pushes those rows down.}
 \label{tab:tppcontrolled}
 \end{table*}

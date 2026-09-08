@@ -36,7 +36,7 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import matplotlib
 
@@ -154,6 +154,22 @@ CONTROLLED_PAIRS: tuple[str, ...] = (
     "T2_unigram_raw_32k/E1_unigram_32k",
     "T2_unigram_raw_64k/E1_unigram_64k",
 )
+
+#: The byte-level reference, drawn as a dotted line rather than a marker: measured on both
+#: sides of the same pairs it is the two sides' byte ratio, not a tokenizer comparison.
+BYTE_PAIR = "T7_byt5/T7_byt5"
+
+#: The vocabulary sweep of `figure_vocab`, smallest first, and the two algorithms it
+#: draws. Only the pair-matched control is drawn: the byte-matched twin moves every point
+#: by under a hundredth (Table 4), and doubling the lines would cost the figure its point.
+VOCAB_TOKENS = ("32k", "64k", "128k")
+#: (legend label, Sanskrit arm template, English control template, line style).
+VOCAB_FAMILIES: tuple[tuple[str, str, str, Literal["-", "--"]], ...] = (
+    ("BPE", "T1_bpe_raw_{token}", "E1_bpe_{token}", "-"),
+    ("Unigram", "T2_unigram_raw_{token}", "E1_unigram_{token}", "--"),
+)
+#: One hue per corpus, in the configured order (prose first).
+CORPUS_COLOURS = (ACCENT, "#0C4A42", MUTED_RED, NEUTRAL_DARK)
 
 CORPUS_LABELS: dict[str, str] = {
     "samayik_test": "Sāmayik test\n(prose, primary)",
@@ -350,10 +366,14 @@ def figure_denominator(exp02: dict[str, Any]) -> Figure:
         for index, (sa_arm, en_arm) in enumerate(pairs):
             deployed = exp02["tpp"][corpus][sa_arm]["slp1"][pivot]
             controlled = exp02["tpp_controlled"][corpus][f"{sa_arm}/{en_arm}"]
-            for offset, node, colour, marker in (
-                (-0.17, deployed, NEUTRAL, "o"),
-                (0.17, controlled, ACCENT, "s"),
-            ):
+            byte_matched = exp02["tpp_controlled"][corpus].get(f"{sa_arm}/{en_arm}_bm")
+            series: list[tuple[float, dict[str, Any], str, str, str]] = [
+                (-0.24, deployed, NEUTRAL, "o", NEUTRAL),
+                (0.0, controlled, ACCENT, "s", ACCENT),
+            ]
+            if byte_matched is not None:
+                series.append((0.24, byte_matched, ACCENT, "s", "white"))
+            for offset, node, colour, marker, face in series:
                 value = float(node["value"])
                 ax.errorbar(
                     [index + offset],
@@ -362,11 +382,22 @@ def figure_denominator(exp02: dict[str, Any]) -> Figure:
                     fmt=marker,
                     markersize=4.0,
                     color=colour,
+                    markerfacecolor=face,
+                    markeredgewidth=0.9,
                     ecolor=colour,
                     elinewidth=1.1,
                     capsize=2.0,
                     zorder=3,
                 )
+        byte_reference = exp02["tpp_controlled"][corpus].get(BYTE_PAIR)
+        if byte_reference is not None:
+            ax.axhline(
+                float(byte_reference["value"]),
+                color=SUBTLE_INK,
+                linestyle=":",
+                linewidth=0.9,
+                zorder=2,
+            )
         ax.axhline(1.0, color=NEUTRAL_LIGHT, linestyle="--", linewidth=0.9, zorder=1)
         ax.set_xticks(range(len(pairs)))
         ax.set_xticklabels(
@@ -383,10 +414,93 @@ def figure_denominator(exp02: dict[str, Any]) -> Figure:
         Line2D([], [], marker="o", linestyle="none", color=NEUTRAL, markersize=4.0,
                    label=f"vs deployed English ({pivot.replace('T0_', '')})"),
         Line2D([], [], marker="s", linestyle="none", color=ACCENT, markersize=4.0,
-                   label="vs matched English control (E1)"),
+                   label="vs pair-matched control (E1)"),
+        Line2D([], [], marker="s", linestyle="none", color=ACCENT, markersize=4.0,
+                   markerfacecolor="white", markeredgewidth=0.9,
+                   label="vs byte-matched control (E1_bm)"),
+        Line2D([], [], linestyle=":", color=SUBTLE_INK, linewidth=0.9,
+                   label="byte-level reference (T7_byt5)"),
     ]
-    fig.legend(handles=handles, fontsize=8, loc="lower center", ncol=2,
-               bbox_to_anchor=(0.5, -0.12))
+    fig.legend(handles=handles, fontsize=7.5, loc="lower center", ncol=2,
+               bbox_to_anchor=(0.5, -0.20))
+    fig.tight_layout()
+    return fig
+
+
+# --------------------------------------------------------------------------------------
+# Figure 3: the controlled ratio against the vocabulary size it was measured at
+# --------------------------------------------------------------------------------------
+
+
+def figure_vocab(exp02: dict[str, Any]) -> Figure | None:
+    """The controlled ratio at 32k, 64k and 128k pieces, per corpus and per algorithm.
+
+    Hollow markers are the rows whose English control fell short of the requested
+    vocabulary size, which makes that side dearer and pushes the point down.
+    """
+    controlled = exp02["tpp_controlled"]
+    corpora = list(controlled.keys())
+    sizes = {arm: int(node["vocab_size"]) for arm, node in exp02["tokenizer_sources"].items()}
+
+    fig, ax = plt.subplots(figsize=(3.4, 2.1))
+    drawn = False
+    for _label, sa_template, en_template, style in VOCAB_FAMILIES:
+        for corpus, colour in zip(corpora, CORPUS_COLOURS, strict=False):
+            xs: list[int] = []
+            ys: list[float] = []
+            matched: list[bool] = []
+            for index, token in enumerate(VOCAB_TOKENS):
+                sa_arm = sa_template.format(token=token)
+                en_arm = en_template.format(token=token)
+                pair = f"{sa_arm}/{en_arm}"
+                if pair not in controlled[corpus]:  # pragma: no cover - not this snapshot
+                    continue
+                xs.append(index)
+                ys.append(float(controlled[corpus][pair]["value"]))
+                requested = int(token[:-1]) * 1000
+                matched.append(sizes.get(en_arm, requested) == requested)
+            if not xs:  # pragma: no cover - not this snapshot
+                continue
+            drawn = True
+            ax.plot(xs, ys, linestyle=style, color=colour, linewidth=1.1, zorder=2)
+            for x, y, is_matched in zip(xs, ys, matched, strict=True):
+                ax.plot(
+                    [x],
+                    [y],
+                    marker="o" if style == "-" else "s",
+                    markersize=4.0,
+                    color=colour,
+                    markerfacecolor=colour if is_matched else "white",
+                    markeredgewidth=0.9,
+                    linestyle="none",
+                    zorder=3,
+                )
+    if not drawn:  # pragma: no cover - not this snapshot
+        plt.close(fig)
+        return None
+    ax.axhline(1.0, color=NEUTRAL_LIGHT, linestyle="--", linewidth=0.9, zorder=1)
+    ax.set_xticks(range(len(VOCAB_TOKENS)))
+    ax.set_xticklabels([f"{token} pieces" for token in VOCAB_TOKENS], fontsize=7.5)
+    ax.set_xlim(-0.25, len(VOCAB_TOKENS) - 0.75)
+    style_axes(ax, "tokens per proposition (Sa / En)")
+    ax.yaxis.label.set_fontsize(7.5)
+    ax.tick_params(axis="y", labelsize=7.5)
+
+    handles = [
+        Line2D([], [], color=colour, linewidth=1.1,
+               label=CORPUS_LABELS.get(corpus, corpus).replace("\n", " "))
+        for corpus, colour in zip(corpora, CORPUS_COLOURS, strict=False)
+    ]
+    handles.extend(
+        Line2D([], [], color=INK, linewidth=1.1, linestyle=style, label=label)
+        for label, _sa, _en, style in VOCAB_FAMILIES
+    )
+    # Inside the axes: the band between the verse lines and the prose lines is empty on
+    # every corpus, and a legend strip under the figure would cost the manuscript a
+    # third of a column for nothing.
+    ax.legend(handles=handles, fontsize=5.2, loc="center", ncol=2,
+              bbox_to_anchor=(0.5, 0.42), handlelength=1.8, columnspacing=1.0,
+              labelspacing=0.35)
     fig.tight_layout()
     return fig
 
@@ -747,6 +861,13 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("wrote %s", path)
     for path in save(figure_denominator(exp02), out_dir, "denominator"):
         LOGGER.info("wrote %s", path)
+
+    vocab = figure_vocab(exp02)
+    if vocab is None:  # pragma: no cover - only for a snapshot with one vocabulary size
+        LOGGER.info("skipping figures/vocab: the snapshot carries no vocabulary sweep")
+    else:
+        for path in save(vocab, out_dir, "vocab"):
+            LOGGER.info("wrote %s", path)
 
     length = figure_length(exp02)
     if length is None:  # pragma: no cover - only for a snapshot predating the analysis

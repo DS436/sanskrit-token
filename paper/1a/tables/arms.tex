@@ -5,21 +5,32 @@
 \toprule
 Arm & Family & Vocab. & What loaded \\
 \midrule
+\texttt{E1\_bpe\_128k\_bm} & E1 & 128,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{7efa70c72f69} \\
+\texttt{E1\_bpe\_128k} & E1 & 128,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{910c7dbf5185} \\
+\texttt{E1\_bpe\_32k\_bm} & E1 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{913ef268d3c4} \\
 \texttt{E1\_bpe\_32k} & E1 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{f639ee791e50} \\
+\texttt{E1\_bpe\_64k\_bm} & E1 & 64,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{eca779d73352} \\
 \texttt{E1\_bpe\_64k} & E1 & 64,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{e57168ce7f9d} \\
+\texttt{E1\_unigram\_128k\_bm} & E1 & 50,659 & trained here; \texttt{tokenizer.json} sha256 \texttt{34fe0d224522} \\
+\texttt{E1\_unigram\_128k} & E1 & 62,896 & trained here; \texttt{tokenizer.json} sha256 \texttt{b4638805204b} \\
+\texttt{E1\_unigram\_32k\_bm} & E1 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{c17367406798} \\
 \texttt{E1\_unigram\_32k} & E1 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{62f737185c0c} \\
+\texttt{E1\_unigram\_64k\_bm} & E1 & 50,659 & trained here; \texttt{tokenizer.json} sha256 \texttt{1da233ae99c1} \\
 \texttt{E1\_unigram\_64k} & E1 & 62,896 & trained here; \texttt{tokenizer.json} sha256 \texttt{b21ecf863056} \\
 \texttt{T0\_gemma3} & T0 & 262,145 & \texttt{unsloth/gemma-3-4b-it} \\
 \texttt{T0\_gpt2} & T0 & 50,257 & \texttt{openai-community/gpt2} \\
 \texttt{T0\_llama4} & T0 & 201,135 & \texttt{unsloth/Llama-4-Scout-17B-16E-Instruct} \\
 \texttt{T0\_o200k} & T0 & 200,019 & \texttt{o200k\_base} \\
+\texttt{T1\_bpe\_raw\_128k}$^{*}$ & T1 & 128,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{59ab04d3630f} \\
 \texttt{T1\_bpe\_raw\_32k}$^{*}$ & T1 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{e9ae328e26db} \\
 \texttt{T1\_bpe\_raw\_64k}$^{*}$ & T1 & 64,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{f74207d923a7} \\
+\texttt{T2\_unigram\_raw\_128k}$^{*}$ & T2 & 128,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{9ea97f4ea05c} \\
 \texttt{T2\_unigram\_raw\_32k}$^{*}$ & T2 & 32,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{09bc885de2ea} \\
 \texttt{T2\_unigram\_raw\_64k}$^{*}$ & T2 & 64,000 & trained here; \texttt{tokenizer.json} sha256 \texttt{199e32f30ec1} \\
 \texttt{T3\_brahmic131k} & T3 & 131,072 & \texttt{theschoolofai/BrahmicTokenizer-131K} \\
 \texttt{T3\_sarvam} & T3 & 68,096 & \texttt{sarvamai/sarvam-1} \\
 \texttt{T3\_sutra} & T3 & 256,061 & \texttt{TWO/sutra-mlt256-v2} \\
+\texttt{T7\_byt5} & T7 & 256 & \texttt{bytes/utf-8} \\
 \bottomrule
 \end{tabular}
 \caption{Every arm, the identifier that actually loaded, and its id-space size ($\mathrm{len}(\mathrm{tokenizer})$, which counts added special tokens). \texttt{T0\_llama4} and \texttt{T0\_gemma3} load ungated re-uploads of the official releases because the official repositories are gated and the machine running these experiments has no access token; the vocabulary sizes match the published ones, and the mirrors could not be byte-compared against the originals because reading the originals is what the gate prevents. A Hub repository is mutable and these rows carry no revision hash, so the identifier names what was loaded and not which bytes: the load date is the \texttt{timestamp} field of the results file the table is generated from. The sha256 discipline applies only to the arms trained here, whose \texttt{tokenizer.json} this repository holds. Unavailable this run: \texttt{T3\_indicsuper}.}
