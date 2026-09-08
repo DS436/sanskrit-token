@@ -47,7 +47,7 @@ from matplotlib import font_manager  # noqa: E402
 from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
-from matplotlib.patches import Rectangle  # noqa: E402
+from matplotlib.patches import Polygon, Rectangle  # noqa: E402
 from matplotlib.ticker import MaxNLocator  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -145,6 +145,16 @@ T0_ARMS = ("T0_o200k", "T0_llama4", "T0_gemma3", "T0_gpt2")
 #: Arms whose vocabulary is the size current deployments actually ship.
 LARGE_VOCAB_T0 = ("T0_o200k", "T0_llama4", "T0_gemma3")
 
+#: The matched pairs this paper's figures draw, in reporting order. Named here for the
+#: same reason `paper_tables.CONTROLLED_PAIRS` is: the snapshot carries pairs whose prose
+#: is not written yet, and a figure must not draw a series the manuscript does not discuss.
+CONTROLLED_PAIRS: tuple[str, ...] = (
+    "T1_bpe_raw_32k/E1_bpe_32k",
+    "T1_bpe_raw_64k/E1_bpe_64k",
+    "T2_unigram_raw_32k/E1_unigram_32k",
+    "T2_unigram_raw_64k/E1_unigram_64k",
+)
+
 CORPUS_LABELS: dict[str, str] = {
     "samayik_test": "Sāmayik test\n(prose, primary)",
     "samayik_test_ood": "Sāmayik test_ood\n(prose, out of domain)",
@@ -172,6 +182,44 @@ def _fertility(exp01: dict[str, Any], arm: str, language: str) -> float:
 def _errbars(value: float, low: float, high: float) -> tuple[list[float], list[float]]:
     """Asymmetric error offsets, clamped so matplotlib never sees a negative."""
     return ([max(value - low, 0.0)], [max(high - value, 0.0)])
+
+
+def _axis_break(ax: Axes, centre: float, top: float, width: float, span: float) -> None:
+    """Draw the two-stroke break glyph across the top of a clipped bar.
+
+    Without it a truncated bar reads as its drawn height, which is the one way this
+    figure could mislead: GPT-2's Sanskrit-over-English bar is drawn at the axis ceiling
+    and its real value is several times that. `span` is the height of one stroke, set by
+    the caller from the final axis range.
+    """
+    half = width / 2.0
+    for offset in (-span * 0.9, span * 0.9):
+        base = top - span * 4.2 + offset
+        ax.add_patch(
+            Polygon(
+                [
+                    (centre - half, base),
+                    (centre, base + span),
+                    (centre + half, base),
+                    (centre + half, base + span * 1.1),
+                    (centre, base + span * 2.1),
+                    (centre - half, base + span * 1.1),
+                ],
+                closed=True,
+                facecolor="white",
+                edgecolor="white",
+                linewidth=0.0,
+                zorder=4,
+            )
+        )
+        ax.plot(
+            [centre - half, centre, centre + half],
+            [base, base + span, base],
+            color=INK,
+            linewidth=0.7,
+            zorder=5,
+            clip_on=False,
+        )
 
 
 # --------------------------------------------------------------------------------------
@@ -207,6 +255,9 @@ def figure_parity(exp01: dict[str, Any]) -> Figure:
     top = ceiling * 1.22
 
     fig, ax = plt.subplots(figsize=(6.6, 3.2))
+    #: Bar centres whose value runs past the axis, collected while the bars are drawn and
+    #: given their break glyph once the axis range is final.
+    broken: list[float] = []
     width = 0.36
     positions = list(range(len(arms)))
     colours = {"Sa / En": ACCENT, "Sa / Hi": NEUTRAL_DARK}
@@ -215,13 +266,20 @@ def figure_parity(exp01: dict[str, Any]) -> Figure:
         heights = [min(value, top) for value in values]
         ax.bar(centres, heights, width=width * 0.92, color=colours[series], label=series,
                zorder=2)
+        broken.extend(
+            centre
+            for centre, value in zip(centres, values, strict=True)
+            if value > top
+        )
         for centre, value, shown in zip(centres, values, heights, strict=True):
             clipped = value > top
             ax.annotate(
                 f"{value:.2f}",
                 (centre, shown),
                 textcoords="offset points",
-                xytext=(0, -4 if clipped else 3),
+                # A clipped bar's number is set below the break glyph, not against the
+                # ceiling, where the glyph would strike through it.
+                xytext=(0, -22 if clipped else 3),
                 ha="center",
                 va="top" if clipped else "baseline",
                 fontsize=7.5,
@@ -259,9 +317,11 @@ def figure_parity(exp01: dict[str, Any]) -> Figure:
                        fontsize=8.5, family=mono_family())
     ax.set_xlim(-0.65, len(arms) - 0.35)
     ax.set_ylim(0, top)
-    style_axes(ax, "tokens per unit of content")
+    for centre in broken:
+        _axis_break(ax, centre, top, width * 0.92, top * 0.018)
+    style_axes(ax, "ratio of token counts on the same content")
     ax.scatter([], [], marker="D", s=13, facecolor="white", edgecolor=NEUTRAL,
-               linewidth=1.0, label="ratio implied by fertility")
+               linewidth=1.0, label="same ratio implied by fertility")
     handles, labels = ax.get_legend_handles_labels()
     fig.legend(handles, labels, fontsize=8, loc="lower center", ncol=3,
                bbox_to_anchor=(0.55, -0.10))
@@ -276,8 +336,11 @@ def figure_parity(exp01: dict[str, Any]) -> Figure:
 
 def figure_denominator(exp02: dict[str, Any]) -> Figure:
     """Every matched pair, against the deployed English pivot and against its control."""
+    configured = {f"{a}/{b}" for a, b in exp02["config"]["controlled_pairs"]}
     pairs: list[tuple[str, str]] = [
-        (str(pair[0]), str(pair[1])) for pair in exp02["config"]["controlled_pairs"]
+        (pair.split("/")[0], pair.split("/")[1])
+        for pair in CONTROLLED_PAIRS
+        if pair in configured
     ]
     corpora = list(exp02["tpp_controlled"].keys())
     pivot = str(exp02["config"]["english_pivots"][0])
@@ -346,6 +409,9 @@ LENGTH_STRATA: tuple[tuple[str, str], ...] = (
     ("tpp_by_length", "English words per sentence"),
     ("tpp_by_length_sa", "Sanskrit words per sentence"),
 )
+#: One marker shape per matched pair, so the four series separate in greyscale and in
+#: print, where four steps of one hue do not. `^` and `v` are reserved for off-scale marks.
+LENGTH_MARKERS: tuple[str, ...] = ("o", "s", "D", "P")
 #: Headroom above and below a panel's own data, as a fraction of its span.
 LENGTH_Y_PAD = 0.10
 #: How far left of its triangle an off-scale number is set in the last bins, in bin
@@ -462,11 +528,15 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
     if "tpp_by_length" not in exp02:
         return None
     strata_keys = [(key, axis) for key, axis in LENGTH_STRATA if key in exp02]
-    pairs = [f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]]
+    configured = {f"{a}/{b}" for a, b in exp02["config"]["controlled_pairs"]}
+    pairs = [pair for pair in CONTROLLED_PAIRS if pair in configured]
     corpora = [corpus for corpus in LENGTH_CORPORA if corpus in exp02[strata_keys[0][0]]]
 
+    # One column wide, and short enough that the figure can share a page with the
+    # full-width length tables it is read against: taller than this and LaTeX defers
+    # it two pages past its first reference.
     fig, axes = plt.subplots(
-        len(strata_keys), len(corpora), figsize=(3.3, 3.96), squeeze=False
+        len(strata_keys), len(corpora), figsize=(3.3, 2.8), squeeze=False
     )
     for row, (key, axis_label) in enumerate(strata_keys):
         for column, corpus in enumerate(corpora):
@@ -482,12 +552,27 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
                 sparse = [bool(node.get("sparse")) for node in nodes if node is not None]
                 drawn.append((values, lows, highs, sparse))
             bottom, top = _length_ylim(drawn)
+            # A bin where more than one arm runs off the panel gets one note instead of a
+            # stack of triangles: four numbers stacked in a corner is the least legible
+            # thing this figure can draw, and the values are in the length tables anyway.
+            crowded = {
+                position
+                for position in range(len(bins))
+                if sum(
+                    1
+                    for values, *_rest in drawn
+                    if position < len(values) and not bottom <= values[position] <= top
+                )
+                > 1
+            }
             # One reserved row per arm that runs off the panel, on the side it runs off,
             # so the triangles and their numbers sit beyond the data rather than on it.
             rows_above: dict[int, int] = {}
             rows_below: dict[int, int] = {}
             for index, (values, *_rest) in enumerate(drawn):
-                for value in values:
+                for position, value in enumerate(values):
+                    if position in crowded:
+                        continue
                     if value > top:
                         rows_above.setdefault(index, len(rows_above))
                     elif value < bottom:
@@ -507,10 +592,13 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
                 zip(pairs, drawn, strict=True)
             ):
                 colour = ACCENT_RAMP[index % len(ACCENT_RAMP)]
+                marker = LENGTH_MARKERS[index % len(LENGTH_MARKERS)]
                 nudge = (index - (len(pairs) - 1) / 2) * 0.22
                 line_x: list[float] = []
                 line_y: list[float] = []
                 for position, value in enumerate(values):
+                    if position in crowded:
+                        continue
                     if not bottom <= value <= top:
                         above = value > top
                         rank = rows_above[index] if above else rows_below[index]
@@ -537,7 +625,7 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
                         [position],
                         [value],
                         yerr=_errbars(value, lows[position], highs[position]),
-                        fmt="o",
+                        fmt=marker,
                         markersize=2.6,
                         markerfacecolor="none" if sparse[position] else colour,
                         color=colour,
@@ -549,7 +637,15 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
                     for whisker in (*container.lines[1], *container.lines[2]):
                         whisker.set_clip_path(band)
                 ax.plot(line_x, line_y, linewidth=0.9, color=colour, zorder=2,
+                        marker=marker, markersize=2.6, markerfacecolor=colour,
                         label=_pair_label(pair) if (row, column) == (0, 0) else None)
+            for position in sorted(crowded):
+                _crowded_note(
+                    ax,
+                    bins[position],
+                    int(entries[pairs[0]][bins[position]]["n_pairs"]),
+                    left=_free_corner_is_left(drawn, bottom, top),
+                )
             ax.axhline(1.0, color=NEUTRAL_LIGHT, linestyle="--", linewidth=0.8, zorder=1)
             ax.set_xticks(range(len(bins)))
             ax.set_xticklabels(bins, fontsize=6.0, rotation=40, ha="right")
@@ -567,6 +663,48 @@ def figure_length(exp02: dict[str, Any]) -> Figure | None:
                bbox_to_anchor=(0.5, -0.07), handlelength=1.6, columnspacing=1.2)
     fig.tight_layout(h_pad=1.4, w_pad=1.0)
     return fig
+
+
+def _free_corner_is_left(
+    series: list[tuple[list[float], list[float], list[float], list[bool]]],
+    bottom: float,
+    top: float,
+) -> bool:
+    """True when a panel's plotted points leave more room at its top-left than top-right.
+
+    The panels of this figure are monotone within a row, so the corner above the low end
+    of the curves is the one an annotation can occupy without landing on data.
+    """
+    halves: list[list[float]] = [[], []]
+    for values, *_rest in series:
+        for position, value in enumerate(values):
+            if bottom <= value <= top:
+                halves[0 if position < len(values) / 2 else 1].append(value)
+    if not halves[0] or not halves[1]:  # pragma: no cover - every panel has both halves
+        return True
+    return sum(halves[0]) / len(halves[0]) < sum(halves[1]) / len(halves[1])
+
+
+def _crowded_note(ax: Axes, name: str, n_pairs: int, left: bool) -> None:
+    """Name a bin whose arms all run off the panel, instead of drawing four triangles.
+
+    `left` puts the note in the corner with the most headroom, which the caller works out
+    from where the panel's own curves sit; a note over the curves is no better than the
+    stack of triangles it replaces.
+    """
+    label = name.replace("-", "\u2013")
+    ax.text(
+        0.03 if left else 0.97,
+        0.985,
+        f"{label}: n={n_pairs}, off scale\n(values in the length tables)",
+        transform=ax.transAxes,
+        fontsize=4.6,
+        color=SUBTLE_INK,
+        ha="left" if left else "right",
+        va="top",
+        linespacing=1.15,
+        zorder=6,
+    )
 
 
 def _pair_label(pair: str) -> str:

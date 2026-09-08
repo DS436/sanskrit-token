@@ -33,7 +33,6 @@ EXPECTED_TABLES = (
     "preregistration.tex",
     "arms.tex",
     "tpp_by_length.tex",
-    "tpp_by_length_sa.tex",
     "tpp_by_length_all.tex",
     "renyi.tex",
     "numbers.tex",
@@ -135,7 +134,9 @@ def test_controlled_numbers_match_the_snapshot(
     tables, _ = generated
     _, exp02 = snapshot
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = {pair.split("/")[0]: pair for pair in exp02["tpp_controlled"][corpora[0]]}
+    pairs = {
+        pair.split("/")[0]: pair for pair in paper_tables.controlled_pair_keys(exp02)
+    }
     rows = _rows((tables / "tpp_controlled.tex").read_text())
     assert set(rows) == set(pairs), f"{set(rows)} != {set(pairs)}"
     for arm, rest in rows.items():
@@ -155,7 +156,9 @@ def test_controlled_bolding_marks_only_intervals_below_one(
     tables, _ = generated
     _, exp02 = snapshot
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = {pair.split("/")[0]: pair for pair in exp02["tpp_controlled"][corpora[0]]}
+    pairs = {
+        pair.split("/")[0]: pair for pair in paper_tables.controlled_pair_keys(exp02)
+    }
     for arm, rest in _rows((tables / "tpp_controlled.tex").read_text()).items():
         cells = [cell for cell in rest.split("&") if VALUE_CI.search(cell)]
         for cell, corpus in zip(cells, corpora, strict=True):
@@ -223,7 +226,13 @@ def test_renyi_macros_match_the_snapshot(
     unigram = sorted(sa(arm, "slp1") for arm in ("T2_unigram_raw_32k", "T2_unigram_raw_64k"))
     assert [values["numRenyiUnigramLo"], values["numRenyiUnigramHi"]] == unigram
 
-    en = sorted(f"{float(node[alpha]['value']):.3f}" for node in english.values())
+    # The band is over the pivots and controls the paper reports, not every English arm
+    # the snapshot happens to carry.
+    en = sorted(
+        f"{float(english[arm][alpha]['value']):.3f}"
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.controlled_english_arms())
+        if arm in english
+    )
     assert values["numRenyiEnglishLo"] == en[0]
     assert values["numRenyiEnglishHi"] == en[-1]
 
@@ -270,7 +279,11 @@ def test_renyi_prose_claims_hold_in_the_snapshot(
 
     # "At or just below the foot of" the English band: one Unigram arm inside it, one
     # under it, and neither above its top.
-    english_band = [float(node[alpha]["value"]) for node in english_arms.values()]
+    english_band = [
+        float(english_arms[arm][alpha]["value"])
+        for arm in (*paper_tables.T0_ARMS, *paper_tables.controlled_english_arms())
+        if arm in english_arms
+    ]
     assert max(unigram) < max(english_band), "a Unigram arm now sits above the English band"
     assert min(unigram) < min(english_band), "no Unigram arm now sits below the English band"
     assert min(english_band) <= max(unigram), "both Unigram arms now sit below the band"
@@ -357,9 +370,13 @@ def _length_count_rows(text: str) -> list[list[str]]:
 
 
 def _expected_length_rows(
-    exp02: dict[str, Any], key: str, corpora: list[str]
+    exp02: dict[str, Any], key: str, corpora: list[str], suppress_below: int | None = None
 ) -> tuple[list[tuple[str, list[tuple[str, str, str]]]], list[list[str]]]:
-    """What one length table should print, from the JSON: its value rows and its `n` rows."""
+    """What one length table should print, from the JSON: its value rows and its `n` rows.
+
+    `suppress_below` mirrors the body tables, which print the dagger alone for a bin
+    holding fewer than that many pairs and leave the ratio to the appendix table.
+    """
     pairs = paper_tables.controlled_pair_keys(exp02)
     bins = list(exp02[key][corpora[0]][pairs[0]].keys())
     values: list[tuple[str, list[tuple[str, str, str]]]] = []
@@ -376,6 +393,8 @@ def _expected_length_rows(
                     f"{float(entries[pair][name]['ci_high']):.3f}",
                 )
                 for name in bins
+                if suppress_below is None
+                or int(entries[pair][name]["n_pairs"]) >= suppress_below
             ]
             values.append((label, cells))
     return values, counts
@@ -505,20 +524,100 @@ def test_length_prose_claims_hold_in_the_snapshot(
 
     body = list(paper_tables.LENGTH_BODY_CORPORA)
     every = list(exp02["tpp_by_length"].keys())
-    for name, blocks in (
-        ("tpp_by_length.tex", (("tpp_by_length", body),)),
-        ("tpp_by_length_sa.tex", (("tpp_by_length_sa", body),)),
-        ("tpp_by_length_all.tex", (("tpp_by_length", every), ("tpp_by_length_sa", every))),
+    floor = paper_tables.LENGTH_BODY_SUPPRESS_BELOW
+    for name, blocks, suppress in (
+        (
+            "tpp_by_length.tex",
+            (("tpp_by_length", body), ("tpp_by_length_sa", body)),
+            floor,
+        ),
+        (
+            "tpp_by_length_all.tex",
+            (("tpp_by_length", every), ("tpp_by_length_sa", every)),
+            None,
+        ),
     ):
         text = (tables / name).read_text()
         expected_values: list[tuple[str, list[tuple[str, str, str]]]] = []
         expected_counts: list[list[str]] = []
         for key, corpora in blocks:
-            values, counts = _expected_length_rows(exp02, key, corpora)
+            values, counts = _expected_length_rows(exp02, key, corpora, suppress)
             expected_values.extend(values)
             expected_counts.extend(counts)
         assert _length_value_rows(text) == expected_values, f"{name}: value cells"
         assert _length_count_rows(text) == expected_counts, f"{name}: $n$ rows"
+
+
+def test_thin_length_bins_are_suppressed_in_the_body_but_kept_in_the_appendix(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """A bin under the body floor prints the dagger alone; the appendix still carries it."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    pairs = paper_tables.controlled_pair_keys(exp02)
+    floor = paper_tables.LENGTH_BODY_SUPPRESS_BELOW
+    thin = [
+        (key, corpus, name)
+        for key in ("tpp_by_length", "tpp_by_length_sa")
+        for corpus in paper_tables.LENGTH_BODY_CORPORA
+        for name, node in exp02[key][corpus][pairs[0]].items()
+        if int(node["n_pairs"]) < floor
+    ]
+    assert thin, "no bin in the body corpora is thin enough to exercise the suppression"
+    appendix = (tables / "tpp_by_length_all.tex").read_text()
+    body = (tables / "tpp_by_length.tex").read_text()
+    for key, corpus, name in thin:
+        for pair in pairs:
+            printed = f"{float(exp02[key][corpus][pair][name]['value']):.3f}"
+            assert printed not in body, f"the body table still prints the {name} bin"
+            assert printed in appendix, f"the appendix lost the {name} bin"
+
+
+def test_no_bolding_in_the_length_tables(generated: tuple[Path, Path]) -> None:
+    """Bold in a table whose caption calls the gradient an artefact sends two signals."""
+    tables, _ = generated
+    for name in ("tpp_by_length.tex", "tpp_by_length_all.tex"):
+        # Only the tabular: the caption bolds the name of the side the bins are cut on.
+        for block in (tables / name).read_text().split(r"\begin{tabular}")[1:]:
+            body = block.split(r"\end{tabular}")[0]
+            assert r"\textbf" not in body, f"{name} still bolds cells"
+
+
+def test_hindi_table_drops_the_slp1_artifact_column(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """The column its own caption said not to read is no longer printed."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    text = (tables / "tpp_hindi.tex").read_text()
+    assert "SLP1)" not in text.split(r"\caption")[0], "the SLP1 column is still in the body"
+    for arm, node in exp02["tpp_hindi"].items():
+        assert f"{float(node['original']['value']):.3f}" in text, arm
+        assert f"{float(node['slp1']['value']):.3f}" not in text, arm
+
+
+def test_controlled_pairs_are_restricted_to_the_reported_four(
+    generated: tuple[Path, Path], snapshot: tuple[dict[str, Any], dict[str, Any]]
+) -> None:
+    """A pair the snapshot gains without prose to go with it must not reach a table."""
+    tables, _ = generated
+    _, exp02 = snapshot
+    assert paper_tables.controlled_pair_keys(exp02) == [
+        pair
+        for pair in paper_tables.CONTROLLED_PAIRS
+        if pair in {f"{a}/{b}" for a, b in exp02["config"]["controlled_pairs"]}
+    ]
+    rows = _rows((tables / "tpp_controlled.tex").read_text())
+    assert set(rows) == {pair.split("/")[0] for pair in paper_tables.controlled_pair_keys(exp02)}
+
+
+def test_preregistration_marks_the_untested_arm_as_untested(
+    generated: tuple[Path, Path],
+) -> None:
+    """An Outcome verdict on a prediction for an arm this paper does not build is wrong."""
+    text = (generated[0] / "preregistration.tex").read_text()
+    assert "Untested: the predicted arm is not built here" in text
+    assert "Observed against the pivot" not in text
 
 
 def test_training_split_sizes_agree_with_the_data_readme() -> None:
@@ -543,7 +642,6 @@ def test_absent_analyses_degrade_to_a_comment() -> None:
     """The two optional writers stay usable against a snapshot that lacks their keys."""
     stripped: dict[str, Any] = {key: {} for key in ("config",)}
     assert paper_tables.tpp_by_length_table(stripped).startswith("%")
-    assert paper_tables.tpp_by_length_sa_table(stripped).startswith("%")
     assert paper_tables.tpp_by_length_all_tables(stripped).startswith("%")
     assert paper_tables.renyi_table(stripped).startswith("%")
     assert paper_figures.figure_length(stripped) is None

@@ -4,23 +4,41 @@
 \scriptsize
 \begin{tabular}{lrrrrr}
 \toprule
+\multicolumn{6}{l}{\emph{(a) Bins cut on the English side}} \\
 Matched pair & 1--8 En.\ words & 9--16 En.\ words & 17--24 En.\ words & 25--40 En.\ words & 41+ En.\ words \\
 \midrule
 \multicolumn{6}{l}{\emph{S\=amayik test (prose)}} \\
 $n$ pairs & 835 & 995 & 389 & 187 & 11$^{\dagger}$ \\
 BPE 32k & 1.225 [1.191, 1.260] & 1.101 [1.080, 1.122] & 1.035 [1.006, 1.064] & 0.992 [0.957, 1.025] & 0.920 [0.835, 1.006]$^{\dagger}$ \\
-BPE 64k & 1.196 [1.165, 1.227] & 1.056 [1.036, 1.077] & 0.979 [0.950, 1.006] & \textbf{0.934 [0.900, 0.965]} & \textbf{0.851 [0.762, 0.940]}$^{\dagger}$ \\
+BPE 64k & 1.196 [1.165, 1.227] & 1.056 [1.036, 1.077] & 0.979 [0.950, 1.006] & 0.934 [0.900, 0.965] & 0.851 [0.762, 0.940]$^{\dagger}$ \\
 Unigram 32k & 1.304 [1.269, 1.339] & 1.170 [1.146, 1.195] & 1.083 [1.052, 1.116] & 1.026 [0.986, 1.061] & 0.955 [0.853, 1.057]$^{\dagger}$ \\
 Unigram 64k & 1.280 [1.248, 1.314] & 1.136 [1.113, 1.159] & 1.049 [1.016, 1.079] & 0.981 [0.941, 1.016] & 0.910 [0.818, 1.006]$^{\dagger}$ \\
 \midrule
 \multicolumn{6}{l}{\emph{Itih\=asa test (verse)}} \\
 $n$ pairs & 9$^{\dagger}$ & 419 & 3,945 & 5,658 & 1,690 \\
-BPE 32k & 8.944 [3.647, 21.501]$^{\dagger}$ & 0.984 [0.964, 1.002] & \textbf{0.760 [0.755, 0.764]} & \textbf{0.609 [0.605, 0.612]} & \textbf{0.588 [0.579, 0.598]} \\
-BPE 64k & 7.944 [3.061, 19.601]$^{\dagger}$ & \textbf{0.927 [0.908, 0.946]} & \textbf{0.705 [0.701, 0.710]} & \textbf{0.562 [0.559, 0.566]} & \textbf{0.546 [0.536, 0.555]} \\
-Unigram 32k & 9.833 [4.104, 23.800]$^{\dagger}$ & 0.996 [0.975, 1.016] & \textbf{0.774 [0.769, 0.779]} & \textbf{0.622 [0.619, 0.626]} & \textbf{0.596 [0.587, 0.605]} \\
-Unigram 64k & 8.889 [3.350, 22.228]$^{\dagger}$ & \textbf{0.951 [0.933, 0.971]} & \textbf{0.734 [0.729, 0.739]} & \textbf{0.589 [0.585, 0.592]} & \textbf{0.564 [0.555, 0.573]} \\
+BPE 32k & $^{\dagger}$ & 0.984 [0.964, 1.002] & 0.760 [0.755, 0.764] & 0.609 [0.605, 0.612] & 0.588 [0.579, 0.598] \\
+BPE 64k & $^{\dagger}$ & 0.927 [0.908, 0.946] & 0.705 [0.701, 0.710] & 0.562 [0.559, 0.566] & 0.546 [0.536, 0.555] \\
+Unigram 32k & $^{\dagger}$ & 0.996 [0.975, 1.016] & 0.774 [0.769, 0.779] & 0.622 [0.619, 0.626] & 0.596 [0.587, 0.605] \\
+Unigram 64k & $^{\dagger}$ & 0.951 [0.933, 0.971] & 0.734 [0.729, 0.739] & 0.589 [0.585, 0.592] & 0.564 [0.555, 0.573] \\
+\midrule
+\multicolumn{6}{l}{\emph{(b) Bins cut on the Sanskrit side}} \\
+Matched pair & 1--5 Sa.\ words & 6--10 Sa.\ words & 11--15 Sa.\ words & 16--25 Sa.\ words & 26+ Sa.\ words \\
+\midrule
+\multicolumn{6}{l}{\emph{S\=amayik test (prose)}} \\
+$n$ pairs & 566 & 973 & 562 & 287 & 29$^{\dagger}$ \\
+BPE 32k & 0.924 [0.885, 0.965] & 1.063 [1.039, 1.087] & 1.099 [1.074, 1.125] & 1.156 [1.128, 1.184] & 1.280 [1.196, 1.374]$^{\dagger}$ \\
+BPE 64k & 0.894 [0.858, 0.934] & 1.013 [0.991, 1.037] & 1.050 [1.027, 1.074] & 1.101 [1.073, 1.130] & 1.206 [1.123, 1.304]$^{\dagger}$ \\
+Unigram 32k & 0.986 [0.944, 1.030] & 1.117 [1.091, 1.144] & 1.148 [1.123, 1.176] & 1.228 [1.195, 1.263] & 1.371 [1.278, 1.492]$^{\dagger}$ \\
+Unigram 64k & 0.968 [0.927, 1.013] & 1.075 [1.050, 1.101] & 1.117 [1.093, 1.144] & 1.188 [1.156, 1.222] & 1.319 [1.227, 1.433]$^{\dagger}$ \\
+\midrule
+\multicolumn{6}{l}{\emph{Itih\=asa test (verse)}} \\
+$n$ pairs & 225 & 6,699 & 3,458 & 1,077 & 262 \\
+BPE 32k & 0.608 [0.579, 0.638] & 0.630 [0.626, 0.634] & 0.643 [0.637, 0.649] & 0.674 [0.665, 0.685] & 0.712 [0.689, 0.736] \\
+BPE 64k & 0.559 [0.534, 0.587] & 0.580 [0.576, 0.584] & 0.600 [0.594, 0.605] & 0.626 [0.617, 0.635] & 0.670 [0.646, 0.695] \\
+Unigram 32k & 0.576 [0.549, 0.606] & 0.639 [0.635, 0.643] & 0.665 [0.659, 0.671] & 0.687 [0.678, 0.697] & 0.722 [0.700, 0.745] \\
+Unigram 64k & 0.540 [0.514, 0.568] & 0.602 [0.598, 0.606] & 0.633 [0.627, 0.639] & 0.653 [0.643, 0.663] & 0.685 [0.664, 0.708] \\
 \bottomrule
 \end{tabular}
-\caption{Tokens per proposition under the matched control, stratified by the \textbf{English} side's whitespace word count (bin edges 1, 9, 17, 25, 41). Each cell is the ratio with its 95\% paired bootstrap interval; bold marks an interval entirely below 1.0. Rows name the matched pairs of Table~\ref{tab:tppcontrolled} in short form: BPE 32k is \texttt{T1\_bpe\_raw\_32k} over \texttt{E1\_bpe\_32k}, Unigram 64k is \texttt{T2\_unigram\_raw\_64k} over \texttt{E1\_unigram\_64k}, and so on; all four pairs score the same sentences, so the $n$ row belongs to the bin. $^{\dagger}$~marks a bin with fewer than 30 pairs. Selecting pairs by a high English word count preferentially selects pairs whose English side is long for its content, and that side is this ratio's denominator, so the gradient across these columns runs downwards whether or not density changes with length. Table~\ref{tab:tppbylengthsa} is the mirror. The other two corpora are in Appendix~\ref{sec:lengthstrata}.}
+\caption{Tokens per proposition under the matched control, stratified by sentence length: (a) on the English side's whitespace word count (bin edges 1, 9, 17, 25, 41), (b) on the Sanskrit side's, in the original script (bin edges 1, 6, 11, 16, 26). Cells are the ratio with its 95\% paired bootstrap interval, and nothing is bolded, since which intervals clear 1.0 is read in the prose. Rows are the matched pairs of Table~\ref{tab:tppcontrolled} (BPE 32k is \texttt{T1\_bpe\_raw\_32k} over \texttt{E1\_bpe\_32k}); all four score the same sentences, so the $n$ row belongs to the bin. $^{\dagger}$~marks a bin under 30 pairs; under 10 it stands alone, the ratio left to Table~\ref{tab:tppbylengthall}. The halves are read together: binning on the English side selects pairs whose English side is long for their content, and that side is the denominator, so (a)'s gradient runs down whether or not density changes with length, while in (b) the binned side is the numerator and it runs up. The other two corpora are in Appendix~\ref{sec:lengthstrata}.}
 \label{tab:tppbylength}
 \end{table*}

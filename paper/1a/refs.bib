@@ -23,8 +23,9 @@
 %     <https://aclanthology.org/2024.lrec-main.1245.bib>. The Anthology spells the sixth
 %     author "Gourishetty, Anil Kumar", not "Anil Kumar, G." as this entry previously did,
 %     and supplies the month, address, publisher, page range and Anthology URL now
-%     recorded. Note that `data/README.md` attributes this dataset to "Aralikatte et al.",
-%     which is the Itihasa author list; the primary record says Maheshwari et al.
+%     recorded. `data/README.md` previously attributed this dataset to "Aralikatte et al.",
+%     which is the Itihasa author list; that cell was corrected to "Maheshwari et al." on
+%     2026-09-08, against the same Anthology record (2024.lrec-main.1245).
 %   arnett-etal-2025-inequities -- arXiv API record for 2510.21909 (comment: "Accepted to
 %     NeurIPS 2025"), confirmed against the NeurIPS 2025 poster listing
 %     <https://neurips.cc/virtual/2025/poster/120308> and OpenReview
@@ -291,4 +292,285 @@
   year    = {1994},
   pages   = {23--38},
   publisher = {R \& D Publications}
+}
+
+% --------------------------------------------------------------------------------------
+% 2026-09-08, review wave 1: the Related Work section. Every entry below was read off a
+% primary record before being added, and the record's URL is given above the entry. An
+% `api.crossref.org` URL is the DOI registry's publisher-deposited metadata, used where
+% the publisher's own page refused an automated request.
+% --------------------------------------------------------------------------------------
+
+% Cross-lingual comparison on parallel multi-text, and information rate.
+
+% https://aclanthology.org/P19-1491.bib
+@inproceedings{mielke-etal-2019-kind,
+  title     = {What Kind of Language Is Hard to Language-Model?},
+  author    = {Mielke, Sabrina J. and Cotterell, Ryan and Gorman, Kyle and Roark, Brian and
+               Eisner, Jason},
+  booktitle = {Proceedings of the 57th Annual Meeting of the Association for Computational Linguistics},
+  month     = jul,
+  year      = {2019},
+  address   = {Florence, Italy},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/P19-1491/},
+  doi       = {10.18653/v1/P19-1491},
+  pages     = {4975--4989}
+}
+
+% https://aclanthology.org/2020.acl-main.149.bib
+@inproceedings{bugliarello-etal-2020-easier,
+  title     = {It's Easier to Translate out of {E}nglish than into it: Measuring Neural
+               Translation Difficulty by Cross-Mutual Information},
+  author    = {Bugliarello, Emanuele and Mielke, Sabrina J. and Anastasopoulos, Antonios and
+               Cotterell, Ryan and Okazaki, Naoaki},
+  booktitle = {Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics},
+  month     = jul,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.acl-main.149/},
+  doi       = {10.18653/v1/2020.acl-main.149},
+  pages     = {1640--1649}
+}
+
+% https://api.crossref.org/works/10.1126/sciadv.aaw2594
+@article{coupe-etal-2019-different,
+  title   = {Different languages, similar encoding efficiency: Comparable information rates
+             across the human communicative niche},
+  author  = {Coup{\'e}, Christophe and Oh, Yoon Mi and Dediu, Dan and Pellegrino, Fran{\c c}ois},
+  journal = {Science Advances},
+  volume  = {5},
+  number  = {9},
+  pages   = {eaaw2594},
+  year    = {2019},
+  doi     = {10.1126/sciadv.aaw2594}
+}
+
+% https://api.crossref.org/works/10.1353/lan.2011.0057
+@article{pellegrino-etal-2011-cross,
+  title   = {A cross-language perspective on speech information rate},
+  author  = {Pellegrino, Fran{\c c}ois and Coup{\'e}, Christophe and Marsico, Egidio},
+  journal = {Language},
+  volume  = {87},
+  number  = {3},
+  pages   = {539--558},
+  year    = {2011},
+  doi     = {10.1353/lan.2011.0057}
+}
+
+% Tokenizer inequity and cost.
+
+% https://aclanthology.org/2021.acl-long.243.bib
+@inproceedings{rust-etal-2021-good,
+  title     = {How Good is Your Tokenizer? On the Monolingual Performance of Multilingual
+               Language Models},
+  author    = {Rust, Phillip and Pfeiffer, Jonas and Vuli{\'c}, Ivan and Ruder, Sebastian and
+               Gurevych, Iryna},
+  booktitle = {Proceedings of the 59th Annual Meeting of the Association for Computational
+               Linguistics and the 11th International Joint Conference on Natural Language
+               Processing (Volume 1: Long Papers)},
+  month     = aug,
+  year      = {2021},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2021.acl-long.243/},
+  doi       = {10.18653/v1/2021.acl-long.243},
+  pages     = {3118--3135}
+}
+
+% https://aclanthology.org/2023.findings-acl.350.bib
+@inproceedings{limisiewicz-etal-2023-tokenization,
+  title     = {Tokenization Impacts Multilingual Language Modeling: Assessing Vocabulary
+               Allocation and Overlap Across Languages},
+  author    = {Limisiewicz, Tomasz and Balhar, Ji{\v{r}}{\'i} and Mare{\v{c}}ek, David},
+  booktitle = {Findings of the Association for Computational Linguistics: ACL 2023},
+  month     = jul,
+  year      = {2023},
+  address   = {Toronto, Canada},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2023.findings-acl.350/},
+  doi       = {10.18653/v1/2023.findings-acl.350},
+  pages     = {5661--5681}
+}
+
+% What tokenizer metrics predict.
+
+% https://aclanthology.org/2020.findings-emnlp.414.bib
+@inproceedings{bostrom-durrett-2020-byte,
+  title     = {Byte Pair Encoding is Suboptimal for Language Model Pretraining},
+  author    = {Bostrom, Kaj and Durrett, Greg},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2020},
+  month     = nov,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.findings-emnlp.414/},
+  doi       = {10.18653/v1/2020.findings-emnlp.414},
+  pages     = {4617--4624}
+}
+
+% https://aclanthology.org/2020.findings-emnlp.352.bib
+@inproceedings{gowda-may-2020-finding,
+  title     = {Finding the Optimal Vocabulary Size for Neural Machine Translation},
+  author    = {Gowda, Thamme and May, Jonathan},
+  booktitle = {Findings of the Association for Computational Linguistics: EMNLP 2020},
+  month     = nov,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.findings-emnlp.352/},
+  doi       = {10.18653/v1/2020.findings-emnlp.352},
+  pages     = {3955--3964}
+}
+
+% https://aclanthology.org/2024.emnlp-main.40.bib
+@inproceedings{schmidt-etal-2024-tokenization,
+  title     = {Tokenization Is More Than Compression},
+  author    = {Schmidt, Craig W. and Reddy, Varshini and Zhang, Haoran and Alameddine, Alec and
+               Uzan, Omri and Pinter, Yuval and Tanner, Chris},
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing},
+  month     = nov,
+  year      = {2024},
+  address   = {Miami, Florida, USA},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2024.emnlp-main.40/},
+  doi       = {10.18653/v1/2024.emnlp-main.40},
+  pages     = {678--702}
+}
+
+% https://aclanthology.org/2024.findings-acl.134.bib
+@inproceedings{goldman-etal-2024-unpacking,
+  title     = {Unpacking Tokenization: Evaluating Text Compression and its Correlation with
+               Model Performance},
+  author    = {Goldman, Omer and Caciularu, Avi and Eyal, Matan and Cao, Kris and
+               Szpektor, Idan and Tsarfaty, Reut},
+  booktitle = {Findings of the Association for Computational Linguistics: ACL 2024},
+  month     = aug,
+  year      = {2024},
+  address   = {Bangkok, Thailand},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2024.findings-acl.134/},
+  doi       = {10.18653/v1/2024.findings-acl.134},
+  pages     = {2274--2286}
+}
+
+% https://aclanthology.org/2024.findings-naacl.247.bib
+@inproceedings{ali-etal-2024-tokenizer,
+  title     = {Tokenizer Choice For {LLM} Training: Negligible or Crucial?},
+  author    = {Ali, Mehdi and Fromm, Michael and Thellmann, Klaudia and Rutmann, Richard and
+               L{\"u}bbering, Max and Leveling, Johannes and Klug, Katrin and Ebert, Jan and
+               Doll, Niclas and Buschhoff, Jasper and Jain, Charvi and Weber, Alexander and
+               Jurkschat, Lena and Abdelwahab, Hammam and John, Chelsea and
+               Ortiz Suarez, Pedro and Ostendorff, Malte and Weinbach, Samuel and
+               Sifa, Rafet and Kesselheim, Stefan and Flores-Herr, Nicolas},
+  booktitle = {Findings of the Association for Computational Linguistics: NAACL 2024},
+  month     = jun,
+  year      = {2024},
+  address   = {Mexico City, Mexico},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2024.findings-naacl.247/},
+  doi       = {10.18653/v1/2024.findings-naacl.247},
+  pages     = {3907--3924}
+}
+
+% https://aclanthology.org/2024.acl-short.73.bib
+@inproceedings{uzan-etal-2024-greed,
+  title     = {Greed is All You Need: An Evaluation of Tokenizer Inference Methods},
+  author    = {Uzan, Omri and Schmidt, Craig W. and Tanner, Chris and Pinter, Yuval},
+  booktitle = {Proceedings of the 62nd Annual Meeting of the Association for Computational
+               Linguistics (Volume 2: Short Papers)},
+  month     = aug,
+  year      = {2024},
+  address   = {Bangkok, Thailand},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2024.acl-short.73/},
+  doi       = {10.18653/v1/2024.acl-short.73},
+  pages     = {813--822}
+}
+
+% Translationese and translation direction.
+
+% https://aclanthology.org/P11-1132.bib
+@inproceedings{koppel-ordan-2011-translationese,
+  title     = {Translationese and Its Dialects},
+  author    = {Koppel, Moshe and Ordan, Noam},
+  booktitle = {Proceedings of the 49th Annual Meeting of the Association for Computational
+               Linguistics: Human Language Technologies},
+  month     = jun,
+  year      = {2011},
+  address   = {Portland, Oregon, USA},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/P11-1132/},
+  pages     = {1318--1326}
+}
+
+% https://api.crossref.org/works/10.1093/llc/fqt031
+@article{volansky-etal-2015-features,
+  title   = {On the features of translationese},
+  author  = {Volansky, Vered and Ordan, Noam and Wintner, Shuly},
+  journal = {Digital Scholarship in the Humanities},
+  volume  = {30},
+  number  = {1},
+  pages   = {98--118},
+  year    = {2015},
+  doi     = {10.1093/llc/fqt031}
+}
+
+% https://aclanthology.org/2020.emnlp-main.6.bib
+@inproceedings{graham-etal-2020-statistical,
+  title     = {Statistical Power and Translationese in Machine Translation Evaluation},
+  author    = {Graham, Yvette and Haddow, Barry and Koehn, Philipp},
+  booktitle = {Proceedings of the 2020 Conference on Empirical Methods in Natural Language
+               Processing (EMNLP)},
+  month     = nov,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.emnlp-main.6/},
+  doi       = {10.18653/v1/2020.emnlp-main.6},
+  pages     = {72--81}
+}
+
+% Morphologically rich languages.
+
+% https://aclanthology.org/2020.sigmorphon-1.24.bib
+@inproceedings{klein-tsarfaty-2020-getting,
+  title     = {Getting the {\#}{\#}life out of living: How Adequate Are Word-Pieces for
+               Modelling Complex Morphology?},
+  author    = {Klein, Stav and Tsarfaty, Reut},
+  booktitle = {Proceedings of the 17th SIGMORPHON Workshop on Computational Research in
+               Phonetics, Phonology, and Morphology},
+  month     = jul,
+  year      = {2020},
+  address   = {Online},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2020.sigmorphon-1.24/},
+  doi       = {10.18653/v1/2020.sigmorphon-1.24},
+  pages     = {204--209}
+}
+
+% https://api.crossref.org/works/10.1145/3578707
+@article{toraman-etal-2023-impact,
+  title   = {Impact of Tokenization on Language Models: An Analysis for {T}urkish},
+  author  = {Toraman, Cagri and Yilmaz, Eyup Halit and {\c S}ah{\i}nu{\c c}, Furkan and
+             Ozcelik, Oguzhan},
+  journal = {ACM Transactions on Asian and Low-Resource Language Information Processing},
+  volume  = {22},
+  number  = {4},
+  year    = {2023},
+  doi     = {10.1145/3578707}
+}
+
+% https://aclanthology.org/2025.coling-main.441.bib
+@inproceedings{arnett-bergen-2025-language,
+  title     = {Why do language models perform worse for morphologically complex languages?},
+  author    = {Arnett, Catherine and Bergen, Benjamin},
+  booktitle = {Proceedings of the 31st International Conference on Computational Linguistics},
+  month     = jan,
+  year      = {2025},
+  address   = {Abu Dhabi, UAE},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2025.coling-main.441/},
+  pages     = {6607--6623}
 }

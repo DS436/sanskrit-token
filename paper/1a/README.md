@@ -1,28 +1,34 @@
 # Paper 1a — the measurement paper (RQ1 and RQ2)
 
-**Status: ready for arXiv; workshop venue to be chosen.** Every section is written, §5.5
-(tokens per proposition by sentence length) and §5.6 (Rényi efficiency) included. The
-acknowledgements are written and print in final mode only; no `% TODO` or `% verify`
-marker is left in `main.tex`.
+**Status: review wave 1 applied; the measurement-dependent half is still open.** The
+structural and textual changes an ARR-style review asked for are in: a Related Work
+section (§2), an unnumbered Limitations section after the Conclusion as ARR requires, the
+Rényi subsection and the pre-registration table moved to Appendices C and D, a table of
+translation direction and the sign of its bias per corpus (Table 1), and the figure and
+table fixes listed below. Five `% TODO(wave1-results)` markers in `main.tex` mark where
+the next wave's numbers land: the block bootstrap, the byte-matched control and the 128k
+arms, the byte-level reference arm, and the verse side decomposition. The acknowledgements
+print in final mode only.
 
-**Format: long paper.** 15 pages in total, in both modes. The body still runs to eight
-pages excluding references and appendix: Conclusion and Limitations both end on page 8,
-against the eight-page limit for a long paper at ACL venues, and what sits above
-References at the top of page 9 is Table 5 floated over from page 8, not body prose.
-arXiv imposes no limit. Writing §5.5 and adding its
-figure used the slack that was left, so the fertility and compression table moved to the
-appendix (Table 13, beside the full-precision version of itself that already sat there),
-where fertility belongs anyway: it is reported and never led with. The length strata for
-all four corpora moved with it, into Appendix A.1; the body tabulates only the two primary
-corpora. A four-page short version would additionally move Table 2 (deployed-practice TPP)
-and Tables 4 and 5 (the length strata), leaving Table 1 (parity), Table 3 (the matched
-control) and the figures in the body.
+**Format: long paper.** 17 pages in final mode, 16 in review mode; References start on
+page 9 in both. The body runs to eight pages: the Conclusion ends on page 8, against the
+eight-page limit for a long paper at ACL venues, and the Limitations section, which ARR
+excludes from that limit, starts on page 9. arXiv imposes no limit. `placeins` puts a
+`\FloatBarrier` before the bibliography, so no body float is deferred into the references,
+and the float parameters are relaxed in the preamble because the defaults pushed Figure 3
+three pages past its first reference. Fertility and compression sit in the appendix
+(Tables 11 and 12), where fertility belongs: it is reported and never led with. The length
+strata for all four corpora are in Appendix A.1; the body tabulates only the two primary
+corpora.
 
-**Two-sided length strata.** §5.5 bins each pair twice, once on the English side's word
-count and once on the Sanskrit side's (Tables 4 and 5, Figure 3), because binning selects
-the binned side's wordiness into the bin and so tilts the ratio in a known direction;
-every within-corpus gradient reverses between the two, which is why the section draws no
-length claim from them, while the verse-below-prose separation survives both.
+**Two-sided length strata, in one table.** §6.5 bins each pair twice, once on the English
+side's word count and once on the Sanskrit side's, because binning selects the binned
+side's wordiness into the bin and so tilts the ratio in a known direction. Both
+stratifications are two halves of a single Table 5 rather than a facing pair, because the
+section's whole argument is that neither is read alone; every within-corpus gradient
+reverses between them, which is why the section draws no length claim, while the
+verse-below-prose separation survives both. Nothing in that table is bolded, and a bin
+holding fewer than ten pairs prints its dagger alone, its ratio left to the appendix.
 
 *Fewer Words, Not Fewer Tokens: Measuring the Sanskrit Tokenization Penalty per
 Proposition.* Scope is Experiments 01 and 02 only. The proposed sandhi-aware and
@@ -55,7 +61,7 @@ and copies the result to `main_review.pdf`, so the anonymised build can never en
 either `[final]` or `[review]` and sets a `\iffinalmode` switch that `main.tex` reads in
 two places: the Acknowledgements section, which prints only in final mode (`acl.sty`
 anonymises the author block but does not suppress that section), and the last sentence of
-§4, which gives `https://github.com/DS436/sanskrit-token` in final mode and says "an
+§5, which gives `https://github.com/DS436/sanskrit-token` in final mode and says "an
 anonymised repository" in review mode.
 
 `mode.tex` is tracked in **final** mode, so a plain `tectonic main.tex` produces the
@@ -109,12 +115,17 @@ Nothing in `main.tex` contains a typed-in measurement.
 - Every number in the prose is a macro from `tables/numbers.tex`, also generated. The list
   of macros is the `MACROS` constant in `scripts/paper_tables.py`.
 - `tests/test_paper_tables.py` runs both generators against the snapshot, parses the
-  numbers back out of `parity.tex`, `tpp_controlled.tex` and the three length tables and
+  numbers back out of `parity.tex`, `tpp_controlled.tex` and the two length tables and
   checks them against the JSON at the printed precision, and asserts that every `\num...`
-  macro `main.tex` uses is one the generator emits. It recomputes each of §5.5's macros
+  macro `main.tex` uses is one the generator emits. It recomputes each of §6.5's macros
   from the JSON, and fails if either ordering that section asserts in words (every
   gradient reverses; verse sits below prose at every jointly populated bin) stops holding.
-  It also fails if the committed tables are stale.
+  It also checks that the thin bin is suppressed in the body and kept in the appendix,
+  that no length cell is bolded, that the Hindi table's SLP1 artefact column is gone, and
+  that only the four reported matched pairs reach a table: the snapshot carries pairs
+  whose prose is not written yet, and `CONTROLLED_PAIRS` in `scripts/paper_tables.py` (and
+  its twin in `scripts/paper_figures.py`) is the list that decides what is printed. It
+  also fails if the committed tables are stale.
 
 Both generators read `results/` and never write to it.
 
@@ -149,7 +160,17 @@ paper rather than a preprint, so its booktitle stands, and the OpenReview URL wa
 `shravan-2026-brahmic` had its arXiv identifier confirmed to resolve, so the eprint is
 kept beside the model card. The `refs.bib` header comment records the URL read for each.
 
-`data/README.md` attributes the Sāmayik dataset to "Aralikatte et al., LREC-COLING 2024",
-which is the Itihāsa author list pasted into the wrong row. The primary record says
-Maheshwari et al.; the paper's bibliography is right and that data row is not. It is left
-for a `data:` commit rather than fixed here.
+On 2026-09-08 the Related Work section added eighteen entries, every one read off a
+primary record before being cited: the ACL Anthology BibTeX for Mielke et al. (2019),
+Bugliarello et al. (2020), Rust et al. (2021), Limisiewicz et al. (2023), Bostrom and
+Durrett (2020), Gowda and May (2020), Schmidt et al. (2024), Goldman et al. (2024), Ali et
+al. (2024), Uzan et al. (2024), Koppel and Ordan (2011), Graham et al. (2020), Klein and
+Tsarfaty (2020) and Arnett and Bergen (2025); and the Crossref DOI record, the publisher's
+own deposited metadata, for Coupé et al. (2019), Pellegrino et al. (2011), Volansky et al.
+(2015) and Toraman et al. (2023), whose publisher pages refuse automated requests. Each
+entry carries the URL it was verified against in a comment above it.
+
+The Sāmayik row of `data/README.md` used to attribute the dataset to "Aralikatte et al.,
+LREC-COLING 2024", which is the Itihāsa author list pasted into the wrong row. That cell
+now reads "Maheshwari et al.", matching the Anthology record `2024.lrec-main.1245` and the
+paper's bibliography.

@@ -48,6 +48,23 @@ TRAINED_ARMS = ("T1_bpe_raw_32k", "T1_bpe_raw_64k", "T2_unigram_raw_32k", "T2_un
 #: Arms whose ≥200k vocabulary makes them current practice rather than a period piece.
 LARGE_VOCAB_T0 = ("T0_o200k", "T0_llama4", "T0_gemma3")
 
+#: The matched pairs this paper reports, in reporting order. Named explicitly rather than
+#: read off `config["controlled_pairs"]` because Experiment 02 is still adding pairs (a
+#: byte-matched control, a byte-level reference, larger vocabularies) and each of those
+#: needs its own prose before it can appear in a table. A pair the snapshot does not carry
+#: is skipped; a pair the snapshot gains and this tuple does not name is ignored.
+CONTROLLED_PAIRS: tuple[str, ...] = (
+    "T1_bpe_raw_32k/E1_bpe_32k",
+    "T1_bpe_raw_64k/E1_bpe_64k",
+    "T2_unigram_raw_32k/E1_unigram_32k",
+    "T2_unigram_raw_64k/E1_unigram_64k",
+)
+
+#: Below this many pairs a length bin's ratio is not printed in a body table: its interval
+#: spans more than an order of magnitude and the cell distracts from the rest of the row.
+#: The value stays in the appendix table, and the bin's size stays in the `n` row.
+LENGTH_BODY_SUPPRESS_BELOW = 10
+
 #: Corpus display names, in the config's order (prose before verse, CLAUDE.md §2.7).
 CORPUS_LABELS: dict[str, str] = {
     "samayik_test": "S\\=amayik test (prose)",
@@ -366,6 +383,22 @@ def available_trained(exp02: dict[str, Any]) -> list[str]:
     return [arm for arm in TRAINED_ARMS if arm in present]
 
 
+def controlled_english_arms() -> tuple[str, ...]:
+    """The English control arms this paper reports, from its matched pairs."""
+    return tuple(pair.split("/")[1] for pair in CONTROLLED_PAIRS)
+
+
+def reported_arms(exp02: dict[str, Any]) -> list[str]:
+    """Every arm the manuscript discusses, in reporting order.
+
+    The snapshot carries more than the paper reports: Experiment 02 keeps adding arms
+    whose prose is not written yet. Enumerating the snapshot instead of this list would
+    put an undiscussed arm into the arms table and the R\'enyi table.
+    """
+    order = (*T0_ARMS, *T3_ARMS, *TRAINED_ARMS, *controlled_english_arms())
+    return [arm for arm in order if arm in exp02["tokenizer_sources"]]
+
+
 # --------------------------------------------------------------------------------------
 # Tables
 # --------------------------------------------------------------------------------------
@@ -566,7 +599,9 @@ def tpp_deployed_all_tables(exp02: dict[str, Any]) -> str:
 def tpp_controlled_table(exp02: dict[str, Any]) -> str:
     """Table 4: the matched-control TPP, the paper's headline."""
     corpora = list(exp02["tpp_controlled"].keys())
-    pairs = list(exp02["tpp_controlled"][corpora[0]].keys())
+    pairs = [
+        pair for pair in CONTROLLED_PAIRS if pair in exp02["tpp_controlled"][corpora[0]]
+    ]
     rows: list[list[str]] = []
     for pair in pairs:
         sa_arm, en_arm = pair.split("/")
@@ -612,26 +647,21 @@ def tpp_hindi_table(exp02: dict[str, Any]) -> str:
     """Appendix: the Hindi pivot on FLORES, original script and the approximate SLP1."""
     rows: list[list[str]] = []
     for arm, node in exp02["tpp_hindi"].items():
-        rows.append(
-            [
-                arm_tt(arm),
-                count(vocab_size(exp02, arm)),
-                value_ci(node["original"]),
-                value_ci(node["slp1"]) + "$^{\\dagger}$",
-            ]
-        )
+        rows.append([arm_tt(arm), count(vocab_size(exp02, arm)), value_ci(node["original"])])
     body = tabular(
-        "llll",
-        ["Arm", "Vocab.", "Sa/Hi (original)", "Sa/Hi (SLP1)"],
+        "lll",
+        ["Arm", "Vocab.", "Sa/Hi (original script)"],
         rows,
         size="\\footnotesize",
     )
     caption = (
-        "Sanskrit over Hindi on FLORES devtest, both sides under the same tokenizer. "
-        "$^{\\dagger}$~The SLP1 column is an artifact, not a result: Hindi characters "
-        "outside SLP1's Sanskrit inventory inflate the Hindi token count, which sits in "
-        "this ratio's denominator and mechanically depresses it. Read the original-script "
-        "column. The trained arms are excluded by design: the Hindi pivot is defined over "
+        "Sanskrit over Hindi on FLORES devtest, both sides under the same tokenizer, in "
+        "the original script. The corresponding SLP1 column is computed and stored in the "
+        "results file but is not printed: SLP1 encodes the Sanskrit phoneme inventory, so "
+        "Hindi characters outside it inflate the Hindi token count, which sits in this "
+        "ratio's denominator and mechanically depresses it. "
+        "Table~\\ref{tab:fertcompfull} documents that failure and counts the sentences it "
+        "affects. The trained arms are excluded by design: the Hindi pivot is defined over "
         "the deployed arms only."
     )
     return table_float(body, caption, "tab:tpphindi", wide=True)
@@ -703,12 +733,14 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
             t3_outcome,
         ],
         [
-            "TPP crosses below 1.0 against \\texttt{o200k}",
-            f"{ratio(float(best['value']))} {ci(best)} on prose; "
-            f"{ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched control"
-            "; predicted for the proposed \\texttt{T6} arm, measured here on the "
-            "raw-subword baselines, the only Sanskrit-native arms this paper builds",
-            "Observed against the pivot, not under control",
+            "TPP crosses below 1.0 against \\texttt{o200k}, for the proposed "
+            "\\texttt{T6} arm",
+            "\\texttt{T6} is not built here. On the raw-subword baselines, the only "
+            "Sanskrit-native arms this paper builds: "
+            f"{ratio(float(best['value']))} {ci(best)} on prose against the deployed "
+            f"pivot, {ratio(float(best_ctrl['value']))} {ci(best_ctrl)} under the matched "
+            "control",
+            "Untested: the predicted arm is not built here",
         ],
     ]
     body = tabular(
@@ -717,14 +749,16 @@ def preregistration_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         rows,
     )
     caption = (
-        "The pre-registered predictions of the project's design document against what was "
-        "measured. The predictions were written before any arm was run and are dated in "
-        "the repository's history. The last row is the paper's central negative result "
-        "for the baselines it builds: the crossing is real against the deployed English "
-        "pivot and disappears against the matched English control, so it is a statement "
-        "about the pivot's vocabulary and domain rather than about Sanskrit. The "
-        "prediction itself was written for a sandhi-split, morpheme-constrained arm that "
-        "this paper does not build, so that arm remains untested here."
+        "The predictions of our design document against what was measured. They were "
+        "written before any arm was run and are dated only by our repository's history: "
+        "this is a design document we did not edit, not a registration with an external "
+        "timestamp, and it is reported for that reason and no stronger one. The first "
+        "four are guesses at magnitudes rather than substantive hypotheses. The fifth was "
+        "written for a sandhi-split, morpheme-constrained arm this paper does not build, "
+        "so it is untested; what its Measured cell carries instead is this paper's "
+        "central negative result for the baselines it does build, where the crossing is "
+        "real against the deployed English pivot and disappears against the matched "
+        "English control."
     )
     return table_float(body, caption, "tab:prereg", wide=True)
 
@@ -733,7 +767,8 @@ def arms_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     """Appendix B: what each arm actually loaded, and its id-space size."""
     rows: list[list[str]] = []
     seen: set[str] = set()
-    for arm, node in exp02["tokenizer_sources"].items():
+    for arm in reported_arms(exp02):
+        node = exp02["tokenizer_sources"][arm]
         seen.add(arm)
         source = str(node["source_id"])
         sha = str(node.get("sha256", ""))
@@ -770,8 +805,12 @@ def arms_table(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
         "official releases because the official repositories are gated and the machine "
         "running these experiments has no access token; the vocabulary sizes match the "
         "published ones, and the mirrors could not be byte-compared against the originals "
-        "because reading the originals is what the gate prevents. Unavailable this run: "
-        f"{unavailable}."
+        "because reading the originals is what the gate prevents. A Hub repository is "
+        "mutable and these rows carry no revision hash, so the identifier names what was "
+        "loaded and not which bytes: the load date is the \\texttt{timestamp} field of "
+        "the results file the table is generated from. The sha256 discipline applies only "
+        "to the arms trained here, whose \\texttt{tokenizer.json} this repository holds. "
+        f"Unavailable this run: {unavailable}."
     )
     return table_float(body, caption, "tab:arms", wide=True)
 
@@ -788,24 +827,41 @@ def bin_label_tex(name: str) -> str:
 
 
 def controlled_pair_keys(exp02: dict[str, Any]) -> list[str]:
-    """The four matched pairs, as they key the by-length blocks."""
-    return [f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]]
+    """The matched pairs this paper reports, as they key the controlled and length blocks.
+
+    Restricted to `CONTROLLED_PAIRS`: the snapshot may carry pairs whose prose is not
+    written yet, and a table must not print a number the manuscript does not discuss.
+    """
+    configured = {f"{pair[0]}/{pair[1]}" for pair in exp02["config"]["controlled_pairs"]}
+    return [pair for pair in CONTROLLED_PAIRS if pair in configured]
 
 
-def _length_cell(node: dict[str, Any] | None) -> str:
-    """`value [lo, hi]`, bold when the interval is below 1.0, daggered when sparse."""
+def _length_cell(node: dict[str, Any] | None, suppress_below: int | None = None) -> str:
+    """`value [lo, hi]`, daggered when the bin is sparse.
+
+    Nothing here is bolded. Marking the intervals below 1.0 in a table whose own caption
+    says the gradient is a selection artefact sends two signals at once, so the reading is
+    left to the prose. With `suppress_below` set, a bin holding fewer than that many pairs
+    prints the dagger alone: the ratio stays in the appendix table, where the reader has
+    already been told the bin is thin.
+    """
     if node is None or node.get("value") is None:
         return "n/a"
+    sparse = bool(node.get("sparse", False))
+    if suppress_below is not None and int(node.get("n_pairs", 0)) < suppress_below:
+        return "$^{\\dagger}$"
     text = f"{ratio(float(node['value']))} {ci(node)}"
-    if float(node["ci_high"]) < 1.0:
-        text = f"\\textbf{{{text}}}"
-    if bool(node.get("sparse", False)):
+    if sparse:
         text += "$^{\\dagger}$"
     return text
 
 
 def _length_block(
-    strata: dict[str, Any], corpus: str, pairs: list[str], bins: list[str]
+    strata: dict[str, Any],
+    corpus: str,
+    pairs: list[str],
+    bins: list[str],
+    suppress_below: int | None = None,
 ) -> list[list[str]]:
     """One corpus inside a length table: a heading, the bins' `n`, then the four pairs.
 
@@ -826,7 +882,9 @@ def _length_block(
     rows.append(counts)
     for pair in pairs:
         cells = [matched_pair_short(pair.split("/")[0])]
-        cells.extend(_length_cell(strata[corpus][pair].get(name)) for name in bins)
+        cells.extend(
+            _length_cell(strata[corpus][pair].get(name), suppress_below) for name in bins
+        )
         rows.append(cells)
     return rows
 
@@ -847,74 +905,108 @@ def _length_tabular(header: list[str], blocks: list[list[list[str]]]) -> str:
     return "\n".join(lines)
 
 
-def _length_caption(exp02: dict[str, Any], side: str, edges_key: str, tail: str) -> str:
-    """The shared body of both length captions: what is binned, and how to read a cell."""
+def _length_caption(
+    exp02: dict[str, Any],
+    side: str,
+    edges_key: str,
+    tail: str,
+    terse: bool = False,
+) -> str:
+    """The appendix length captions: what is binned, and how to read a cell.
+
+    `terse` drops the reading instructions and points at the half of the body table that
+    carries them; repeating eight lines of boilerplate a page later costs a column and
+    tells the reader nothing new. The body table writes its own caption, since it holds
+    both stratifications and has to say so once.
+    """
     edges = ", ".join(str(edge) for edge in exp02["config"][edges_key])
     level = int(float(exp02["config"].get("ci", 0.95)) * 100)
     floor = int(exp02["config"]["length_sparse_below"])
     script = " word count in the original script" if side == "Sanskrit" else " word count"
-    return (
+    opening = (
         "Tokens per proposition under the matched control, stratified by the "
-        f"\\textbf{{{side}}} side's whitespace{script} (bin edges {edges}). Each cell is "
-        f"the ratio with its {level}\\% paired bootstrap interval; bold marks an interval "
-        "entirely below 1.0. Rows name the matched pairs of "
-        "Table~\\ref{tab:tppcontrolled} in short form: BPE 32k is "
-        "\\texttt{T1\\_bpe\\_raw\\_32k} over \\texttt{E1\\_bpe\\_32k}, Unigram 64k is "
-        "\\texttt{T2\\_unigram\\_raw\\_64k} over \\texttt{E1\\_unigram\\_64k}, and so on; "
-        "all four pairs score the same sentences, so the $n$ row belongs to the bin. "
+        f"\\textbf{{{side}}} side's whitespace{script} (bin edges {edges}). "
+    )
+    if terse:
+        return (
+            opening + "Cells, rows and daggers are as in "
+            f"Table~\\ref{{tab:tppbylength}}. {tail}"
+        )
+    return (
+        opening
+        + f"Each cell is the ratio with its {level}\\% paired bootstrap interval; nothing "
+        "is bolded, since which intervals clear 1.0 is read in the prose. Rows are the "
+        "matched pairs of Table~\\ref{tab:tppcontrolled} in short form (BPE 32k is "
+        "\\texttt{T1\\_bpe\\_raw\\_32k} over \\texttt{E1\\_bpe\\_32k}, and so on), and all "
+        "four score the same sentences, so the $n$ row belongs to the bin. "
         f"$^{{\\dagger}}$~marks a bin with fewer than {floor} pairs. {tail}"
     )
 
 
 def tpp_by_length_table(exp02: dict[str, Any]) -> str:
-    """The English-binned strata for the two primary corpora, prose first.
+    """Both stratifications of the two primary corpora, in one float, prose first.
+
+    One table rather than two, because the section's whole argument is that neither
+    stratification is read alone: putting the mirror on the facing page under its own
+    caption invited exactly the single-table reading the text warns against, and cost a
+    column of caption boilerplate that said the same thing twice.
 
     Restricted to the matched pairs, since a length breakdown of the uncontrolled
     deployed-practice ratios would answer a question this paper does not ask
-    (CLAUDE.md §2.5). The companion Sanskrit-binned table is the point: binning on one
-    side biases the ratio in that side's direction, so neither table is read alone.
+    (CLAUDE.md §2.5).
     """
-    if "tpp_by_length" not in exp02:
+    if "tpp_by_length" not in exp02 or "tpp_by_length_sa" not in exp02:
         return "% not available in this snapshot\n"
-    strata: dict[str, Any] = exp02["tpp_by_length"]
     pairs = controlled_pair_keys(exp02)
-    bins = list(strata[LENGTH_BODY_CORPORA[0]][pairs[0]].keys())
-    blocks = [_length_block(strata, corpus, pairs, bins) for corpus in LENGTH_BODY_CORPORA]
-    header = ["Matched pair"]
-    header.extend(f"{bin_label_tex(name)} En.\\ words" for name in bins)
-    tail = (
-        "Selecting pairs by a high English word count preferentially selects pairs whose "
-        "English side is long for its content, and that side is this ratio's denominator, "
-        "so the gradient across these columns runs downwards whether or not density "
-        "changes with length. Table~\\ref{tab:tppbylengthsa} is the mirror. The other two "
-        "corpora are in Appendix~\\ref{sec:lengthstrata}."
-    )
-    caption = _length_caption(exp02, "English", "length_bin_edges", tail)
-    return table_float(_length_tabular(header, blocks), caption, "tab:tppbylength", wide=True)
+    lines: list[str] = [
+        "\\setlength{\\tabcolsep}{3.5pt}",
+        "\\scriptsize",
+        "\\begin{tabular}{lrrrrr}",
+        "\\toprule",
+    ]
+    for index, (key, _edges_key, side) in enumerate(LENGTH_STRATA):
+        strata: dict[str, Any] = exp02[key]
+        bins = list(strata[LENGTH_BODY_CORPORA[0]][pairs[0]].keys())
+        abbreviation = "Sa" if side == "Sanskrit" else "En"
+        letter = "ab"[index]
+        if index:
+            lines.append("\\midrule")
+        lines.append(
+            f"\\multicolumn{{{len(bins) + 1}}}{{l}}{{\\emph{{({letter}) Bins cut on the "
+            f"{side} side}}}} \\\\"
+        )
+        header = ["Matched pair"]
+        header.extend(f"{bin_label_tex(name)} {abbreviation}.\\ words" for name in bins)
+        lines.append(" & ".join(header) + r" \\")
+        for corpus in LENGTH_BODY_CORPORA:
+            lines.append("\\midrule")
+            block = _length_block(
+                strata, corpus, pairs, bins, LENGTH_BODY_SUPPRESS_BELOW
+            )
+            lines.extend(" & ".join(row) + r" \\" for row in block)
+    lines.extend(["\\bottomrule", "\\end{tabular}"])
 
-
-def tpp_by_length_sa_table(exp02: dict[str, Any]) -> str:
-    """The Sanskrit-binned strata for the same two corpora, on the same pairs."""
-    if "tpp_by_length_sa" not in exp02:
-        return "% not available in this snapshot\n"
-    strata: dict[str, Any] = exp02["tpp_by_length_sa"]
-    pairs = controlled_pair_keys(exp02)
-    bins = list(strata[LENGTH_BODY_CORPORA[0]][pairs[0]].keys())
-    blocks = [_length_block(strata, corpus, pairs, bins) for corpus in LENGTH_BODY_CORPORA]
-    header = ["Matched pair"]
-    header.extend(f"{bin_label_tex(name)} Sa.\\ words" for name in bins)
-    tail = (
-        "The bias runs the other way here: the binned side is now the numerator, so the "
-        "gradient across these columns runs upwards for the same reason "
-        "Table~\\ref{tab:tppbylength}'s runs downwards. Every within-corpus gradient "
-        "changes sign between the two, which is what selection on the binned side looks "
-        "like; the verse-below-prose ordering does not. The other two corpora are in "
-        "Appendix~\\ref{sec:lengthstrata}."
+    level = int(float(exp02["config"].get("ci", 0.95)) * 100)
+    floor = int(exp02["config"]["length_sparse_below"])
+    edges_en = ", ".join(str(edge) for edge in exp02["config"]["length_bin_edges"])
+    edges_sa = ", ".join(str(edge) for edge in exp02["config"]["length_bin_edges_sa"])
+    caption = (
+        "Tokens per proposition under the matched control, stratified by sentence length: "
+        f"(a) on the English side's whitespace word count (bin edges {edges_en}), (b) on "
+        f"the Sanskrit side's, in the original script (bin edges {edges_sa}). Cells are "
+        f"the ratio with its {level}\\% paired bootstrap interval, and nothing is bolded, "
+        "since which intervals clear 1.0 is read in the prose. Rows are the matched pairs "
+        "of Table~\\ref{tab:tppcontrolled} (BPE 32k is \\texttt{T1\\_bpe\\_raw\\_32k} over "
+        "\\texttt{E1\\_bpe\\_32k}); all four score the same sentences, so the $n$ row "
+        f"belongs to the bin. $^{{\\dagger}}$~marks a bin under {floor} pairs; under "
+        f"{LENGTH_BODY_SUPPRESS_BELOW} it stands alone, the ratio left to "
+        "Table~\\ref{tab:tppbylengthall}. The halves are read together: binning on the "
+        "English side selects pairs whose English side is long for their content, and that "
+        "side is the denominator, so (a)'s gradient runs down whether or not density "
+        "changes with length, while in (b) the binned side is the numerator and it runs "
+        "up. The other two corpora are in Appendix~\\ref{sec:lengthstrata}."
     )
-    caption = _length_caption(exp02, "Sanskrit", "length_bin_edges_sa", tail)
-    return table_float(
-        _length_tabular(header, blocks), caption, "tab:tppbylengthsa", wide=True
-    )
+    return table_float("\n".join(lines), caption, "tab:tppbylength", wide=True)
 
 
 def tpp_by_length_all_tables(exp02: dict[str, Any]) -> str:
@@ -934,15 +1026,17 @@ def tpp_by_length_all_tables(exp02: dict[str, Any]) -> str:
         header = ["Matched pair"]
         header.extend(f"{bin_label_tex(name)} {abbreviation}.\\ words" for name in bins)
         tail = (
-            "Every corpus, at the same bins as the body's "
-            f"Table~\\ref{{tab:tppbylength{'sa' if side == 'Sanskrit' else ''}}}, which "
-            "carries the two primary ones. Read against its companion on the other side: "
+            "Every corpus, at the same bins as the corresponding half of the body's "
+            "Table~\\ref{tab:tppbylength}, which carries the two primary corpora. Read "
+            "against its companion on the other side: "
             "a gradient that keeps its sign under both stratifications would be "
             "consistent with a length effect and one that changes sign is selection, "
             "and here all "
             "\\numLengthGradientsTotal{} change sign."
         )
-        caption = _length_caption(exp02, side, edges_key, tail)
+        caption = _length_caption(
+            exp02, side, edges_key, tail, terse=(side == "Sanskrit")
+        )
         label = "tab:tppbylengthall" + ("sa" if side == "Sanskrit" else "")
         parts.append(table_float(_length_tabular(header, blocks), caption, label, wide=True))
     return "\n".join(parts)
@@ -957,14 +1051,20 @@ def renyi_table(exp02: dict[str, Any], corpus: str = "samayik_test") -> str:
     alphas = [str(float(alpha)) for alpha in exp02["config"]["renyi_alphas"]]
 
     rows: list[list[str]] = []
-    for arm, node in renyi.items():
+    for arm in (*T0_ARMS, *T3_ARMS, *TRAINED_ARMS):
+        node = renyi.get(arm)
+        if node is None:
+            continue
         cells = [arm_tt(arm, provisional=is_provisional(arm))]
         for variant in ("original", "slp1"):
             for alpha in alphas:
                 entry = node.get(variant, {}).get(alpha)
                 cells.append(ratio(float(entry["value"])) if entry else "n/a")
         rows.append(cells)
-    for arm, node in english.items():
+    for arm in (*T0_ARMS, *controlled_english_arms()):
+        node = english.get(arm)
+        if node is None:
+            continue
         cells = [f"{arm_tt(arm)} (English side)"]
         cells.extend("n/a" for _ in alphas)
         cells.extend(
@@ -1012,7 +1112,11 @@ def renyi_macros(exp02: dict[str, Any]) -> dict[str, str]:
     band = [arm for arm in (*T0_ARMS, *T3_ARMS) if arm in renyi and arm != "T0_gpt2"]
     original = [sanskrit(arm, "original") for arm in band]
     slp1 = [sanskrit(arm, "slp1") for arm in band]
-    english_values = [float(node[alpha]["value"]) for node in english.values()]
+    english_values = [
+        float(english[arm][alpha]["value"])
+        for arm in (*T0_ARMS, *controlled_english_arms())
+        if arm in english
+    ]
     unigram = [
         sanskrit(arm, "slp1") for arm in ("T2_unigram_raw_32k", "T2_unigram_raw_64k")
     ]
@@ -1310,19 +1414,20 @@ def numbers_macros(exp01: dict[str, Any], exp02: dict[str, Any]) -> str:
     values["numEnTokensEOneBpe"] = count(int(best["pivot_tokens"]))
     saving = 1.0 - float(best["pivot_tokens"]) / float(node["pivot_tokens"])
     values["numEnTokenSavingPct"] = f"{saving * 100:.1f}"
+    reported_pairs = controlled_pair_keys(exp02)
     for key, corpus in (
         ("numTppControlledSamayik", "samayik_test"),
         ("numTppControlledOod", "samayik_test_ood"),
         ("numTppControlledItihasa", "itihasa_test"),
         ("numTppControlledFlores", "flores_devtest"),
     ):
-        pairs = [float(entry["value"]) for entry in controlled[corpus].values()]
+        pairs = [float(controlled[corpus][pair]["value"]) for pair in reported_pairs]
         values[f"{key}Lo"] = ratio(min(pairs))
         values[f"{key}Hi"] = ratio(max(pairs))
     values["numTppControlledBpeThirtyTwo"] = ratio(
         float(controlled["samayik_test"]["T1_bpe_raw_32k/E1_bpe_32k"]["value"])
     )
-    values["numControlledPairs"] = str(len(controlled["samayik_test"]))
+    values["numControlledPairs"] = str(len(reported_pairs))
     requested = 64000
     actual = vocab_size(exp02, "E1_unigram_64k")
     values["numUnigramSixtyFourPieces"] = count(actual)
@@ -1390,7 +1495,6 @@ def build(exp01: dict[str, Any], exp02: dict[str, Any]) -> dict[str, str]:
         "preregistration.tex": preregistration_table(exp01, exp02),
         "arms.tex": arms_table(exp01, exp02),
         "tpp_by_length.tex": tpp_by_length_table(exp02),
-        "tpp_by_length_sa.tex": tpp_by_length_sa_table(exp02),
         "tpp_by_length_all.tex": tpp_by_length_all_tables(exp02),
         "renyi.tex": renyi_table(exp02),
         "numbers.tex": numbers_macros(exp01, exp02),
