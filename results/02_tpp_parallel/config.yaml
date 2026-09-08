@@ -9,7 +9,7 @@ corpora:               # prose before verse; order is binding for tables and fig
   - {name: itihasa_test, loader: itihasa, split: test}
   - {name: flores_devtest, loader: flores, split: devtest, jsonl: data/raw/flores/devtest.jsonl}
 
-sanskrit_arms: [T0_o200k, T0_llama4, T0_gemma3, T0_gpt2, T3_sarvam, T3_sutra, T3_indicsuper, T3_brahmic131k, T1_bpe_raw_32k, T1_bpe_raw_64k, T2_unigram_raw_32k, T2_unigram_raw_64k]
+sanskrit_arms: [T0_o200k, T0_llama4, T0_gemma3, T0_gpt2, T3_sarvam, T3_sutra, T3_indicsuper, T3_brahmic131k, T1_bpe_raw_32k, T1_bpe_raw_64k, T1_bpe_raw_128k, T2_unigram_raw_32k, T2_unigram_raw_64k, T2_unigram_raw_128k, T7_byt5]
 
 # Deployed practice only: o200k primary, Llama-4 secondary. The E1 control arms are
 # deliberately NOT listed here — pairing every Sanskrit arm with every E1 arm would fill
@@ -23,16 +23,34 @@ english_pivots: [T0_o200k, T0_llama4]      # o200k is primary
 # algorithm, vocabulary size and training corpus. Measured on the SLP1 variant (T1/T2 have
 # no other) against the English side as written; recorded under results.json's
 # `tpp_controlled` and drawn as the figure's right-hand column.
+# Three groups, appended in this order so an existing pair keeps its position (and, in the
+# length figure, its colour). (a) The pair-matched control: one English sentence per
+# Sanskrit sentence. (b) The byte-matched control `E1_*_bm`: the same English corpus cut to
+# the Sanskrit corpus's UTF-8 byte count, because matching sentences leaves the English
+# side 48% larger in bytes and a reviewer can read the control's cheaper tokenization as
+# that extra text rather than as the language (docs/decisions.md, 2026-09-08). (c) The byte
+# reference `T7_byt5` on both sides: the same corpora with no vocabulary at all, i.e. the
+# ratio of the two sides' UTF-8 bytes. `select_controlled_pairs` accepts the same arm on
+# both sides precisely so this row can exist.
 controlled_pairs:
   - [T1_bpe_raw_32k, E1_bpe_32k]
   - [T1_bpe_raw_64k, E1_bpe_64k]
   - [T2_unigram_raw_32k, E1_unigram_32k]
   - [T2_unigram_raw_64k, E1_unigram_64k]
+  - [T1_bpe_raw_32k, E1_bpe_32k_bm]
+  - [T1_bpe_raw_64k, E1_bpe_64k_bm]
+  - [T2_unigram_raw_32k, E1_unigram_32k_bm]
+  - [T2_unigram_raw_64k, E1_unigram_64k_bm]
+  - [T1_bpe_raw_128k, E1_bpe_128k]
+  - [T2_unigram_raw_128k, E1_unigram_128k]
+  - [T1_bpe_raw_128k, E1_bpe_128k_bm]
+  - [T2_unigram_raw_128k, E1_unigram_128k_bm]
+  - [T7_byt5, T7_byt5]
 figure_pivot_controlled: true
 
 hindi_pivot_corpus: flores_devtest         # Sa/Hi under the same tokenizer, T0/T3 arms only
 
-script_variants: {T0: [original, slp1], T3: [original, slp1], T1: [slp1], T2: [slp1]}
+script_variants: {T0: [original, slp1], T3: [original, slp1], T1: [slp1], T2: [slp1], T7: [original, slp1]}
 
 # Rényi efficiency (Zouhar et al. 2023) is a secondary intrinsic, recorded per arm and
 # never headlined: it can be gamed without changing the tokenization (Cognetta et al. 2024).
@@ -41,6 +59,14 @@ renyi_alphas: [2.5, 3.0]
 n_bootstrap: 1000
 seed: 0
 ci: 0.95
+
+# The second bootstrap, in pairs per block (`ci_low_block`/`ci_high_block` beside the
+# i.i.d. `ci_low`/`ci_high` in every TPP summary). Sentences here are not exchangeable —
+# Itihāsa test is consecutive verses of one epic, FLORES devtest consecutive sentences of
+# the documents it was drawn from — so resampling single sentences understates the
+# interval. 50 consecutive pairs per block, non-overlapping, the final short block kept
+# (docs/decisions.md, 2026-09-08). Remove the key to compute the i.i.d. interval only.
+block_length: 50
 
 exclusion_path: data/exclusion_hashes.txt
 # The English side of the same six evaluation splits, hashed with `sentence_hash_en`: what
@@ -66,3 +92,17 @@ length_bin_edges: [1, 9, 17, 25, 41]
 # the truth, so a gradient is only read as real when it keeps its sign under both.
 length_bin_edges_sa: [1, 6, 11, 16, 26]
 length_sparse_below: 30    # bins with fewer pairs are flagged `sparse` and drawn hollow
+
+# Arms whose pairs are left out of the two length stratifications (only). The strata are
+# the largest block in results.json — pairs x 4 corpora x 5 bins x 2 stratifications, each
+# bin carrying two bootstraps — and the 128k arms and the byte reference add nothing to the
+# question the strata answer (does a length gradient survive being binned on either side?).
+# They are measured at corpus level like every other arm.
+length_strata_skip_arms:
+  - T1_bpe_raw_128k
+  - T2_unigram_raw_128k
+  - E1_bpe_128k
+  - E1_unigram_128k
+  - E1_bpe_128k_bm
+  - E1_unigram_128k_bm
+  - T7_byt5

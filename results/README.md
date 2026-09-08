@@ -15,7 +15,7 @@ snapshot untouched, and you can diff the two.
 | Folder | Source run's `git_commit` | `git_dirty` | Run timestamp (UTC) |
 |---|---|---|---|
 | `01_baseline_penalty/` | `25bf1fb754fcf88c73a3a7631b8cefec378f06fe` | false | 2026-09-06T18:42:17 |
-| `02_tpp_parallel/` | `5820ee917f9accc1e823fe98a7266a53cc9fe80e` | false | 2026-09-07T11:10:06 |
+| `02_tpp_parallel/` | `40fd9c858c77dcd616158b1f5d68438023240693` | false | 2026-09-08T13:29:27 |
 | `03_sandhi_split/` | `b7302a8588b820772ff8db4e80c431afca5742da` | false | 2026-09-05T10:22:27 |
 | `04_morph_constrained/` | `eb53842b1c885e19b1ddd54110de382eb4e3b4e0` | false | 2026-09-05T15:54:56 |
 | `05_lm_training/smoke/` | `b13f6e0d69e7a4559140b5112381482387cc306b` | false | 2026-09-06T05:36:40 |
