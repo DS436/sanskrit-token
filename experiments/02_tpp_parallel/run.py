@@ -125,7 +125,8 @@ FIGURE_SUPTITLE = "Tokens per proposition (Sanskrit / English), 95% bootstrap CI
 FIGURE_DEPLOYED_TITLE = "Deployed practice: every arm vs English o200k (200k, general domain)"
 #: Header over the figure's right-hand column, which holds the controlled comparison.
 FIGURE_CONTROLLED_TITLE = (
-    "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab, training corpus)"
+    "Matched control: Sanskrit T1/T2 vs English E1 (same algorithm, vocab, training corpus); "
+    "filled = pair-matched, hollow = byte-matched E1_bm; dotted = byte ratio (T7_byt5)"
 )
 #: Static half of the caption; the omitted-arms half is built at plot time from
 #: `results["unavailable_arms"]` (`unavailable_caption`) since it depends on the run.
@@ -1436,8 +1437,21 @@ LENGTH_ROW_XLABEL_SA = "Sanskrit words per sentence (original script)"
 #: than `FIGURE_Y_PAD_FRACTION`: these panels are scaled one at a time, to their own
 #: non-sparse bins, and the gradient across bins is what is being read off them.
 LENGTH_FIGURE_Y_PAD_FRACTION = 0.05
-#: One colour per controlled pair, cycled; the figure carries at most four of them.
-LENGTH_SERIES_COLORS = ("#2b6cb0", "#2f855a", "#c05621", "#6b46c1", "#b83280", "#2c7a7b")
+#: One colour per controlled pair, cycled. Eight of them, because the byte-matched control
+#: doubled the number of series a panel can carry and a cycle shorter than that hands two
+#: different pairs the same colour — which, since a pair and its `_bm` twin plot within a
+#: hundredth of each other, is exactly the collision a reader cannot resolve. The `_bm`
+#: series are additionally drawn dashed (`_plot_length_panel`).
+LENGTH_SERIES_COLORS = (
+    "#2b6cb0",
+    "#2f855a",
+    "#c05621",
+    "#6b46c1",
+    "#b83280",
+    "#2c7a7b",
+    "#975a16",
+    "#3f3f46",
+)
 
 
 def _length_series(
@@ -1552,11 +1566,14 @@ def _plot_length_panel(
     falls back to a plain 0-2.
 
     A bin with fewer than `config["length_sparse_below"]` pairs is drawn with a hollow
-    marker; `handles` accumulates one legend handle per pair label across every panel, so
-    the figure carries a single legend rather than one per panel.
+    marker, and a pair measured against a **byte-matched** control (`E1_*_bm`) is drawn
+    with a dashed line: it sits within a hundredth of its pair-matched twin, so colour
+    alone does not separate them. `handles` accumulates one legend handle per pair label
+    across every panel, so the figure carries a single legend rather than one per panel.
     """
     positions = list(range(len(labels)))
     series: list[tuple[str, str, tuple[Any, ...]]] = []
+    dashed: list[bool] = []
     dense_bounds: list[float] = []
     all_bounds: list[float] = []
     for index, pair in enumerate(controlled_pairs):
@@ -1570,6 +1587,7 @@ def _plot_length_panel(
         color = LENGTH_SERIES_COLORS[index % len(LENGTH_SERIES_COLORS)]
         label = controlled_pair_label(sanskrit_arm, english_arm)
         series.append((label, color, (xs, values, lower_err, upper_err, sparse)))
+        dashed.append(english_arm.endswith(BYTE_MATCHED_SUFFIX))
         for value, low, high, is_sparse in zip(values, lower_err, upper_err, sparse, strict=True):
             bounds = (value - low, value + high)
             all_bounds.extend(bounds)
@@ -1634,7 +1652,14 @@ def _plot_length_panel(
                     axes, x + nudge, low, color, above=False, hollow=True, rank=series_index
                 )
         if line_x:
-            line = axes.plot(line_x, line_y, color=color, linewidth=1.2, zorder=2)[0]
+            line = axes.plot(
+                line_x,
+                line_y,
+                color=color,
+                linewidth=1.2,
+                linestyle="--" if dashed[series_index] else "-",
+                zorder=2,
+            )[0]
             handles.setdefault(label, line)
 
     axes.axhline(1.0, linestyle="--", color="gray", linewidth=1)
