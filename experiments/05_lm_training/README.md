@@ -350,6 +350,9 @@ for a day and expect change**, or budget half that on an H100.
 
 ## How to run on a rented GPU
 
+If you have never rented one, [`RENTING_A_GPU.md`](RENTING_A_GPU.md) expands this section
+into a costed, provider-by-provider procedure with prices, failure modes and a checklist.
+
 ```bash
 git clone <this repo> && cd sanskrit-token
 uv sync                       # torch, tokenizers, matplotlib, everything pinned
