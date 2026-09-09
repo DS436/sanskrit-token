@@ -110,6 +110,10 @@ re-run BibTeX when the `.aux` names a `\bibdata`, and fails without it; arXiv it
 ignores the `.bib`. The bundle was verified by extracting the tarball into an empty
 directory and compiling it there with nothing else present.
 
+Every field the arXiv web form asks for is written out, paste-ready, in
+[`SUBMISSION.md`](SUBMISSION.md), including the abstract as plain text with the macros
+already expanded and diffed against the PDF.
+
 ### Upload steps
 
 1. `make clean && make arxiv`, then upload `paper1a_arxiv.tar.gz`.
