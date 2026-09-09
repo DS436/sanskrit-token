@@ -116,16 +116,25 @@ already expanded and diffed against the PDF.
 
 ### Upload steps
 
-1. `make clean && make arxiv`, then upload `paper1a_arxiv.tar.gz`.
-2. Primary category **cs.CL** (Computation and Language). No cross-list is needed.
-3. License: **CC BY 4.0**, the most permissive of the offered set and the one that lets the
-   tables and figures be reused with attribution.
-4. Title and authors as in the PDF. Paste the abstract from the PDF itself, not from
-   `main.tex`, because the prose numbers are macros: `pdftotext -f 1 -l 1 main.pdf -` and
-   take the abstract block, then strip the line breaks.
-5. Comments field: `Code and results: https://github.com/DS436/sanskrit-token`.
-6. Check the arXiv-generated PDF against `main.pdf` before announcing, in particular that
-   the author block, the acknowledgements and the repository URL are all present.
+`SUBMISSION.md` is the single source of truth for every value the web form asks for. Do not
+copy any of those values into this file; read them there when filling the form in.
+
+1. `make clean && make arxiv`, then upload `paper1a_arxiv.tar.gz`. This is the only
+   artefact to upload; the PDF is not submitted, because arXiv compiles the source itself.
+2. Take the title and the author list from the "Title" and "Authors" sections of
+   `SUBMISSION.md`, and the abstract from its "Abstract" section, which is already
+   expanded from the macros and diffed against the compiled PDF.
+3. Take the primary category and the cross-list decision from the "Primary category" and
+   "Cross-list" sections of `SUBMISSION.md`, the licence from its "License" section, the
+   comments string from its "Comments" section, and leave blank the fields its
+   "MSC class / ACM class" and "Journal reference and DOI" sections say to leave blank.
+4. No BibTeX run is needed on arXiv's side. arXiv runs pdflatex only, and the bundle ships
+   the compiled `main.bbl` for exactly that reason.
+5. Check the arXiv-generated PDF, not `main.pdf`, on the submission preview before
+   announcing, in particular that the author block, the acknowledgements and the repository
+   URL are all present. `main.pdf` is the reference to compare it against.
+6. Re-run `make clean && make arxiv` and re-upload after any edit to the paper, the tables
+   or the figures. The tarball is a build product and goes stale silently.
 
 ## Where the numbers come from
 
