@@ -39,9 +39,6 @@ repository, named in the last column.
 | working disk | ~837 MB corpora, ~3.5 GB encoded token cache, ~1.0-1.6 GB peak checkpoint; **budget 8 GB beyond the environment** | `README.md`, "Disk" |
 | results to bring home | four small files per run (20 KB measured on a smoke run) plus four figures; **tens of MB** | measured on `outputs/05_lm_training/smoke/` |
 
-One number in the README's rsync table is wrong and worth knowing about: the subtotal row
-says 809 MB, but the rows above it sum to 837 MB, which is what `du` reports. Use 837 MB.
-
 Two consequences of the table. First, the honest planning figure is the FLOPs, not the
 hours: 6,061 PFLOPs is a physical quantity, and hours are that divided by a throughput you
 have not measured yet. Second, the sweep is one long sequential job, not a burst, so what

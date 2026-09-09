@@ -383,7 +383,7 @@ of them disagrees. A stale cache cannot silently train a model on the wrong toke
 | `data/processed/lm/track2_sample.txt` | 764 MB | Track 2 (all arms) |
 | `data/processed/lm/heldout_*.txt` (11 files) | 7.0 MB | every evaluation |
 | manifests (`*.manifest.json`, `manifest.json`) | 30 KB | corpus byte counts |
-| **subtotal `data/processed/lm/` minus `track2_raw.txt`** | **809 MB** | |
+| **subtotal `data/processed/lm/` minus `track2_raw.txt`** | **837 MB** | |
 | the six file-backed tokenizer arms | 26 MB | every arm but `T7_byt5` |
 | (`outputs/tokenizers/` in full, if simpler) | 84 MB | |
 
@@ -450,7 +450,7 @@ Aggregation and both figures run automatically at the end, or on their own with
 `uv run python experiments/05_lm_training/aggregate.py --config experiments/05_lm_training/sweep.yaml`
 over a partially finished sweep.
 
-**Disk.** ~810 MB of corpora, plus the encoded token streams the sweep caches under
+**Disk.** ~837 MB of corpora, plus the encoded token streams the sweep caches under
 `outputs/05_lm_training/encoded/`: ~3.5 GB (Track 2's five `.bin` files are 0.4–1.5 GB
 each; `T7_byt5`'s is the large one, since a byte per token stored as `uint16` is 2 bytes).
 Checkpoints are pruned as runs finish, so peak checkpoint use is one run's model plus its
