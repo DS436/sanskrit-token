@@ -186,16 +186,19 @@ proposed tokenizer would do better, or anything about downstream model quality.
 **These twelve drafts predate the 2026-09-08 revision wave and are not ready to post.**
 They were written against the results as they stood before the byte-matched control, the
 128k vocabulary arms, the verse decomposition and the block bootstrap. Posts 5 and 6 are
-the ones the wave touched, and they are **incomplete rather than wrong**: the domain-fit
-explanation they give survived the revision intact, but neither mentions the byte-matched
-control, neither says the controlled ratio depends on vocabulary size and crosses below
-parity at 128k on in-domain prose, and neither has the decomposition that locates the
-verse result in the character ratio rather than in tokenization. Post 3's framing of the
-tokenizer arms as a "language tax" also needs the deployed-practice wording the ground
+the ones the wave touched. Post 6 was **wrong**, not merely incomplete: it carried a wrong
+verse figure (a low end of 0.61 where the four size-matched pairs read 0.598) and an
+over-general claim that verse is the only place Sanskrit falls below English. Both were
+corrected in place on 2026-09-09. The rest of the series is **incomplete rather than
+wrong**: the domain-fit explanation survived the revision intact, but post 5 does not
+mention the byte-matched control, neither post has the decomposition that locates the
+verse result in the character ratio rather than in tokenization, and post 3's framing of
+the tokenizer arms as a "language tax" needs the deployed-practice wording the ground
 rules above now require.
 
-Any of these would need checking line by line against `paper/1a/main.tex` and the relevant
-`experiments/*/README.md` before use. They are kept because the process posts (2, 8, 10)
+Incomplete is not the same as safe. Any of these, post 6 included, must still be checked
+line by line against `paper/1a/main.tex` and the relevant `experiments/*/README.md` before
+use. They are kept because the process posts (2, 8, 10)
 and the experiment 03 and 04 material are still accurate and may be worth a second wave
 after the paper lands.
 
@@ -280,9 +283,9 @@ The same experiment across four corpora tells a second story.
 - Contemporary prose (Sāmayik): 1.03 to 1.14.
 - Out-of-domain prose: 1.06 to 1.16.
 - FLORES (Wikipedia register): 1.14 to 1.22.
-- Verse (Itihāsa, the epics): 0.61 to 0.66.
+- Verse (Itihāsa, the epics): 0.60 to 0.66.
 
-Verse is the only place Sanskrit falls below English, and verse is a confound: the śloka meter constrains word choice and inflates compounding, and the English translations of the epics are famously wordy. We report it and do not build on it.
+At the 32k and 64k vocabularies above, verse is the only place Sanskrit falls below English. (At 128,000 pieces the matched BPE pair also crosses below parity on in-domain prose, at 0.98.) And verse is a confound: the śloka meter constrains word choice and inflates compounding, and the English translations of the epics are famously wordy. We report it and do not build on it.
 
 Also visible: the gap is smallest on the text closest to the tokenizers' training data. Domain fit predicts this pattern about as well as any claim about the language does, which is why the control in post 5 was necessary.
 
