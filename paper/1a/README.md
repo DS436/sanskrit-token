@@ -184,11 +184,13 @@ it; a second `\bibstyle` in the `.aux` makes BibTeX reject the file.
 
 ## Style files
 
-`acl.sty`, `acl_natbib.bst` and `acl_latex_template.tex` (the last kept for reference and
-never compiled) were fetched on 2026-09-07 from
+`acl.sty` and `acl_natbib.bst` were fetched on 2026-09-07 from
 <https://github.com/acl-org/acl-style-files>, `master` at commit
 `d5adc823ff0f80f98c80405ca0ab66c68e684409`. The most recent commit touching `acl.sty`
-itself at that point was `24272820f6c457a34a6ac61d74b7488466175e41` (2025-08-19).
+itself at that point was `24272820f6c457a34a6ac61d74b7488466175e41` (2025-08-19). The
+stock `acl_latex_template.tex` was fetched from the same commit but is not kept here: it
+is unmodified upstream boilerplate with placeholder authors, is included by nothing, and
+would not compile in place because it cites `.bib` files this directory does not have.
 
 ## Bibliography
 

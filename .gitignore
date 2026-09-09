@@ -16,3 +16,17 @@ data/raw/*
 
 data/processed/*
 !data/processed/.gitkeep
+
+# Working material about the reader rather than about the research: post drafts and
+# sequencing for the LinkedIn series. Deliberately not published; kept on disk only.
+docs/outreach/linkedin_plan.md
+
+# Python build artefacts (`uv build` output).
+dist/
+build/
+
+# Local environment variables and secrets.
+.env
+
+# Per-machine Claude Code permissions; not shared.
+.claude/settings.local.json

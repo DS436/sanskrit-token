@@ -519,24 +519,22 @@ option (b) above.
 | Task 2 — vendored nanoGPT, corpus encoding, BPC evaluation, training loop | done |
 | Task 3 — sweep runner, aggregation, figures, MPS smoke validation | done |
 | Phase-A review fixes — raw BPC denominator, strict device, `forward_logits`, best-curve reference, Sangraha held-out set | done |
-| `data/exclusion_hashes.txt` regenerated with `sangraha_heldout` | **pending — see below** |
+| `data/exclusion_hashes.txt` regenerated with `sangraha_heldout` | done |
 | **the real sweep (51 runs)** | **not run — needs a GPU (18–26 A100-hours)** |
 | Experiment 05 write-up | blocked on the sweep |
 
-**The one open item.** `heldout_sangraha.txt` exists and `track2_sample.txt` no longer
-contains it, but `data/exclusion_hashes.txt` has **not** been regenerated with the
-`sangraha_heldout` source. Regenerating it needs `--allow-shrink`, because the committed
-list also holds 35 stale DCS hashes that no source produces any more: the DCS held-out
-split was re-ingested on 2026-09-05 with the `ṁ` → `ṃ` normalisation, so those 35 sentences
-are still excluded, under their new spellings. The evidence, measured before touching the
-file: all 27,487 committed parallel-corpus hashes are still produced (27,487 of 27,487), all
-35 lost hashes fall in the DCS-only region, and DCS gains 22 new ones. Nothing has stopped
-being evaluation text. The command, for whoever decides to run it:
+**The exclusion list, for the record.** `heldout_sangraha.txt` exists, `track2_sample.txt`
+no longer contains it, and `data/exclusion_hashes.txt` **has** been regenerated with the
+`sangraha_heldout` source; its header names that source with 2,000 hashes. The regeneration
+needed `--allow-shrink`, because the committed list also held 35 stale DCS hashes that no
+source produces any more: the DCS held-out split was re-ingested on 2026-09-05 with the
+`ṁ` → `ṃ` normalisation, so those 35 sentences are still excluded, under their new
+spellings. The evidence, measured before the file was touched: all 27,487 committed
+parallel-corpus hashes were still produced (27,487 of 27,487), all 35 lost hashes fell in
+the DCS-only region, and DCS gained 22 new ones. Nothing stopped being evaluation text. The
+override is recorded in `docs/decisions.md` under 2026-09-06, "Exclusion list regenerated
+with `--allow-shrink` once, to add `sangraha_heldout`". The command that was run:
 
 ```bash
 uv run python experiments/02_tpp_parallel/build_exclusion.py --allow-shrink
 ```
-
-Until it is run, the leakage guard is *stricter* than it needs to be, not weaker — the
-Sangraha held-out lines are already absent from the only corpus that could contain them,
-removed line-by-line and by shingle when they were drawn.

@@ -109,8 +109,9 @@ A little more detail on each, in the order the argument runs:
   Sangraha verified Sanskrit is **~4.2 GB** of parquet (Experiment 05 only). FLORES,
   Itihāsa and Sāmayik are small.
 - **One step is slow and is not on the critical path for reading results.** Experiment 03's
-  sandhi splitting ran the ByT5-Sanskrit model over 136,918 sentences in **9.4 hours on an
-  M3 Pro** (MPS, ~4 sentences/s). It is cached, so it is paid once.
+  sandhi splitting submitted 136,918 sentences to the ByT5-Sanskrit model, 136,652 of which
+  needed a generation, in **9.4 hours on an M3 Pro** (MPS, ~4 sentences/s). It is cached, so
+  it is paid once.
 - **A GPU is required for Experiment 05 only.** Experiments 01–04 are CPU work.
 
 ```bash

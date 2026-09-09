@@ -1,3 +1,7 @@
+# This file cites the software: the repository, its code and its results snapshot.
+# The title names the project rather than a paper. Once the paper has an arXiv
+# identifier, add a `preferred-citation` block here pointing at the paper, so that a
+# citation of this work resolves to the paper and this entry stays the software record.
 cff-version: 1.2.0
 message: "If you use this repository or its results, please cite it as below."
 title: "Recovering Latent Compression: Sandhi-Aware, Morpheme-Constrained Tokenization for Sanskrit Language Modelling"
@@ -10,10 +14,11 @@ abstract: >-
   tokens-per-proposition on parallel text and bits-per-character from language
   model training; fertility is always computed and never led with.
 type: software
+version: 0.1.0
+date-released: 2026-09-09
 authors:
   - family-names: Sharma
     given-names: Devansh
-year: 2026
 repository-code: "https://github.com/DS436/sanskrit-token"
 url: "https://github.com/DS436/sanskrit-token"
 license: MIT

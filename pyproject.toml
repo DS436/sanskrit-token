@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Does Sanskrit's morphological density survive subword tokenization?"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Devansh Sharma" }]
 # Upper bounds cap each dependency below the next major after the version
 # `uv.lock` currently resolves, so the declared range matches the lock.
 dependencies = [
@@ -22,6 +25,9 @@ dependencies = [
     "protobuf>=4.25,<8",
     "torch>=2.4,<3",
 ]
+
+[project.urls]
+Repository = "https://github.com/DS436/sanskrit-token"
 
 [dependency-groups]
 dev = [

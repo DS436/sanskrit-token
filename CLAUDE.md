@@ -41,7 +41,7 @@ Never write code, plots, or docs that conflate "fewer words" with "fewer tokens.
 ## 3. Repository layout
 
 ```
-sanskrit-tok/
+sanskrit-token/
 ├── CLAUDE.md                  # this file
 ├── README.md
 ├── pyproject.toml
