@@ -189,10 +189,10 @@ class Sources:
 
 
 RELATIVE_SOURCES: dict[str, str] = {
-    "exp01": "outputs/01_baseline_penalty/results.json",
-    "exp02": "outputs/02_tpp_parallel/results.json",
-    "exp03": "outputs/03_sandhi_split/results.json",
-    "exp04": "outputs/04_morph_constrained/results.json",
+    "exp01": "results/01_baseline_penalty/results.json",
+    "exp02": "results/02_tpp_parallel/results.json",
+    "exp03": "results/03_sandhi_split/results.json",
+    "exp04": "results/04_morph_constrained/results.json",
     "dcs_manifest": "data/processed/dcs/manifest.json",
     "split_records": "data/processed/split/samayik_test.jsonl",
 }
@@ -1133,40 +1133,56 @@ def fig_flip_vs_control(fig: Any, square: bool, src: Sources) -> dict[str, Any]:
     panel = build_panel(
         fig,
         square,
-        title="Below English against a generic tokenizer, above it against a matched one",
+        title="Below English against a deployed tokenizer, above it against either control",
         subtitle="Sāmayik test prose, arm T1_bpe_raw_64k, 2,417 pairs, 95% CI",
         tick_labels=(
-            "vs T0_o200k\n(generic English-centric 200k)",
-            "vs E1_bpe_64k\n(matched English control)",
+            # The square canvas has room for the arm name or the "vs", not both; the arm
+            # under test is named in the subtitle either way.
+            [
+                "T0_o200k\n(deployed)",
+                "E1_bpe_64k\n(matched)",
+                "E1_bpe_64k_bm\n(byte-matched)",
+            ]
+            if square
+            else [
+                "vs T0_o200k\n(deployed English tokenizer)",
+                "vs E1_bpe_64k\n(matched English control)",
+                "vs E1_bpe_64k_bm\n(byte-matched control)",
+            ]
         ),
-        tick_slot_inches=tick_slot_in(square, pick(square, 0.175, 0.245), 2.65),
+        tick_slot_inches=tick_slot_in(square, pick(square, 0.175, 0.245), 3.65),
         left=pick(square, 0.175, 0.245),
     )
     ax = panel.ax
     generic = interval(src.exp02, "tpp", "samayik_test", "T1_bpe_raw_64k", "slp1", "T0_o200k")
     controlled = interval(src.exp02, "tpp_controlled", "samayik_test", "T1_bpe_raw_64k/E1_bpe_64k")
-    heights = [generic.value, controlled.value]
-    errors = list(zip(generic.err, controlled.err, strict=True))
+    byte_matched = interval(
+        src.exp02, "tpp_controlled", "samayik_test", "T1_bpe_raw_64k/E1_bpe_64k_bm"
+    )
+    points = (generic, controlled, byte_matched)
+    heights = [point.value for point in points]
+    errors = list(zip(*(point.err for point in points), strict=True))
     bars = ax.bar(
-        [0, 1],
+        [0, 1, 2],
         heights,
-        width=0.42,
-        color=[NEUTRAL, ACCENT],
+        width=0.40,
+        color=[NEUTRAL, ACCENT, ACCENT_RAMP[2]],
         yerr=errors,
         capsize=7,
         error_kw={"ecolor": INK, "elinewidth": 1.4, "capthick": 1.4},
         zorder=2,
     )
     bar_values(ax, bars, heights, "{:.3f}", dy=13.0, fontsize=panel.value_pt)
-    panel.xticks([0, 1])
+    panel.xticks([0, 1, 2])
     panel.style(ylabel="Tokens per\nproposition")
     ax.set_ylim(0.80, 1.12)
-    ax.set_xlim(-0.7, 1.95)
+    ax.set_xlim(-0.7, 2.95)
     panel.reference_line(1.0, "English = 1.0")
     panel.finish()
     return {
         "vs_T0_o200k": generic.as_dict(),
         "vs_E1_bpe_64k_matched_control": controlled.as_dict(),
+        "vs_E1_bpe_64k_bm_byte_matched_control": byte_matched.as_dict(),
     }
 
 
@@ -1782,8 +1798,8 @@ FIGURES: tuple[FigureSpec, ...] = (
         "00_arms_card",
         "Every tokenizer arm in the study, and the one thing each changes.",
         (
-            "outputs/01_baseline_penalty/results.json: tokenizer_sources[*].vocab_size",
-            "outputs/02_tpp_parallel/results.json: tokenizer_sources[*].vocab_size",
+            "results/01_baseline_penalty/results.json: tokenizer_sources[*].vocab_size",
+            "results/02_tpp_parallel/results.json: tokenizer_sources[*].vocab_size",
         ),
         fig_arms_card,
     ),
@@ -1792,7 +1808,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "GPT-2 spends about 12 tokens per Sanskrit word; a modern 200k vocabulary spends "
         "about 4. Fertility is reported, never the headline.",
         (
-            "outputs/01_baseline_penalty/results.json: "
+            "results/01_baseline_penalty/results.json: "
             "metrics[T0_gpt2|T0_o200k][san_Deva|hin_Deva|eng_Latn].original.fertility.value",
         ),
         fig_language_tax,
@@ -1801,7 +1817,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "01_parity",
         "On identical FLORES sentences Sanskrit costs 1.8-7.9x as many tokens as English "
         "but only 1.1-1.4x as many as Hindi.",
-        ("outputs/01_baseline_penalty/results.json: parity[T0_*][eng_Latn|hin_Deva].value",),
+        ("results/01_baseline_penalty/results.json: parity[T0_*][eng_Latn|hin_Deva].value",),
         fig_parity,
     ),
     FigureSpec(
@@ -1809,7 +1825,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "The Sanskrit/Hindi fertility ratio clears the pre-registered 1.5 threshold for "
         "every arm; the token ratio on identical content clears it for none.",
         (
-            "outputs/01_baseline_penalty/results.json: "
+            "results/01_baseline_penalty/results.json: "
             "metrics[T0_*][san_Deva|hin_Deva].original.fertility.value; "
             "parity[T0_*][hin_Deva].value",
         ),
@@ -1817,12 +1833,15 @@ FIGURES: tuple[FigureSpec, ...] = (
     ),
     FigureSpec(
         "02_flip_vs_control",
-        "The same Sanskrit arm sits below English against a generic 200k tokenizer and "
-        "above it against a matched English control; the control is the honest comparison.",
+        "The same Sanskrit arm sits below English against a deployed 200k tokenizer and "
+        "above it against both the pair-matched and the byte-matched English control; the "
+        "controls are the honest comparison.",
         (
-            "outputs/02_tpp_parallel/results.json: "
+            "results/02_tpp_parallel/results.json: "
             "tpp.samayik_test.T1_bpe_raw_64k.slp1.T0_o200k.{value,ci_low,ci_high}; "
-            "tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k'].{value,ci_low,ci_high}",
+            "tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k'].{value,ci_low,ci_high}; "
+            "tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k_bm']"
+            ".{value,ci_low,ci_high}",
         ),
         fig_flip_vs_control,
     ),
@@ -1831,7 +1850,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "Against matched English controls Sanskrit costs 3-22% more tokens on prose and "
         "on FLORES, and 34-40% fewer on verse.",
         (
-            "outputs/02_tpp_parallel/results.json: "
+            "results/02_tpp_parallel/results.json: "
             "tpp_controlled[corpus][pair].{value,ci_low,ci_high} for the four matched pairs",
         ),
         fig_by_corpus,
@@ -1842,7 +1861,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "0.005-0.077 on prose and FLORES and raises it by 0.006-0.018 on verse; every "
         "interval excludes zero.",
         (
-            "outputs/03_sandhi_split/results.json: "
+            "results/03_sandhi_split/results.json: "
             "tpp_delta[corpus][pair].{delta,ci_low,ci_high} for the four matched pairs",
         ),
         fig_split_deltas,
@@ -1855,7 +1874,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         (
             "docs/decisions.md 2026-09-05 'Reconciliation must preserve every non-letter "
             "character': the withdrawn 0.976 and the 77-110% bound",
-            "outputs/03_sandhi_split/results.json: "
+            "results/03_sandhi_split/results.json: "
             "tpp.samayik_test.T4_bpe_split_64k.reconciled.E1_bpe_64k and "
             "tpp.samayik_test.T1_bpe_raw_64k.raw_slp1.E1_bpe_64k",
         ),
@@ -1873,7 +1892,7 @@ FIGURES: tuple[FigureSpec, ...] = (
         "Constraining merges on gold segment boundaries alone (T5seg) buys the largest "
         "MorphScore gain of the raw arms at a token cost whose CI includes zero.",
         (
-            "outputs/04_morph_constrained/results.json: "
+            "results/04_morph_constrained/results.json: "
             "tpp_delta.samayik_test[pair].{delta,ci_low,ci_high}; "
             "morphscore_delta[pair].human_verified.exact.{delta,ci_low,ci_high}",
         ),
@@ -1945,7 +1964,7 @@ README_TAIL = """
 77-110% bound review put on it. Both come from `docs/decisions.md`, 2026-09-05,
 "Reconciliation must preserve every non-letter character". No results.json holds them,
 because the run that produced them was withdrawn; the two bars beside the withdrawn one
-are read from the current `outputs/03_sandhi_split/results.json`.
+are read from the current `results/03_sandhi_split/results.json`.
 
 `04_leakage.png` plots the 19% / 36% before-filter overlap and the 0-of-400 residual from
 `docs/decisions.md`, 2026-09-05, "Near-duplicate leakage filter". The right-hand panel is
@@ -1954,7 +1973,7 @@ read from `data/processed/dcs/manifest.json`.
 ## One pair that could not be plotted on both axes
 
 `04_scatter.png` wants a MorphScore paired delta for every arm it plots.
-`outputs/04_morph_constrained/results.json` publishes MorphScore deltas for `T5-T1`,
+`results/04_morph_constrained/results.json` publishes MorphScore deltas for `T5-T1`,
 `T5seg-T1` and `T6-T4` only, so `T6` appears as `T6-T4` (its own published pair) rather
 than as `T6-T1`, and `T4_bpe_split_64k_oracle_dcs - T1_bpe_raw_64k_dcs` appears as a
 labelled vertical line on the x-axis with no y value. `T6-T1`'s TPP delta is published
@@ -1998,7 +2017,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="directory to write the PNGs, README.md and manifest.json into",
     )
     parser.add_argument(
-        "--root", type=Path, default=REPO_ROOT, help="repository root holding outputs/ and data/"
+        "--root", type=Path, default=REPO_ROOT, help="repository root holding results/ and data/"
     )
     parser.add_argument("--only", action="append", default=None, help="render only this figure")
     args = parser.parse_args(argv)

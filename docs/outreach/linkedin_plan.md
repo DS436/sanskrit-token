@@ -1,48 +1,205 @@
-# LinkedIn series: "Does Sanskrit's density survive tokenization?"
+# LinkedIn plan: "Does Sanskrit's density survive tokenization?"
 
-Twelve posts, two a week (Tuesday and Thursday, morning IST), one experiment per pair of posts, then the GPU run and a wrap-up. Every number below is in the repo's `results.json` files and the media in `docs/outreach/media/` is rendered from them by `scripts/social_figures.py`; the media `manifest.json` records the exact values plotted, so a post can be checked against it before it goes out.
+Two posts, not a series. One now, while the paper is written but not yet announced, and
+one on the day it appears on arXiv. Every number in either post is in a committed
+`results/*/results.json` or in `paper/1a/`, and the media in `docs/outreach/media/` is
+rendered from those files by `scripts/social_figures.py`; `manifest.json` records the
+exact values plotted, so a post can be checked against it before it goes out.
 
-## Ground rules for every post
+**Why two and not twelve.** The twelve-post plan in the appendix was written before the
+2026-09-08 revision wave (byte-matched control, 128k vocabulary arms, the verse
+decomposition, block bootstrap). A serial narrative about results that were still moving
+would have meant correcting myself in public, one post at a time. Two posts, both written
+after the results settled, say the same thing without that exposure: one about the
+question and the measurement trap, which cannot move, and one about the finished result.
 
-- Lead with the question or the surprise, not the method. Three facts maximum. One takeaway. One link (the repo).
-- Never headline fertility (tokens per word). Never write "fewer words" as if it meant "fewer tokens". Never mention NASA.
-- Say "provisional" where the tokenizers were trained on the parallel training splits, and "oracle" or "heuristic" where the README does. The negatives are the honest part of the story; do not soften them.
-- Do not claim the paper's conclusion before Experiment 05 runs. Until then the series is "what we've measured so far".
-- Alt text on every image (supplied below). Hashtags at the end, five at most: #NLP #Tokenization #Sanskrit #LLM #MachineLearning.
-- Reply to comments with numbers from the README, not from memory.
+## Ground rules for both posts
+
+- Lead with the question or the surprise, not the method. Three facts maximum. One
+  takeaway. One link (the repository).
+- **No post may state a number that is not in `results/` or in `paper/1a/`.** Ranges are
+  read off the results file or off `paper/1a/tables/numbers.tex`, never rounded from
+  memory or recomputed by hand.
+- **A post that names a result links the repository**, so a reader can check the number
+  without running anything. In the post body when the post is the only one out (post 1);
+  in the first comment when the arXiv link owns the body (post 2).
+- Never headline fertility (tokens per word). Post 1 may use it as the metric that
+  misleads, which is the paper's own framing, but it is never the finding.
+- Never write "fewer words" as if it meant "fewer tokens". Never mention perplexity, which
+  is not comparable across vocabularies. Never mention NASA.
+- Off-the-shelf tokenizers are deployed practice, never a controlled comparison. Say
+  "deployed", not "generic baseline", and never present a Sanskrit arm beating one as
+  evidence about the language.
+- Prose before verse. The verse number is a lead, not a finding, and any post that gives
+  it says so.
+- Do not soften the negatives. The result is negative about the baselines and says nothing
+  about the method this project proposes; post 2 states both.
+- Alt text on every image (supplied below). At most two hashtags: #NLP #Tokenization.
+- Reply to comments with numbers from `experiments/*/README.md` and `paper/1a/`, not from
+  memory. If a commenter is right about something, say so and link the decision log.
 
 ## Before post 1: make the repository public
 
-The series only works if readers can open the repo and see the numbers. Before post 1 goes out:
+Post 1 names results and links the repository, so the repository has to be readable first:
 
-1. `LICENSE` at the root (MIT for the code; each data source keeps its own licence, listed in `data/README.md`).
-2. A visitor-facing `README.md`: what the project asks, a results table with one line per experiment linking to its README and figure, how to reproduce (`uv sync`, one command per experiment), what needs a download and what needs a GPU, how to cite.
-3. A tracked `results/` snapshot of every experiment's `results.json`, `config.yaml` and figures (the live `outputs/` folder stays gitignored), so results are viewable without running anything.
-4. Secrets and raw-data check: no tokens, no `data/raw` or `data/processed` files in history.
-5. Flip visibility to public and put the repo link in post 1's first comment.
+1. `LICENSE` at the root (MIT for the code; each data source keeps its own licence, listed
+   in `data/README.md`).
+2. A visitor-facing `README.md`: what the project asks, a results table with one line per
+   experiment linking to its README and figure, how to reproduce (`uv sync`, one command
+   per experiment), what needs a download and what needs a GPU, how to cite.
+3. The tracked `results/` snapshot of every experiment's `results.json`, `config.yaml` and
+   figures (the live `outputs/` folder stays gitignored), so results are viewable without
+   running anything.
+4. Secrets and raw-data check: no tokens, no `data/raw` or `data/processed` files in
+   history.
+5. Flip visibility to public.
 
-Post 2 then points at the decision log and the results folder as the proof that the numbers are checkable.
+Post 2 additionally needs the arXiv identifier, and `CITATION.cff` and the root
+`README.md` updated with it (`paper/1a/SUBMISSION.md`, "After submission").
 
-## Calendar
+## Two-post plan
 
-| # | Day | Topic | Media |
-|---|---|---|---|
-| 1 | Week 1 Tue | The question | `00_sandhi_card` |
-| 2 | Week 1 Thu | How the work is run (agent orchestration, review loops, no-leakage rules) | `00_arms_card` |
-| 3 | Week 2 Tue | Exp 01: the language tax | `01_language_tax`, `01_parity` |
-| 4 | Week 2 Thu | Exp 01: the metric that would have lied | `01_fertility_vs_parity` |
-| 5 | Week 3 Tue | Exp 02: the sign flip that wasn't | `02_flip_vs_control` |
-| 6 | Week 3 Thu | Exp 02: prose, verse, and domain | `02_by_corpus` |
-| 7 | Week 4 Tue | Exp 03: what sandhi splitting buys | `03_split_deltas`, `03_example_card` |
-| 8 | Week 4 Thu | Exp 03: the result review caught | `03_artefact` |
-| 9 | Week 5 Tue | Exp 04: alignment versus compression | `04_scatter` |
-| 10 | Week 5 Thu | Exp 04: leakage you can't hash | `04_leakage` |
-| 11 | When the GPU run starts | Exp 05: what bits-per-character will settle | dry-run table screenshot |
-| 12 | When Exp 05 aggregates | Exp 05 result and what the paper will claim | `bpc_final` from the sweep |
+### Post 1: the question and the measurement trap
 
-## Post drafts
+**When:** now, before the paper is announced. It states only Experiment 01 numbers, which
+are final and cannot move.
 
-### 1. The question
+**Media:** `docs/outreach/media/01_fertility_vs_parity.png` (square variant
+`01_fertility_vs_parity_sq.png` if posting from mobile). Verified cell by cell against
+`results/01_baseline_penalty/results.json` on 2026-09-09: all eight plotted values match
+exactly.
+
+**Alt text:**
+
+> Grouped bar chart. For each of four deployed tokenizers, GPT-2, o200k, Llama-4 and
+> Gemma-3, a red bar gives the Sanskrit-over-Hindi ratio implied by tokens per word and a
+> green bar gives the token ratio measured on identical FLORES-200 content. A dashed line
+> marks the pre-registered threshold of 1.5. Every red bar sits above the line, between
+> 1.60 and 1.74; every green bar sits below it, between 1.06 and 1.35.
+
+**Post text:**
+
+Sanskrit fuses case, number, person and tense into word endings, and chains what English
+writes as several clauses into a single compound. It is dense per word.
+
+Whether that density survives tokenization is a different question, and it has to be asked
+per unit of meaning. Tokens per word divides by a denominator that Sanskrit's own grammar
+shrinks.
+
+Here is what that costs you. On 1,012 identical FLORES-200 sentences I put one question to
+four deployed tokenizers, is Sanskrit more expensive than Hindi in tokens, and answered it
+two ways. Read off tokens per word, Sanskrit costs 1.60 to 1.74 times Hindi. Counted on
+the identical content, 1.06 to 1.35 times. My pre-registered threshold was 1.5. The
+per-word reading clears it for all four tokenizers. The count on identical content clears
+it for none. The metric everyone quotes would have confirmed a hypothesis that the correct
+measurement refutes, for every tokenizer I tested.
+
+Hindi is the control worth having here: same script, but no productive sandhi between
+words and much less fusion inside them.
+
+The code and every result are public, so any number above can be checked without running
+anything: github.com/DS436/sanskrit-token
+
+A paper is on the way.
+
+#NLP #Tokenization
+
+**Does not claim:** anything about whether a Sanskrit-trained tokenizer recovers the
+density, or about what any token count buys a language model.
+
+### Post 2: the result, on the day the paper is announced
+
+**When:** the day arXiv announces the paper, not the day it is submitted. arXiv assigns an
+identifier on acceptance into the queue but only lists the paper on the next mailing
+cycle, roughly one business day and weekdays only (`paper/1a/SUBMISSION.md`).
+
+**Media:** `docs/outreach/media/02_flip_vs_control.png` (square variant
+`02_flip_vs_control_sq.png`). Regenerated on 2026-09-09 to add the byte-matched control as
+a third bar; the two-bar version predated it. All nine plotted values verified against
+`results/02_tpp_parallel/results.json`.
+
+**Alt text:**
+
+> Bar chart of tokens per proposition for the Sanskrit BPE tokenizer T1_bpe_raw_64k on
+> Sāmayik test prose, with 95% confidence intervals. Against the deployed English
+> tokenizer o200k the value is 0.887, below the dashed parity line at 1.0. Against the
+> pair-matched English control E1_bpe_64k it is 1.035, and against the byte-matched
+> control E1_bpe_64k_bm it is 1.030; both sit above the line.
+
+**Link placement:** the arXiv link goes in the post body, the repository link in the first
+comment. Post the comment yourself, immediately, so it sits at the top of the thread.
+
+**Post text:**
+
+The paper is up: [ARXIV LINK]
+
+It is a negative result, and the negative is the point.
+
+Train a BPE tokenizer on Sanskrit, count tokens per proposition against English on
+contemporary prose, and score it against a deployed English tokenizer: 0.887, below
+English. That looks like Sanskrit's density surviving tokenization.
+
+It does not survive the control. Train the same algorithm at the same vocabulary size on
+the English side of the same corpus, and the same Sanskrit token counts read 1.035, above
+English. The Sanskrit numerator never moved. The whole difference is the English
+denominator, because the control had been trained on this domain and the deployed
+tokenizer had not.
+
+Two things the revision added.
+
+A byte-matched control, built because the first control had seen 48 percent more training
+text than the Sanskrit side. Cutting it to the Sanskrit corpus's byte count moves every
+ratio by at most 0.025 and changes no verdict.
+
+And a decomposition. Tokens per proposition factorises exactly into a character-length
+ratio and a tokens-per-character ratio, and the second stays near 1. So what a matched
+tokenizer preserves is length, and Sanskrit prose has no length advantage over English in
+this encoding, 1.028. Verse does, 0.596, which is a lead rather than a finding.
+
+One qualification I will not bury: at the largest vocabulary I tested, 128,000 pieces, the
+matched BPE pair does cross below parity on in-domain prose, 0.983. It stays above parity
+out of domain.
+
+So this is a result about the baselines. The method this project proposes, reversing
+sandhi before subword learning and forbidding merges across gold morpheme boundaries, is
+untested here. That is the follow-up.
+
+#NLP #Tokenization
+
+**Does not claim:** that Sanskrit is or is not more token-efficient in general, that the
+proposed tokenizer would do better, or anything about downstream model quality.
+
+## Media checklist before posting
+
+1. Open `docs/outreach/media/manifest.json` and confirm each number in the post text
+   matches the plotted value, and that `source_files` names the `results/` file the number
+   was read from.
+2. Check the figure title makes no claim the experiment's README verdict paragraph does
+   not make.
+3. Attach the 1600x900 image for feed posts; the `_sq` square variant if posting from
+   mobile.
+4. Post 1: repository link in the body. Post 2: arXiv link in the body, repository link in
+   the first comment.
+
+## Appendix: longer series, held in reserve
+
+**These twelve drafts predate the 2026-09-08 revision wave and are not ready to post.**
+They were written against the results as they stood before the byte-matched control, the
+128k vocabulary arms, the verse decomposition and the block bootstrap. Posts 5 and 6 are
+the ones the wave touched, and they are **incomplete rather than wrong**: the domain-fit
+explanation they give survived the revision intact, but neither mentions the byte-matched
+control, neither says the controlled ratio depends on vocabulary size and crosses below
+parity at 128k on in-domain prose, and neither has the decomposition that locates the
+verse result in the character ratio rather than in tokenization. Post 3's framing of the
+tokenizer arms as a "language tax" also needs the deployed-practice wording the ground
+rules above now require.
+
+Any of these would need checking line by line against `paper/1a/main.tex` and the relevant
+`experiments/*/README.md` before use. They are kept because the process posts (2, 8, 10)
+and the experiment 03 and 04 material are still accurate and may be worth a second wave
+after the paper lands.
+
+#### 1. The question
 
 Sanskrit packs case, number, person, tense and whole compounds into single words. Sandhi then erases the spaces between them: tat + api becomes tadapi.
 
@@ -60,7 +217,7 @@ Over the next few weeks I'll post each experiment as it stands, including the tw
 
 Alt text: A card showing "tat + api → tadapi" in Devanagari and SLP1, explaining that sandhi removes the space between words.
 
-### 2. How the work is run
+#### 2. How the work is run
 
 A note on process before the results, because it shaped them.
 
@@ -75,7 +232,7 @@ The tokenizer ladder we test is in the image: off-the-shelf English tokenizers, 
 
 Alt text: A table listing tokenizer arms T0 through T7 and the E1 English control with one-line descriptions and vocabulary sizes.
 
-### 3. Exp 01: the language tax
+#### 3. Exp 01: the language tax
 
 First measurement: how much do today's tokenizers charge Sanskrit?
 
@@ -90,7 +247,7 @@ Next post: why the per-word number in the first chart is the wrong one to headli
 
 Alt text: Grouped bars of tokens per word for Sanskrit, Hindi and English under GPT-2 and GPT-4o's tokenizer, and a second chart of Sanskrit-to-English and Sanskrit-to-Hindi token ratios per tokenizer with a line at 1.0.
 
-### 4. Exp 01: the metric that would have lied
+#### 4. Exp 01: the metric that would have lied
 
 Tokens per word is the standard "tokenizer fairness" number. For Sanskrit it points the wrong way.
 
@@ -102,7 +259,7 @@ That is the whole reason this project measures tokens per proposition on paralle
 
 Alt text: Chart comparing the Sanskrit-to-Hindi ratio computed from tokens per word against the ratio computed from tokens on identical sentences, with the 1.5 threshold marked; the per-word ratio is above it and the true ratio below.
 
-### 5. Exp 02: the sign flip that wasn't
+#### 5. Exp 02: the sign flip that wasn't
 
 The headline experiment: train a tokenizer on Sanskrit and count tokens per proposition against English on parallel prose.
 
@@ -116,7 +273,7 @@ Verdict as it stands: raw subword training does not recover the density on prose
 
 Alt text: Two bars for the same Sanskrit tokenizer on Sāmayik prose: 0.89 against GPT-4o's tokenizer, 1.03 against the matched English control, with a dashed line at 1.0.
 
-### 6. Exp 02: prose, verse, and domain
+#### 6. Exp 02: prose, verse, and domain
 
 The same experiment across four corpora tells a second story.
 
@@ -131,7 +288,7 @@ Also visible: the gap is smallest on the text closest to the tokenizers' trainin
 
 Alt text: Controlled tokens-per-proposition for four tokenizer pairs across four corpora, prose first, all above 1.0 except the verse corpus.
 
-### 7. Exp 03: what sandhi splitting buys
+#### 7. Exp 03: what sandhi splitting buys
 
 Now the first piece of the proposed method: reverse sandhi before training the tokenizer.
 
@@ -146,7 +303,7 @@ Real, small, and consistent on prose. Still no arm below its matched English con
 
 Alt text: Paired differences in tokens per proposition, split minus raw, for four tokenizer pairs across four corpora, with confidence intervals; negative on prose, positive on verse. A second image shows one Sanskrit sentence in Devanagari, in SLP1, and after sandhi splitting.
 
-### 8. Exp 03: the result review caught
+#### 8. Exp 03: the result review caught
 
 The first run of this experiment produced the number I wanted: a sandhi-split tokenizer at 0.976, below the matched English control on prose. First time in the project.
 
@@ -162,7 +319,7 @@ The decision log has both corrections, dated, with the withdrawn value.
 
 Alt text: Three bars: the withdrawn first-run value 0.976 in red, the corrected value after punctuation was restored, and the unsplit baseline, with an annotation that deleted characters explained most of the original gain.
 
-### 9. Exp 04: alignment versus compression
+#### 9. Exp 04: alignment versus compression
 
 The second piece of the method: forbid BPE merges that cross gold morpheme boundaries, using the Digital Corpus of Sanskrit.
 
@@ -177,7 +334,7 @@ So the constraint does what it is meant to do to the segmentation, and it is fre
 
 Alt text: Scatter of four constrained tokenizers: x is change in tokens per proposition, y is change in MorphScore; the gold-segment-only tokenizer sits at zero cost and highest alignment gain.
 
-### 10. Exp 04: leakage you can't hash
+#### 10. Exp 04: leakage you can't hash
 
 A process post, because this one nearly went into the paper.
 
@@ -191,7 +348,7 @@ If your evaluation set is a subset of a public corpus, exact-match exclusion is 
 
 Alt text: Left panel: percentage of verse test sentences found inside the training corpus before and after the shingle filter; right panel: training sentences dropped per evaluation source.
 
-### 11. Exp 05: what bits-per-character will settle
+#### 11. Exp 05: what bits-per-character will settle
 
 Everything so far counted tokens. The last experiment trains small language models with each tokenizer and measures bits per character on held-out text, which is comparable across vocabularies where perplexity is not.
 
@@ -203,13 +360,6 @@ Results in a week or two. The sweep is one command; the pipeline was validated o
 
 Alt text: Screenshot of the sweep's dry-run table: runs, tokens, estimated FLOPs and hours per track.
 
-### 12. Exp 05 result and what the paper will claim
+#### 12. Exp 05 result and what the paper will claim
 
 (Draft after aggregation. Structure: one sentence on the result; the BPC bar chart; whether any arm reached the baseline's loss with fewer bytes; what the paper will and won't claim; link to the preprint when it exists.)
-
-## Media checklist before posting
-
-1. Open `docs/outreach/media/manifest.json` and confirm each number in the post text matches the plotted value.
-2. Check the figure title makes no claim the README's verdict paragraph doesn't make.
-3. Attach the 1600×900 image for feed posts; the `_sq` square variant if posting from mobile.
-4. Put the repo link in the first comment, not the post body.

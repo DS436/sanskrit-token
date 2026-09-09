@@ -1,12 +1,12 @@
 {
-  "generated": "2026-09-06T14:15:15+00:00",
-  "git_commit": "d46702de2eadbc9b7cea85dea3dbffe883e8832b",
+  "generated": "2026-09-09T13:33:44+00:00",
+  "git_commit": "d685dbe6223614b3abb61f0efbe750bbf7d2af13",
   "git_dirty": true,
   "source_files": {
-    "outputs/01_baseline_penalty/results.json": "f17563286f7c21edeae035cc6af89df8e7c6d9f318fe2cd763fd8943fe41bbde",
-    "outputs/02_tpp_parallel/results.json": "882c28d5986d6f2174f7e82625325fe575e217060890706c17e99ac8fb8f138a",
-    "outputs/03_sandhi_split/results.json": "3b982691ece2c8c11e31c7243a6aa9eb752bb7f7d3cb8670d137caa0f2d03671",
-    "outputs/04_morph_constrained/results.json": "e50eaf859d92e5f67f68770cead62a13b292f59782ed3b03923968aacaa158a1",
+    "results/01_baseline_penalty/results.json": "c398ce1d6edc6f06f6ceed4869b2b112f58b72fe4dac7007c413f2038b2166ba",
+    "results/02_tpp_parallel/results.json": "90bdebdf5548fa660a0e87b5bdb9ac86b535c365ea469b96599f6254138107a7",
+    "results/03_sandhi_split/results.json": "81b68d6734f38f633b038533d17a77cdaed05f6ad5148feaa5596a8dcf68f9b7",
+    "results/04_morph_constrained/results.json": "50b444c3c26748bd07da784e9ce710e838d6a230d4c3a8c79a760118bf802ff8",
     "data/processed/dcs/manifest.json": "81912eccea5c6b72886e5ebf4149bec6743a52f0917fffb7dfa0f3e754be686e",
     "data/processed/split/samayik_test.jsonl": "2008b42363f2e25505bc835cbb330a3167331ac7a92ecaa0badd7cd919ee7eb6"
   },
@@ -30,8 +30,8 @@
     "00_arms_card": {
       "claim": "Every tokenizer arm in the study, and the one thing each changes.",
       "sources": [
-        "outputs/01_baseline_penalty/results.json: tokenizer_sources[*].vocab_size",
-        "outputs/02_tpp_parallel/results.json: tokenizer_sources[*].vocab_size"
+        "results/01_baseline_penalty/results.json: tokenizer_sources[*].vocab_size",
+        "results/02_tpp_parallel/results.json: tokenizer_sources[*].vocab_size"
       ],
       "files": [
         "00_arms_card.png",
@@ -85,24 +85,35 @@
           "T0_llama4": 201135,
           "T0_gemma3": 262145,
           "T0_gpt2": 50257,
+          "E1_bpe_128k": 128000,
+          "E1_bpe_128k_bm": 128000,
           "E1_bpe_32k": 32000,
+          "E1_bpe_32k_bm": 32000,
           "E1_bpe_64k": 64000,
+          "E1_bpe_64k_bm": 64000,
+          "E1_unigram_128k": 62896,
+          "E1_unigram_128k_bm": 50659,
           "E1_unigram_32k": 32000,
+          "E1_unigram_32k_bm": 32000,
           "E1_unigram_64k": 62896,
+          "E1_unigram_64k_bm": 50659,
+          "T1_bpe_raw_128k": 128000,
           "T1_bpe_raw_32k": 32000,
           "T1_bpe_raw_64k": 64000,
+          "T2_unigram_raw_128k": 128000,
           "T2_unigram_raw_32k": 32000,
           "T2_unigram_raw_64k": 64000,
           "T3_brahmic131k": 131072,
           "T3_sarvam": 68096,
-          "T3_sutra": 256061
+          "T3_sutra": 256061,
+          "T7_byt5": 256
         }
       }
     },
     "01_language_tax": {
       "claim": "GPT-2 spends about 12 tokens per Sanskrit word; a modern 200k vocabulary spends about 4. Fertility is reported, never the headline.",
       "sources": [
-        "outputs/01_baseline_penalty/results.json: metrics[T0_gpt2|T0_o200k][san_Deva|hin_Deva|eng_Latn].original.fertility.value"
+        "results/01_baseline_penalty/results.json: metrics[T0_gpt2|T0_o200k][san_Deva|hin_Deva|eng_Latn].original.fertility.value"
       ],
       "files": [
         "01_language_tax.png",
@@ -126,7 +137,7 @@
     "01_parity": {
       "claim": "On identical FLORES sentences Sanskrit costs 1.8-7.9x as many tokens as English but only 1.1-1.4x as many as Hindi.",
       "sources": [
-        "outputs/01_baseline_penalty/results.json: parity[T0_*][eng_Latn|hin_Deva].value"
+        "results/01_baseline_penalty/results.json: parity[T0_*][eng_Latn|hin_Deva].value"
       ],
       "files": [
         "01_parity.png",
@@ -156,7 +167,7 @@
     "01_fertility_vs_parity": {
       "claim": "The Sanskrit/Hindi fertility ratio clears the pre-registered 1.5 threshold for every arm; the token ratio on identical content clears it for none.",
       "sources": [
-        "outputs/01_baseline_penalty/results.json: metrics[T0_*][san_Deva|hin_Deva].original.fertility.value; parity[T0_*][hin_Deva].value"
+        "results/01_baseline_penalty/results.json: metrics[T0_*][san_Deva|hin_Deva].original.fertility.value; parity[T0_*][hin_Deva].value"
       ],
       "files": [
         "01_fertility_vs_parity.png",
@@ -184,9 +195,9 @@
       }
     },
     "02_flip_vs_control": {
-      "claim": "The same Sanskrit arm sits below English against a generic 200k tokenizer and above it against a matched English control; the control is the honest comparison.",
+      "claim": "The same Sanskrit arm sits below English against a deployed 200k tokenizer and above it against both the pair-matched and the byte-matched English control; the controls are the honest comparison.",
       "sources": [
-        "outputs/02_tpp_parallel/results.json: tpp.samayik_test.T1_bpe_raw_64k.slp1.T0_o200k.{value,ci_low,ci_high}; tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k'].{value,ci_low,ci_high}"
+        "results/02_tpp_parallel/results.json: tpp.samayik_test.T1_bpe_raw_64k.slp1.T0_o200k.{value,ci_low,ci_high}; tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k'].{value,ci_low,ci_high}; tpp_controlled.samayik_test['T1_bpe_raw_64k/E1_bpe_64k_bm'].{value,ci_low,ci_high}"
       ],
       "files": [
         "02_flip_vs_control.png",
@@ -202,13 +213,18 @@
           "value": 1.0348347279093228,
           "ci_low": 1.021368336233438,
           "ci_high": 1.0488757426688513
+        },
+        "vs_E1_bpe_64k_bm_byte_matched_control": {
+          "value": 1.0303101920236337,
+          "ci_low": 1.016880454626306,
+          "ci_high": 1.043415820979901
         }
       }
     },
     "02_by_corpus": {
       "claim": "Against matched English controls Sanskrit costs 3-22% more tokens on prose and on FLORES, and 34-40% fewer on verse.",
       "sources": [
-        "outputs/02_tpp_parallel/results.json: tpp_controlled[corpus][pair].{value,ci_low,ci_high} for the four matched pairs"
+        "results/02_tpp_parallel/results.json: tpp_controlled[corpus][pair].{value,ci_low,ci_high} for the four matched pairs"
       ],
       "files": [
         "02_by_corpus.png",
@@ -310,7 +326,7 @@
     "03_split_deltas": {
       "claim": "Reversing sandhi before subword learning lowers tokens per proposition by 0.005-0.077 on prose and FLORES and raises it by 0.006-0.018 on verse; every interval excludes zero.",
       "sources": [
-        "outputs/03_sandhi_split/results.json: tpp_delta[corpus][pair].{delta,ci_low,ci_high} for the four matched pairs"
+        "results/03_sandhi_split/results.json: tpp_delta[corpus][pair].{delta,ci_low,ci_high} for the four matched pairs"
       ],
       "files": [
         "03_split_deltas.png",
@@ -413,7 +429,7 @@
       "claim": "The first Experiment 03 headline (0.976, the first arm below its matched English control on prose) was an artefact of dropped punctuation and was withdrawn; the corrected value is above 1.0.",
       "sources": [
         "docs/decisions.md 2026-09-05 'Reconciliation must preserve every non-letter character': the withdrawn 0.976 and the 77-110% bound",
-        "outputs/03_sandhi_split/results.json: tpp.samayik_test.T4_bpe_split_64k.reconciled.E1_bpe_64k and tpp.samayik_test.T1_bpe_raw_64k.raw_slp1.E1_bpe_64k"
+        "results/03_sandhi_split/results.json: tpp.samayik_test.T4_bpe_split_64k.reconciled.E1_bpe_64k and tpp.samayik_test.T1_bpe_raw_64k.raw_slp1.E1_bpe_64k"
       ],
       "files": [
         "03_artefact.png",
@@ -462,7 +478,7 @@
     "04_scatter": {
       "claim": "Constraining merges on gold segment boundaries alone (T5seg) buys the largest MorphScore gain of the raw arms at a token cost whose CI includes zero.",
       "sources": [
-        "outputs/04_morph_constrained/results.json: tpp_delta.samayik_test[pair].{delta,ci_low,ci_high}; morphscore_delta[pair].human_verified.exact.{delta,ci_low,ci_high}"
+        "results/04_morph_constrained/results.json: tpp_delta.samayik_test[pair].{delta,ci_low,ci_high}; morphscore_delta[pair].human_verified.exact.{delta,ci_low,ci_high}"
       ],
       "files": [
         "04_scatter.png",

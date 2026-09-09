@@ -86,8 +86,14 @@ def synthetic_sources() -> Any:
         "tpp": {"samayik_test": {"T1_bpe_raw_64k": {"slp1": {"T0_o200k": _interval(0.887)}}}},
         "tpp_controlled": {
             corpus: {
-                key: _interval(0.65 if corpus == "itihasa_test" else 1.05 + index * 0.03)
-                for index, (key, _) in enumerate(sf.MATCHED_PAIRS)
+                **{
+                    key: _interval(0.65 if corpus == "itihasa_test" else 1.05 + index * 0.03)
+                    for index, (key, _) in enumerate(sf.MATCHED_PAIRS)
+                },
+                # The byte-matched twin of the headline pair, plotted by 02_flip_vs_control.
+                "T1_bpe_raw_64k/E1_bpe_64k_bm": _interval(
+                    0.645 if corpus == "itihasa_test" else 1.03
+                ),
             }
             for corpus in corpora
         },
