@@ -30,8 +30,8 @@ from that same snapshot, and which builds to a PDF with `cd paper/1a && make all
 
 | # | Hypothesis | Verdict | Details | Figure |
 |---|---|---|---|---|
-| 01 | English-centric tokenizers penalise Sanskrit against English and Hindi | Half refuted: Sa/En parity 1.77–2.19, but Sa/Hi only 1.06–1.35 | [README](experiments/01_baseline_penalty/README.md) | [fertility_by_language](results/01_baseline_penalty/fertility_by_language.png) |
-| 02 | A Sanskrit-native tokenizer beats English on tokens-per-proposition | Refuted under matched control: TPP 1.035–1.142 on Sāmayik prose | [README](experiments/02_tpp_parallel/README.md) | [tpp_by_arm](results/02_tpp_parallel/tpp_by_arm.png) |
+| 01 | English-centric tokenizers penalise Sanskrit against English and Hindi | Half refuted: Sa/En parity 1.77–2.19, but Sa/Hi only 1.33–1.35 | [README](experiments/01_baseline_penalty/README.md) | [fertility_by_language](results/01_baseline_penalty/fertility_by_language.png) |
+| 02 | A Sanskrit-native tokenizer beats English on tokens-per-proposition | Refuted at 32k and 64k under matched control: TPP 1.030–1.142 on Sāmayik prose; the penalty shrinks with vocabulary and the 128k BPE pair reads 0.983 in domain | [README](experiments/02_tpp_parallel/README.md) | [tpp_by_arm](results/02_tpp_parallel/tpp_by_arm.png) |
 | 03 | Splitting sandhi before subword learning lowers tokens-per-proposition | Supported on prose (−0.005 to −0.077), adverse on verse | [README](experiments/03_sandhi_split/README.md) | [tpp_split_vs_raw](results/03_sandhi_split/tpp_split_vs_raw.png) |
 | 04 | Morpheme-constrained merges raise MorphScore and lower tokens-per-proposition | MorphScore +0.114; no constrained arm saves tokens, so H4's TPP half fails | [README](experiments/04_morph_constrained/README.md) | [constraint_effects](results/04_morph_constrained/constraint_effects.png) |
 | 05 | The constrained tokenizer reaches a reference BPC with fewer tokens | Not yet run: pipeline validated on CPU/MPS, sweep needs a GPU | [README](experiments/05_lm_training/README.md) | [smoke bpc_final](results/05_lm_training/smoke/bpc_final.png) — *not a result* |
@@ -40,16 +40,20 @@ A little more detail on each, in the order the argument runs:
 
 1. **Baseline penalty.** On identical FLORES-200 devtest content, Sanskrit costs 1.77–2.19×
    as many tokens as its English translation across three modern ≥200k-vocabulary
-   tokenizers — but only 1.06–1.35× as many as its *Hindi* translation. So sandhi does not
+   tokenizers — but only 1.33–1.35× as many as its *Hindi* translation. So sandhi does not
    buy Sanskrit a large penalty over another Devanagari language. Fertility on Sanskrit is
    3.11–3.88, not the >5 the hypothesis predicted, except for GPT-2's old 50k vocabulary
    meeting three-byte UTF-8 (12.49), which is a fact about that vocabulary, not about
    Sanskrit.
 2. **Tokens per proposition.** Trained Sanskrit BPE/Unigram arms look like they beat English
    (0.887 against `o200k`) until you train the *matched* English control — same algorithm,
-   same vocabulary size, same corpus. Then every prose pair is above parity (1.035–1.142).
-   The apparent Sanskrit advantage was the English pivot's domain handicap. Only Itihāsa
-   verse stays below 1.0, and verse has a meter confound.
+   same vocabulary size, same corpus. Then every prose pair at 32k and 64k pieces is above
+   parity (1.030–1.142), under a pair-matched control and a byte-matched one alike. The
+   apparent Sanskrit advantage was the English pivot's domain handicap. The penalty shrinks
+   as the vocabulary grows: at 128k the BPE pair reads 0.983 [0.971, 0.997] on in-domain
+   Sāmayik prose while staying above parity out of domain (1.025) and on FLORES (1.116), so
+   the negative result is scoped to the sizes it was measured at. Itihāsa verse stays below
+   1.0 throughout, and verse has a meter confound.
 3. **Sandhi splitting.** Splitting first (ByT5-Sanskrit, reconciled against the raw
    sentence) gives a real but small controlled saving on prose — Δ TPP −0.005 to −0.077,
    CIs clear of zero — and *costs* tokens on verse (+0.006 to +0.018). No arm gets below its
@@ -198,9 +202,13 @@ Use [`CITATION.cff`](CITATION.cff), or:
 
 ## Licence
 
-Code is **MIT** ([`LICENSE`](LICENSE)). No corpus data — raw or processed — is distributed
-in this repository; every data source keeps its own licence, listed per row in
-[`data/README.md`](data/README.md) along with its download date and pinned revision.
+Code is **MIT** ([`LICENSE`](LICENSE)). No corpus is distributed in this repository —
+`data/raw/` and `data/processed/` are gitignored — with one deliberate exception: the test
+fixture `tests/fixtures/dcs_mini.conllu` is three sentences copied verbatim from the
+Digital Corpus of Sanskrit (CC BY 4.0), attributed in
+[`data/README.md`](data/README.md#test-fixtures). Every other data source keeps its own
+licence, listed per row in [`data/README.md`](data/README.md) along with its download date
+and pinned revision.
 
 ## Acknowledgements
 
@@ -209,8 +217,8 @@ which are redistributed here:
 
 - **Digital Corpus of Sanskrit** — Oliver Hellwig, *DCS*, 2010–2024. The gold morpheme
   source; CC BY 4.0. Also Hellwig & Nehrdich 2018.
-- **Sāmayik** — the primary En–Sa prose parallel corpus (Aralikatte et al., LREC-COLING
-  2024; arXiv 2305.14004).
+- **Sāmayik** — the primary En–Sa prose parallel corpus (Maheshwari et al., LREC-COLING
+  2024, `2024.lrec-main.1245`; arXiv 2305.14004).
 - **Itihāsa** — Aralikatte et al., *Itihāsa: A large-scale corpus for Sanskrit to English
   translation*, WAT 2021. The secondary, verse, parallel corpus.
 - **FLORES-200** — NLLB Team et al., 2022. The parity anchor; CC BY-SA 4.0.

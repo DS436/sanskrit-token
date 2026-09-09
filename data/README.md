@@ -80,8 +80,9 @@ no arm's vocabulary can spell would otherwise sit in the bits-per-character deno
 (`‘ ’ “ ”`), en-dashes and the candra vowels `ॉ`/`ऑ` pass through `to_slp1` unchanged. The
 consequence is that Experiment 05's out-of-domain evaluation sets are **proper subsets** of
 the sets Experiments 02 and 03 measured on (Sāmayik test_ood loses 13.9%), which is a
-research decision for the orchestrator, not an engineering one — see the open question in
-`.superpowers/sdd/exp05-task-1-report.md`.
+research decision for the orchestrator, not an engineering one, and it is still open.
+(This note used to point at `.superpowers/sdd/exp05-task-1-report.md`, a working file that
+is gitignored and so is not present in a clone.)
 
 **Leakage (CLAUDE.md §2.4), both layers on every training line.** Track 1: 0 dropped by
 sha256, 0 by shingle (DCS train was already filtered at ingestion), 32,867 exact duplicates.
@@ -97,12 +98,31 @@ most of the offending Sangraha lines before either leakage layer sees them.
 Deduplication compares 64-bit blake2b digests rather than the strings (32M lines), so it is
 exact to within a collision probability of ~1e-4 lines, recorded as `dedup_digest_bits`.
 
+## Test fixtures
+
+`tests/fixtures/` holds the tiny inputs the offline test suite runs against. One of them is
+real corpus text and is attributed here; the rest are written for the tests and are not
+excerpts of anything.
+
+| Fixture | Size | Origin | Licence and attribution |
+|---|---|---|---|
+| `dcs_mini.conllu` | 3 sentences, 2.7 KB | **Real corpus text.** A verbatim copy of the first three sentences of the DCS file `Acintyastava/Acintyastava-0000-Acintyastava, 1-8248.conllu` (`text_id` 415, `sent_id` 555547–555549), the third truncated after its last token line so the fixture also exercises the `# text` / token-block mismatch path | Digital Corpus of Sanskrit, Oliver Hellwig, 2010–2024, **CC BY 4.0**. Three sentences of an annotated corpus of ~715,000, redistributed as a parsing fixture; attribution as required by the licence |
+| `devanagari_sample.txt` | 12 lines | Written for `tests/test_encoding.py` to cover vowel sandhi, visarga, anusvāra, conjuncts, avagraha, danda, Devanagari digits and a mixed Latin/Devanagari line. Two lines are well-known subhāṣita in the public domain | Not from any corpus in the table above |
+| `flores_mini.jsonl` | 3 aligned triples | Written for `tests/test_flores.py`. Imitates the FLORES record schema; the sentences are invented and are **not** FLORES devtest content | Not from any corpus in the table above |
+| `samayik_mini/`, `itihasa_mini/` | 4 line pairs each | Written for `tests/test_parallel_loaders.py`, including a deliberate empty pair to exercise the drop path | Not from any corpus in the table above |
+| `slp1_corpus_mini.txt` | 200 lines | Generated Sanskrit-shaped SLP1 nonsense for tokenizer-training tests. Contains no real sentence, and by construction no evaluation sentence | Not from any corpus in the table above |
+| `lm_mini_corpus.txt` | 300 lines | Generated for the LM pipeline tests: real Sanskrit lemmas shuffled into lines that are not text | Not from any corpus in the table above |
+
+No fixture redistributes text from Itihāsa, Sāmayik or any other source whose licence is
+unresolved.
+
 ## Licences
 
 **The code in this repository is MIT-licensed** (`LICENSE` at the root). That licence covers
 the code, the configuration and the documentation only.
 
-**No raw or processed corpus data is distributed here.** `data/raw/` and `data/processed/`
+**No raw or processed corpus data is distributed here**, with the single exception of the
+DCS test fixture recorded under "Test fixtures" above. `data/raw/` and `data/processed/`
 are gitignored and contain nothing but a `.gitkeep`; every experiment downloads its own
 sources at the pinned commit or dataset revision recorded in the table above. Nothing in
 `results/` contains corpus text either — it is metrics, configuration and figures.

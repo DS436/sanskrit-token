@@ -33,11 +33,14 @@ snapshot was assembled later.
 
 - Model checkpoints, encoded token streams (`outputs/05_lm_training/encoded/`, ~3.5 GB) and
   trained tokenizer files (`outputs/tokenizers/`, 84 MB). Too large, and all derived.
-- Raw and processed corpora. No corpus text, raw or derived, is distributed in this
-  repository — see `data/README.md` for where each source comes from and under what licence.
+- Raw and processed corpora. Nothing in `results/` is corpus text: it is metrics,
+  configuration and figures. The only corpus text anywhere in the repository is the test
+  fixture `tests/fixtures/dcs_mini.conllu` — see `data/README.md` for where each source
+  comes from and under what licence.
 - Run logs. They stay in `outputs/`.
 
-The whole folder is ~2.5 MB.
+The whole folder is ~3.8 MB, most of it `02_tpp_parallel/results.json` (1.1 MB) and the
+two `02_tpp_parallel` figures.
 
 ## Experiment 05
 
