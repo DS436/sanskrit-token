@@ -384,8 +384,8 @@ of them disagrees. A stale cache cannot silently train a model on the wrong toke
 | `data/processed/lm/heldout_*.txt` (11 files) | 7.0 MB | every evaluation |
 | manifests (`*.manifest.json`, `manifest.json`) | 30 KB | corpus byte counts |
 | **subtotal `data/processed/lm/` minus `track2_raw.txt`** | **837 MB** | |
-| the six file-backed tokenizer arms | 26 MB | every arm but `T7_byt5` |
-| (`outputs/tokenizers/` in full, if simpler) | 84 MB | |
+| the six file-backed tokenizer arms | 28 MB | every arm but `T7_byt5` |
+| (`outputs/tokenizers/` in full, if simpler) | 146 MB | a snapshot: the directory grows as arms are added, and held 36 arms when measured |
 
 `data/processed/lm/track2_raw.txt` (2.4 GB) is the *unsampled* M1 corpus and is **not**
 needed: the sweep reads `track2_sample.txt`.

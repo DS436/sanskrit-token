@@ -32,7 +32,7 @@ repository, named in the last column.
 | A100 realistic | **18 to 26 A100-hours** at the 20-30% MFU this model actually reaches | `README.md`, "The realistic budget"; `docs/decisions.md`, 2026-09-06, "Sweep hardening before paid GPU time", item (5) |
 | H100 floor | ~4.3 hours at 40% MFU | `README.md` cost table |
 | upload: corpora and held-out texts | **837 MB** (`data/processed/lm/` without `track2_raw.txt`) | `README.md` rsync table rows: 32 + 34 + 764 + 7.0 MB; confirmed by `du` on the machine that built them |
-| upload: tokenizers | **26 MB** (six arms) | `README.md` rsync table |
+| upload: tokenizers | **28 MB** (six arms) | `README.md` rsync table |
 | deliberately not uploaded | `track2_raw.txt`, 2.4 GB | `README.md`: "the sweep reads `track2_sample.txt`" |
 | smoke sweep | 3 arms, 1 seed, 300 steps; **89 s of training** on a laptop GPU, about 5 minutes cold | `README.md`, "Smoke sweep" and step 3 of the GPU procedure |
 | Python environment | **3.0 GB of wheels** to download on Linux (torch 2.14.0 plus the NVIDIA CUDA 13 runtime packages) | summed from `uv.lock` |
@@ -184,7 +184,7 @@ Applied to the A100 prices above:
 | GCP `a2-highgpu-1g` on-demand | 3.673 | $66 | $95 |
 
 Storage and transfer are noise at this scale. A 60 GB volume for a day is about $0.20 on
-RunPod's running-volume rate and about $0.40 on Lambda's. The upload is 863 MB and the
+RunPod's running-volume rate and about $0.40 on Lambda's. The upload is 865 MB and the
 download is tens of MB, so even Vast's ~$4/TB is under a cent. **The hourly rate is the
 whole cost.** Do not optimise anything else.
 
@@ -278,14 +278,14 @@ attempt you abandon.
 | item | billed time | note |
 |---|---|---|
 | `uv sync` | 5-10 min | 3.0 GB of wheels (`uv.lock`) |
-| `rsync` of 863 MB | 2-25 min | governed by **your upload speed**, not the box's. 863 MB is 12 minutes at 10 Mbit/s and 2 minutes at 50 Mbit/s |
+| `rsync` of 865 MB | 2-25 min | governed by **your upload speed**, not the box's. 865 MB is 12 minutes at 10 Mbit/s and 2 minutes at 50 Mbit/s |
 | smoke sweep | ~5 min | `README.md`, step 3 of the GPU procedure |
 | dry run | a few min | it samples the corpora to get bytes-per-token |
 | first Track 2 encode | ~15 min | measured on a laptop at 154-1,718 MB/min per arm across 764 MB × 5 arms; skipped if you copied the encode cache |
 | **the sweep itself** | 18-26 h on an A100, 36-52 h on an A6000 or 4090 | `README.md`, "The realistic budget" |
 | one abandoned attempt | 1 h | the realistic failure is an image whose driver is too old, and steps 5 and 7 catch it in the first ten minutes |
 | storage | for the whole life of the instance | 60 GB at RunPod's $0.10/GB/month running rate is about $0.20/day; at Lambda's $0.20/GiB/month, about $0.40/day |
-| transfer | 863 MB up, tens of MB down | free at RunPod, Lambda, Hyperstack and Crusoe; about $0.004 at Vast's ~$4/TB |
+| transfer | 865 MB up, tens of MB down | free at RunPod, Lambda, Hyperstack and Crusoe; about $0.004 at Vast's ~$4/TB |
 
 **Cheapest plausible: about $15.** An A6000 or 4090 at $0.33 to $0.34/hour on RunPod
 Community, about 38 hours including setup and the smoke test, plus about $0.50 of storage
@@ -339,7 +339,7 @@ Choose:
 - **Image**: any recent PyTorch or CUDA image. You do not need their PyTorch, since `uv`
   installs its own, but their image sets the NVIDIA driver, and the driver is the thing
   that can be too old. See step 5.
-- **Region**: whichever is closest to you, because you are uploading 863 MB.
+- **Region**: whichever is closest to you, because you are uploading 865 MB.
 
 Start it. Note the SSH command the dashboard gives you.
 
@@ -428,8 +428,8 @@ What that moves, per the README's rsync table:
 | `data/processed/lm/track2_sample.txt` | 764 MB | Track 2, all arms |
 | `data/processed/lm/heldout_*.txt` (11 files) | 7.0 MB | every evaluation |
 | manifests (`*.manifest.json`, `manifest.json`) | 30 KB | corpus byte counts |
-| the six file-backed tokenizer arms | 26 MB | every arm except `T7_byt5` |
-| **total** | **863 MB** | |
+| the six file-backed tokenizer arms | 28 MB | every arm except `T7_byt5` |
+| **total** | **865 MB** | |
 
 `T7_byt5` needs no file: its ids are the 256 UTF-8 byte values, constructed in
 `src/sanskrit_tok/tokenizers/registry.py` (`ByteAdapter`), so nothing is downloaded for it.
@@ -766,7 +766,7 @@ On the box, in this order:
 - [ ] It has one GPU, Ampere or newer, 24 GB or more, and `df -h` shows 60 GB or more free.
 - [ ] `nvidia-smi` shows a driver of 580 or newer.
 - [ ] The torch check from step 5 prints `True ... True`.
-- [ ] `rsync` finished, and the box has 863 MB in the right places.
+- [ ] `rsync` finished, and the box has 865 MB in the right places.
 - [ ] The smoke sweep finished and printed `device cuda, dtype bfloat16`.
 - [ ] The dry run reported 51 runs and roughly 5,120 PFLOPs of training.
 - [ ] You launched under `tmux` or `nohup`, and read the first log line.
